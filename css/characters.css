@@ -1,0 +1,156 @@
+@layer vetools {
+	/* Character page specific styles */
+	.character-statblock {
+		background: #fdf1dc;
+		border: 1px solid #ddd;
+		border-radius: 4px;
+		padding: 15px;
+		margin-bottom: 15px;
+	}
+
+	.ve-night-mode .character-statblock {
+		background: #222 !important;
+		border-color: #555;
+	}
+
+	.character-header {
+		border-bottom: 2px solid #922610;
+		margin-bottom: 15px;
+		padding-bottom: 10px;
+	}
+
+	.ve-night-mode .character-header {
+		border-bottom-color: #c9302c;
+	}
+
+	.character-name {
+		font-size: 24px;
+		font-weight: bold;
+		margin: 0 0 5px 0;
+		color: #922610;
+	}
+
+	.ve-night-mode .character-name {
+		color: #c9302c;
+	}
+
+	.character-meta {
+		font-style: italic;
+		color: #666;
+		font-size: 14px;
+	}
+
+	.ve-night-mode .character-meta {
+		color: #ccc;
+	}
+
+	.character-abilities {
+		margin-bottom: 15px;
+	}
+
+	.character-abilities h3 {
+		font-size: 16px;
+		font-weight: bold;
+		margin: 0 0 10px 0;
+		color: #922610;
+		border-bottom: 1px solid #ddd;
+		padding-bottom: 5px;
+	}
+
+	.ve-night-mode .character-abilities h3 {
+		color: #c9302c;
+		border-bottom-color: #555;
+	}
+
+	.character-abilities-grid {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 10px;
+		font-family: monospace;
+	}
+
+	.character-abilities-grid div {
+		padding: 5px;
+		background: rgba(146, 38, 16, 0.1);
+		border-radius: 3px;
+	}
+
+	.ve-night-mode .character-abilities-grid div {
+		background: rgba(201, 48, 44, 0.1);
+	}
+
+	.character-notes {
+		margin-bottom: 15px;
+	}
+
+	.character-notes h3 {
+		font-size: 16px;
+		font-weight: bold;
+		margin: 0 0 10px 0;
+		color: #922610;
+		border-bottom: 1px solid #ddd;
+		padding-bottom: 5px;
+	}
+
+	.ve-night-mode .character-notes h3 {
+		color: #c9302c;
+		border-bottom-color: #555;
+	}
+
+	.character-notes p {
+		margin: 0;
+		line-height: 1.4;
+	}
+
+	/* List styling for character rows */
+	.lst__row--characters {
+		cursor: pointer;
+	}
+
+	.lst__row--characters:hover {
+		background-color: rgba(0, 107, 196, 0.1);
+	}
+
+	.ve-night-mode .lst__row--characters:hover {
+		background-color: rgba(123, 182, 232, 0.1);
+	}
+
+	/* Button styling */
+	#btn-add-character {
+		margin-bottom: 10px;
+	}
+
+	/* Responsive design for mobile */
+	@media (max-width: 768px) {
+		.character-abilities-grid {
+			grid-template-columns: repeat(2, 1fr);
+		}
+
+		.character-name {
+			font-size: 20px;
+		}
+
+		.character-statblock {
+			padding: 10px;
+		}
+	}
+
+	@media (max-width: 480px) {
+		.character-abilities-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.character-name {
+			font-size: 18px;
+		}
+	}
+
+	/* Stats table styling for characters */
+	.stats--character {
+		background: url("../img/bestiary/stat-block-top-texture.webp") no-repeat, repeat top center, #fdf1dc;
+	}
+
+	.ve-night-mode .stats--character {
+		background: #222 !important;
+	}
+}
