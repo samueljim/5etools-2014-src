@@ -29,3 +29,4 @@ sw-injector.js
 
 # Dev scripts
 dev-*.sh
+.vercel

@@ -290,6 +290,207 @@ class ListSyntaxCharacters extends ListUiUtil.ListSyntax {
 	}
 }
 
+// Character creation wizard
+class CharacterCreator {
+	constructor () {
+		this._$modal = null;
+		this._currentStep = 0;
+		this._characterData = CharacterUtil.getDefaultCharacterData();
+		this._steps = [
+			{
+				title: "Basic Information",
+				render: () => this._renderBasicInfoStep(),
+				validate: () => this._validateBasicInfo(),
+			},
+		];
+	}
+
+	async pShow () {
+		this._currentStep = 0;
+		this._characterData = CharacterUtil.getDefaultCharacterData();
+
+		this._$modal = $(`
+			<div class="modal fade" tabindex="-1" role="dialog">
+				<div class="modal-dialog modal-lg" role="document">
+					<div class="modal-content">
+						<div class="modal-header">
+							<h4 class="modal-title">Create New Character</h4>
+							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
+								<span aria-hidden="true">&times;</span>
+							</button>
+						</div>
+						<div class="modal-body">
+							<div class="character-creator-progress">
+								<div class="progress">
+									<div class="progress-bar" role="progressbar" style="width: ${((this._currentStep + 1) / this._steps.length) * 100}%"></div>
+								</div>
+								<div class="step-indicator">
+									Step ${this._currentStep + 1} of ${this._steps.length}: ${this._steps[this._currentStep].title}
+								</div>
+							</div>
+							<div class="character-creator-content">
+								${this._steps[this._currentStep].render()}
+							</div>
+						</div>
+						<div class="modal-footer">
+							<button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+							<button type="button" class="btn btn-default" id="btn-prev-step" ${this._currentStep === 0 ? 'disabled' : ''}>Previous</button>
+							<button type="button" class="btn btn-primary" id="btn-next-step">${this._currentStep === this._steps.length - 1 ? 'Create Character' : 'Next'}</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		`);
+
+		// Wire up event handlers
+		this._$modal.find("#btn-next-step").on("click", () => this._handleNextStep());
+		this._$modal.find("#btn-prev-step").on("click", () => this._handlePrevStep());
+
+		// Show modal
+		this._$modal.modal("show");
+
+		// Clean up when modal is closed
+		this._$modal.on("hidden.bs.modal", () => {
+			this._$modal.remove();
+		});
+	}
+
+	_renderBasicInfoStep () {
+		return `
+			<div class="form-group">
+				<label for="character-name">Character Name *</label>
+				<input type="text" class="form-control" id="character-name" placeholder="Enter character name" value="${this._characterData.name}" required>
+				<div class="invalid-feedback" id="name-error"></div>
+			</div>
+			<div class="form-group">
+				<label for="character-level">Level *</label>
+				<select class="form-control" id="character-level">
+					${Array.from({length: 20}, (_, i) => i + 1).map(level =>
+						`<option value="${level}" ${this._characterData.level === level ? 'selected' : ''}>${level}</option>`
+					).join('')}
+				</select>
+			</div>
+			<div class="form-group">
+				<label for="character-notes">Notes (Optional)</label>
+				<textarea class="form-control" id="character-notes" rows="3" placeholder="Add any notes about your character...">${this._characterData.customNotes}</textarea>
+			</div>
+		`;
+	}
+
+	_validateBasicInfo () {
+		const name = this._$modal.find("#character-name").val().trim();
+		const level = parseInt(this._$modal.find("#character-level").val());
+		const notes = this._$modal.find("#character-notes").val().trim();
+
+		// Clear previous errors
+		this._$modal.find(".form-control").removeClass("is-invalid");
+		this._$modal.find(".invalid-feedback").text("");
+
+		let isValid = true;
+
+		// Validate name
+		if (!name) {
+			this._$modal.find("#character-name").addClass("is-invalid");
+			this._$modal.find("#name-error").text("Character name is required");
+			isValid = false;
+		} else if (name.length > 100) {
+			this._$modal.find("#character-name").addClass("is-invalid");
+			this._$modal.find("#name-error").text("Character name must be 100 characters or less");
+			isValid = false;
+		}
+
+		// Update character data if valid
+		if (isValid) {
+			this._characterData.name = name;
+			this._characterData.level = level;
+			this._characterData.customNotes = notes;
+		}
+
+		return isValid;
+	}
+
+	async _handleNextStep () {
+		// Validate current step
+		if (!this._steps[this._currentStep].validate()) {
+			return;
+		}
+
+		// If this is the last step, create the character
+		if (this._currentStep === this._steps.length - 1) {
+			await this._createCharacter();
+			return;
+		}
+
+		// Move to next step
+		this._currentStep++;
+		this._updateModal();
+	}
+
+	_handlePrevStep () {
+		if (this._currentStep > 0) {
+			this._currentStep--;
+			this._updateModal();
+		}
+	}
+
+	_updateModal () {
+		// Update progress bar
+		const progressPercent = ((this._currentStep + 1) / this._steps.length) * 100;
+		this._$modal.find(".progress-bar").css("width", `${progressPercent}%`);
+
+		// Update step indicator
+		this._$modal.find(".step-indicator").text(`Step ${this._currentStep + 1} of ${this._steps.length}: ${this._steps[this._currentStep].title}`);
+
+		// Update content
+		this._$modal.find(".character-creator-content").html(this._steps[this._currentStep].render());
+
+		// Update buttons
+		this._$modal.find("#btn-prev-step").prop("disabled", this._currentStep === 0);
+		this._$modal.find("#btn-next-step").text(this._currentStep === this._steps.length - 1 ? 'Create Character' : 'Next');
+	}
+
+	async _createCharacter () {
+		try {
+			// Show loading state
+			const $nextBtn = this._$modal.find("#btn-next-step");
+			const originalText = $nextBtn.text();
+			$nextBtn.prop("disabled", true).text("Creating...");
+
+			// Create and save character
+			const character = CharacterUtil.createNewCharacter(this._characterData);
+			await CharacterStorageUtil.pAddCharacter(character);
+
+			// Close modal
+			this._$modal.modal("hide");
+
+			// Refresh the page to show new character
+			if (window.charactersPage) {
+				await window.charactersPage.pOnLoad();
+			}
+
+			// Show success message
+			JqueryUtil.doToast({
+				content: `Character "${character.name}" created successfully!`,
+				type: "success",
+			});
+
+		} catch (error) {
+			console.error("Failed to create character:", error);
+
+			// Restore button state
+			const $nextBtn = this._$modal.find("#btn-next-step");
+			$nextBtn.prop("disabled", false).text("Create Character");
+
+			// Show error message
+			JqueryUtil.doToast({
+				content: "Failed to create character. Please try again.",
+				type: "danger",
+			});
+		}
+	}
+}
+
 // Initialize the page
 const charactersPage = new CharactersPage();
+window.charactersPage = charactersPage; // Make it globally accessible for the character creator
 window.addEventListener("load", () => charactersPage.pOnLoad());
