@@ -309,6 +309,11 @@ class CharacterCreator {
 		this._currentStep = 0;
 		this._characterData = CharacterUtil.getDefaultCharacterData();
 
+		const progressPercent = ((this._currentStep + 1) / this._steps.length) * 100;
+		const stepTitle = this._steps[this._currentStep].title;
+		const stepContent = this._steps[this._currentStep].render();
+		const isLastStep = this._currentStep === this._steps.length - 1;
+
 		this._$modal = $(`
 			<div class="modal fade" tabindex="-1" role="dialog">
 				<div class="modal-dialog modal-lg" role="document">
@@ -322,20 +327,20 @@ class CharacterCreator {
 						<div class="modal-body">
 							<div class="character-creator-progress">
 								<div class="progress">
-									<div class="progress-bar" role="progressbar" style="width: ${((this._currentStep + 1) / this._steps.length) * 100}%"></div>
+									<div class="progress-bar" role="progressbar" style="width: ${progressPercent}%"></div>
 								</div>
 								<div class="step-indicator">
-									Step ${this._currentStep + 1} of ${this._steps.length}: ${this._steps[this._currentStep].title}
+									Step ${this._currentStep + 1} of ${this._steps.length}: ${stepTitle}
 								</div>
 							</div>
 							<div class="character-creator-content">
-								${this._steps[this._currentStep].render()}
+								${stepContent}
 							</div>
 						</div>
 						<div class="modal-footer">
 							<button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
 							<button type="button" class="btn btn-default" id="btn-prev-step" ${this._currentStep === 0 ? 'disabled' : ''}>Previous</button>
-							<button type="button" class="btn btn-primary" id="btn-next-step">${this._currentStep === this._steps.length - 1 ? 'Create Character' : 'Next'}</button>
+							<button type="button" class="btn btn-primary" id="btn-next-step">${isLastStep ? 'Create Character' : 'Next'}</button>
 						</div>
 					</div>
 				</div>
