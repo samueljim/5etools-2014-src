@@ -33,6 +33,16 @@ class RenderCharacters {
 			$tbody.append(this._getHitPoints(character));
 		}
 
+		// Racial features
+		if (character._racialFeatures && character._racialFeatures.length) {
+			$tbody.append(this._getRacialFeatures(character));
+		}
+
+		// Proficiencies
+		if (this._hasProficiencies(character)) {
+			$tbody.append(this._getProficiencies(character));
+		}
+
 		// Spellcasting
 		if (character.spellcasting && this._hasSpellcasting(character)) {
 			$tbody.append(this._getSpellcasting(character));
@@ -61,6 +71,7 @@ class RenderCharacters {
 	static _getCharacterHeader (character) {
 		const level = character.level || 1;
 		const raceName = character.race ? character.race.name : "Unknown";
+		const subraceName = character.race?.subrace ? ` (${character.race.subrace})` : "";
 		const className = character.class ? character.class.name : "Unknown";
 		const subclassName = character.class?.subclass?.name ? ` (${character.class.subclass.name})` : "";
 
@@ -69,7 +80,7 @@ class RenderCharacters {
 				<div class="character-header">
 					<h1 class="character-name">${character.name}</h1>
 					<div class="character-meta">
-						Level ${level} ${raceName} ${className}${subclassName}
+						Level ${level} ${raceName}${subraceName} ${className}${subclassName}
 					</div>
 				</div>
 			</div>
@@ -153,6 +164,144 @@ class RenderCharacters {
 				</div>
 			</div>
 		</td></tr>`;
+	}
+
+	/**
+	 * Renders racial features
+	 * @param {Object} character - Character data
+	 * @returns {string} HTML string for racial features
+	 */
+	static _getRacialFeatures (character) {
+		const featuresHtml = character._racialFeatures.map(feature => {
+			return `<div class="racial-feature">
+				<h4>${feature.name}</h4>
+				<p>${feature.description || ""}</p>
+			</div>`;
+		}).join("");
+
+		return `<tr><td colspan="6">
+			<div class="character-racial-features">
+				<h3>Racial Features</h3>
+				${featuresHtml}
+			</div>
+		</td></tr>`;
+	}
+
+	/**
+	 * Renders proficiencies
+	 * @param {Object} character - Character data
+	 * @returns {string} HTML string for proficiencies
+	 */
+	static _getProficiencies (character) {
+		let proficienciesHtml = "";
+
+		// Languages
+		if (character._languageProficiencies && character._languageProficiencies.length > 0) {
+			const languages = character._languageProficiencies
+				.filter(lang => lang.language !== "choice")
+				.map(lang => lang.language.charAt(0).toUpperCase() + lang.language.slice(1))
+				.join(", ");
+
+			const choices = character._languageProficiencies
+				.filter(lang => lang.language === "choice")
+				.map(lang => `${lang.count} of your choice`)
+				.join(", ");
+
+			const allLanguages = [languages, choices].filter(Boolean).join(", ");
+
+			if (allLanguages) {
+				proficienciesHtml += `<div class="proficiency-section">
+					<h4>Languages</h4>
+					<p>${allLanguages}</p>
+				</div>`;
+			}
+		}
+
+		// Skills
+		if (character._skillProficiencies && character._skillProficiencies.length > 0) {
+			const skills = character._skillProficiencies
+				.filter(skill => skill.skill !== "choice")
+				.map(skill => skill.skill.charAt(0).toUpperCase() + skill.skill.slice(1))
+				.join(", ");
+
+			const choices = character._skillProficiencies
+				.filter(skill => skill.skill === "choice")
+				.map(skill => `${skill.count} of your choice`)
+				.join(", ");
+
+			const allSkills = [skills, choices].filter(Boolean).join(", ");
+
+			if (allSkills) {
+				proficienciesHtml += `<div class="proficiency-section">
+					<h4>Skill Proficiencies</h4>
+					<p>${allSkills}</p>
+				</div>`;
+			}
+		}
+
+		// Weapons
+		if (character._weaponProficiencies && character._weaponProficiencies.length > 0) {
+			const weapons = character._weaponProficiencies
+				.map(weapon => weapon.weapon.charAt(0).toUpperCase() + weapon.weapon.slice(1))
+				.join(", ");
+
+			if (weapons) {
+				proficienciesHtml += `<div class="proficiency-section">
+					<h4>Weapon Proficiencies</h4>
+					<p>${weapons}</p>
+				</div>`;
+			}
+		}
+
+		// Armor
+		if (character._armorProficiencies && character._armorProficiencies.length > 0) {
+			const armor = character._armorProficiencies
+				.map(armor => armor.armor.charAt(0).toUpperCase() + armor.armor.slice(1))
+				.join(", ");
+
+			if (armor) {
+				proficienciesHtml += `<div class="proficiency-section">
+					<h4>Armor Proficiencies</h4>
+					<p>${armor}</p>
+				</div>`;
+			}
+		}
+
+		// Tools
+		if (character._toolProficiencies && character._toolProficiencies.length > 0) {
+			const tools = character._toolProficiencies
+				.map(tool => tool.tool.charAt(0).toUpperCase() + tool.tool.slice(1))
+				.join(", ");
+
+			if (tools) {
+				proficienciesHtml += `<div class="proficiency-section">
+					<h4>Tool Proficiencies</h4>
+					<p>${tools}</p>
+				</div>`;
+			}
+		}
+
+		if (!proficienciesHtml) return "";
+
+		return `<tr><td colspan="6">
+			<div class="character-proficiencies">
+				<h3>Proficiencies</h3>
+				${proficienciesHtml}
+			</div>
+		</td></tr>`;
+	}
+
+	/**
+	 * Checks if character has any proficiencies to display
+	 * @param {Object} character - Character data
+	 * @returns {boolean} True if character has proficiencies
+	 */
+	static _hasProficiencies (character) {
+		return (character._languageProficiencies && character._languageProficiencies.length > 0) ||
+			   (character._skillProficiencies && character._skillProficiencies.length > 0) ||
+			   (character._weaponProficiencies && character._weaponProficiencies.length > 0) ||
+			   (character._armorProficiencies && character._armorProficiencies.length > 0) ||
+			   (character._toolProficiencies && character._toolProficiencies.length > 0);
 	}
 
 	/**

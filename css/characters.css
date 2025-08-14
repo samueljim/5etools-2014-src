@@ -235,6 +235,72 @@
 		color: #c9302c;
 	}
 
+	/* Racial features styling */
+	.character-racial-features {
+		margin-bottom: 15px;
+	}
+
+	.racial-feature {
+		margin-bottom: 10px;
+		padding: 10px;
+		background: rgba(34, 139, 34, 0.05);
+		border-left: 3px solid #228b22;
+		border-radius: 0 3px 3px 0;
+	}
+
+	.ve-night-mode .racial-feature {
+		background: rgba(50, 205, 50, 0.05);
+		border-left-color: #32cd32;
+	}
+
+	.racial-feature h4 {
+		font-size: 14px;
+		font-weight: bold;
+		margin: 0 0 5px 0;
+		color: #228b22;
+	}
+
+	.ve-night-mode .racial-feature h4 {
+		color: #32cd32;
+	}
+
+	.racial-feature p {
+		margin: 0;
+		line-height: 1.4;
+	}
+
+	/* Proficiencies styling */
+	.character-proficiencies {
+		margin-bottom: 15px;
+	}
+
+	.proficiency-section {
+		margin-bottom: 10px;
+	}
+
+	.proficiency-section h4 {
+		font-size: 14px;
+		font-weight: bold;
+		margin: 0 0 5px 0;
+		color: #4682b4;
+	}
+
+	.ve-night-mode .proficiency-section h4 {
+		color: #87ceeb;
+	}
+
+	.proficiency-section p {
+		margin: 0;
+		line-height: 1.4;
+		padding: 5px 10px;
+		background: rgba(70, 130, 180, 0.1);
+		border-radius: 3px;
+	}
+
+	.ve-night-mode .proficiency-section p {
+		background: rgba(135, 206, 235, 0.1);
+	}
+
 	/* Custom features styling */
 	.character-custom-features {
 		margin-bottom: 15px;
@@ -276,85 +342,191 @@
 
 	/* Character creation modal styling */
 	.character-creator-progress {
-		margin-bottom: 20px;
+		margin-bottom: 25px;
+		padding: 0 5px;
 	}
 
 	.character-creator-progress .progress {
-		height: 8px;
-		margin-bottom: 10px;
+		height: 10px;
+		margin-bottom: 15px;
 		background-color: #f5f5f5;
-		border-radius: 4px;
+		border-radius: 5px;
 		overflow: hidden;
+		box-shadow: inset 0 1px 2px rgb(0 0 0 / 10%);
 	}
 
 	.ve-night-mode .character-creator-progress .progress {
 		background-color: #333;
+		box-shadow: inset 0 1px 2px rgb(255 255 255 / 10%);
 	}
 
 	.character-creator-progress .progress-bar {
 		background-color: #006bc4;
-		transition: width 0.3s ease;
+		background-image: linear-gradient(45deg, rgb(255 255 255 / 15%) 25%, transparent 25%, transparent 50%, rgb(255 255 255 / 15%) 50%, rgb(255 255 255 / 15%) 75%, transparent 75%, transparent);
+		background-size: 1rem 1rem;
+		transition: width 0.4s ease;
+		animation: progress-bar-stripes 1s linear infinite;
+	}
+
+	@keyframes progress-bar-stripes {
+		0% {
+			background-position-x: 1rem;
+		}
 	}
 
 	.character-creator-progress .step-indicator {
-		font-size: 14px;
-		font-weight: bold;
-		color: #666;
+		font-size: 15px;
+		font-weight: 600;
+		color: #495057;
 		text-align: center;
+		letter-spacing: 0.5px;
 	}
 
 	.ve-night-mode .character-creator-progress .step-indicator {
-		color: #ccc;
+		color: #e9ecef;
 	}
 
 	.character-creator-content {
-		min-height: 200px;
+		min-height: 300px;
+		padding: 0 10px;
+	}
+
+	.character-creator-footer {
+		margin-top: 25px;
+		padding: 20px 10px 0;
+		border-top: 1px solid #dee2e6;
+		text-align: right;
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+	}
+
+	.ve-night-mode .character-creator-footer {
+		border-top-color: #495057;
+	}
+
+	.character-creator-footer .ve-btn {
+		margin-left: 10px;
+		min-width: 80px;
+	}
+
+	.character-creator-footer .ve-btn:first-child {
+		margin-left: 0;
+		margin-right: auto;
 	}
 
 	.character-creator-content .form-group {
-		margin-bottom: 20px;
+		margin-bottom: 25px;
+	}
+
+	.character-creator-content .form-group:last-child {
+		margin-bottom: 15px;
 	}
 
 	.character-creator-content label {
-		font-weight: bold;
-		margin-bottom: 5px;
+		font-weight: 600;
+		margin-bottom: 8px;
 		display: block;
+		color: #495057;
+		font-size: 14px;
+	}
+
+	.ve-night-mode .character-creator-content label {
+		color: #e9ecef;
 	}
 
 	.character-creator-content .form-control {
 		width: 100%;
-		padding: 8px 12px;
-		border: 1px solid #ddd;
-		border-radius: 4px;
+		padding: 10px 14px;
+		border: 1px solid #ced4da;
+		border-radius: 6px;
 		font-size: 14px;
+		line-height: 1.5;
+		transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+		background-color: #fff;
+		color: #495057;
 	}
 
 	.ve-night-mode .character-creator-content .form-control {
-		background-color: #333;
-		border-color: #555;
-		color: #fff;
+		background-color: #2b2b2b;
+		border-color: #495057;
+		color: #e9ecef;
 	}
 
 	.character-creator-content .form-control:focus {
 		border-color: #006bc4;
 		outline: none;
-		box-shadow: 0 0 0 2px rgb(0 107 196 / 20%);
+		box-shadow: 0 0 0 3px rgb(0 107 196 / 25%);
+	}
+
+	.character-creator-content .form-control.is-valid {
+		border-color: #28a745;
+		background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3e%3cpath fill='%2328a745' d='m2.3 6.73.94-.94 2.94-2.94L7.12 1.9l.94.94L3.24 7.67z'/%3e%3c/svg%3e");
+		background-repeat: no-repeat;
+		background-position: right calc(0.375em + 0.1875rem) center;
+		background-size: calc(0.75em + 0.375rem) calc(0.75em + 0.375rem);
 	}
 
 	.character-creator-content .form-control.is-invalid {
 		border-color: #dc3545;
+		background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%23dc3545' viewBox='0 0 12 12'%3e%3ccircle cx='6' cy='6' r='4.5'/%3e%3cpath d='m5.8 4.6 1.4 1.4M7.2 4.6l-1.4 1.4'/%3e%3c/svg%3e");
+		background-repeat: no-repeat;
+		background-position: right calc(0.375em + 0.1875rem) center;
+		background-size: calc(0.75em + 0.375rem) calc(0.75em + 0.375rem);
 	}
 
 	.character-creator-content .invalid-feedback {
 		display: block;
 		color: #dc3545;
+		font-size: 13px;
+		margin-top: 6px;
+		font-weight: 500;
+	}
+
+	.character-creator-content .form-text {
 		font-size: 12px;
+		color: #6c757d;
 		margin-top: 5px;
+		line-height: 1.4;
+	}
+
+	.ve-night-mode .character-creator-content .form-text {
+		color: #adb5bd;
 	}
 
 	.character-creator-content textarea.form-control {
 		resize: vertical;
-		min-height: 80px;
+		min-height: 100px;
+		font-family: inherit;
+	}
+
+	.character-creator-content .alert {
+		padding: 12px 16px;
+		margin-bottom: 20px;
+		border: 1px solid transparent;
+		border-radius: 6px;
+		font-size: 13px;
+		line-height: 1.4;
+	}
+
+	.character-creator-content .alert-info {
+		color: #0c5460;
+		background-color: #d1ecf1;
+		border-color: #bee5eb;
+	}
+
+	.ve-night-mode .character-creator-content .alert-info {
+		color: #9fdbef;
+		background-color: #1b2838;
+		border-color: #2c4866;
+	}
+
+	.character-creator-content .text-danger {
+		color: #dc3545 !important;
+	}
+
+	.ve-night-mode .character-creator-content .text-danger {
+		color: #f5c6cb !important;
 	}
 
 	/* Modal styling adjustments for night mode */
