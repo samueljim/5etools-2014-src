@@ -54,6 +54,8 @@ class NavBar {
 		this._addElement_li(NavBar._CAT_BOOKS, "books.html", "View All/Homebrew");
 
 		this._addElement_dropdown(null, NavBar._CAT_PLAYER);
+		this._addElement_li(NavBar._CAT_PLAYER, "characters.html", "Characters");
+		this._addElement_divider(NavBar._CAT_PLAYER);
 		this._addElement_li(NavBar._CAT_PLAYER, "classes.html", "Classes");
 		this._addElement_li(NavBar._CAT_PLAYER, "backgrounds.html", "Backgrounds");
 		this._addElement_li(NavBar._CAT_PLAYER, "feats.html", "Feats");

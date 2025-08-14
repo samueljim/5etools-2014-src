@@ -1,0 +1,411 @@
+@layer vetools {
+	/* Character page specific styles */
+	.character-statblock {
+		background: #fdf1dc;
+		border: 1px solid #ddd;
+		border-radius: 4px;
+		padding: 15px;
+		margin-bottom: 15px;
+	}
+
+	.ve-night-mode .character-statblock {
+		background: #222 !important;
+		border-color: #555;
+	}
+
+	.character-header {
+		border-bottom: 2px solid #922610;
+		margin-bottom: 15px;
+		padding-bottom: 10px;
+	}
+
+	.ve-night-mode .character-header {
+		border-bottom-color: #c9302c;
+	}
+
+	.character-name {
+		font-size: 24px;
+		font-weight: bold;
+		margin: 0 0 5px 0;
+		color: #922610;
+	}
+
+	.ve-night-mode .character-name {
+		color: #c9302c;
+	}
+
+	.character-meta {
+		font-style: italic;
+		color: #666;
+		font-size: 14px;
+	}
+
+	.ve-night-mode .character-meta {
+		color: #ccc;
+	}
+
+	.character-abilities {
+		margin-bottom: 15px;
+	}
+
+	.character-abilities h3 {
+		font-size: 16px;
+		font-weight: bold;
+		margin: 0 0 10px 0;
+		color: #922610;
+		border-bottom: 1px solid #ddd;
+		padding-bottom: 5px;
+	}
+
+	.ve-night-mode .character-abilities h3 {
+		color: #c9302c;
+		border-bottom-color: #555;
+	}
+
+	.character-abilities-grid {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 10px;
+		font-family: monospace;
+	}
+
+	.character-abilities-grid div {
+		padding: 5px;
+		background: rgba(146, 38, 16, 0.1);
+		border-radius: 3px;
+	}
+
+	.ve-night-mode .character-abilities-grid div {
+		background: rgba(201, 48, 44, 0.1);
+	}
+
+	.character-notes {
+		margin-bottom: 15px;
+	}
+
+	.character-notes h3 {
+		font-size: 16px;
+		font-weight: bold;
+		margin: 0 0 10px 0;
+		color: #922610;
+		border-bottom: 1px solid #ddd;
+		padding-bottom: 5px;
+	}
+
+	.ve-night-mode .character-notes h3 {
+		color: #c9302c;
+		border-bottom-color: #555;
+	}
+
+	.character-notes p {
+		margin: 0;
+		line-height: 1.4;
+	}
+
+	/* List styling for character rows */
+	.lst__row--characters {
+		cursor: pointer;
+	}
+
+	.lst__row--characters:hover {
+		background-color: rgba(0, 107, 196, 0.1);
+	}
+
+	.ve-night-mode .lst__row--characters:hover {
+		background-color: rgba(123, 182, 232, 0.1);
+	}
+
+	/* Character list item styling */
+	.lst__row .lst__row-inner {
+		display: flex;
+		align-items: center;
+		padding: 4px 0;
+	}
+
+	.lst__row .lst__row-inner span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* Filter box styling */
+	.filtertools {
+		margin-bottom: 8px;
+	}
+
+	/* Sublist styling */
+	#sublistcontainer {
+		margin-bottom: 15px;
+	}
+
+	.sublist__wrp-cols {
+		border-bottom: 1px solid #ccc;
+		margin-bottom: 5px;
+	}
+
+	.ve-night-mode .sublist__wrp-cols {
+		border-bottom-color: #555;
+	}
+
+	/* Character info display */
+	.character-basic-info {
+		margin-bottom: 15px;
+	}
+
+	.character-info-grid {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 10px;
+		font-family: monospace;
+	}
+
+	.character-info-grid div {
+		padding: 5px;
+		background: rgba(146, 38, 16, 0.1);
+		border-radius: 3px;
+	}
+
+	.ve-night-mode .character-info-grid div {
+		background: rgba(201, 48, 44, 0.1);
+	}
+
+	/* Ability scores styling */
+	.ability-score {
+		text-align: center;
+		padding: 8px;
+		background: rgba(146, 38, 16, 0.1);
+		border-radius: 3px;
+	}
+
+	.ve-night-mode .ability-score {
+		background: rgba(201, 48, 44, 0.1);
+	}
+
+	.ability-name {
+		font-size: 12px;
+		font-weight: bold;
+		margin-bottom: 4px;
+	}
+
+	.ability-value {
+		font-size: 14px;
+		font-family: monospace;
+	}
+
+	/* Hit points styling */
+	.character-hit-points {
+		margin-bottom: 15px;
+	}
+
+	.hit-points-display {
+		display: flex;
+		gap: 15px;
+		font-family: monospace;
+	}
+
+	.hit-points-display div {
+		padding: 5px 10px;
+		background: rgba(146, 38, 16, 0.1);
+		border-radius: 3px;
+	}
+
+	.ve-night-mode .hit-points-display div {
+		background: rgba(201, 48, 44, 0.1);
+	}
+
+	/* Spellcasting styling */
+	.character-spellcasting {
+		margin-bottom: 15px;
+	}
+
+	.spell-slots, .spells-known, .spells-prepared {
+		margin-bottom: 10px;
+	}
+
+	.spell-slots h4, .spells-known h4, .spells-prepared h4 {
+		font-size: 14px;
+		font-weight: bold;
+		margin: 0 0 5px 0;
+		color: #922610;
+	}
+
+	.ve-night-mode .spell-slots h4,
+	.ve-night-mode .spells-known h4,
+	.ve-night-mode .spells-prepared h4 {
+		color: #c9302c;
+	}
+
+	/* Custom features styling */
+	.character-custom-features {
+		margin-bottom: 15px;
+	}
+
+	.custom-feature {
+		margin-bottom: 10px;
+		padding: 10px;
+		background: rgba(146, 38, 16, 0.05);
+		border-left: 3px solid #922610;
+		border-radius: 0 3px 3px 0;
+	}
+
+	.ve-night-mode .custom-feature {
+		background: rgba(201, 48, 44, 0.05);
+		border-left-color: #c9302c;
+	}
+
+	.custom-feature h4 {
+		font-size: 14px;
+		font-weight: bold;
+		margin: 0 0 5px 0;
+		color: #922610;
+	}
+
+	.ve-night-mode .custom-feature h4 {
+		color: #c9302c;
+	}
+
+	.custom-feature p {
+		margin: 0;
+		line-height: 1.4;
+	}
+
+	/* Button styling */
+	#btn-add-character {
+		margin-bottom: 10px;
+	}
+
+	/* Character creation modal styling */
+	.character-creator-progress {
+		margin-bottom: 20px;
+	}
+
+	.character-creator-progress .progress {
+		height: 8px;
+		margin-bottom: 10px;
+		background-color: #f5f5f5;
+		border-radius: 4px;
+		overflow: hidden;
+	}
+
+	.ve-night-mode .character-creator-progress .progress {
+		background-color: #333;
+	}
+
+	.character-creator-progress .progress-bar {
+		background-color: #006bc4;
+		transition: width 0.3s ease;
+	}
+
+	.character-creator-progress .step-indicator {
+		font-size: 14px;
+		font-weight: bold;
+		color: #666;
+		text-align: center;
+	}
+
+	.ve-night-mode .character-creator-progress .step-indicator {
+		color: #ccc;
+	}
+
+	.character-creator-content {
+		min-height: 200px;
+	}
+
+	.character-creator-content .form-group {
+		margin-bottom: 20px;
+	}
+
+	.character-creator-content label {
+		font-weight: bold;
+		margin-bottom: 5px;
+		display: block;
+	}
+
+	.character-creator-content .form-control {
+		width: 100%;
+		padding: 8px 12px;
+		border: 1px solid #ddd;
+		border-radius: 4px;
+		font-size: 14px;
+	}
+
+	.ve-night-mode .character-creator-content .form-control {
+		background-color: #333;
+		border-color: #555;
+		color: #fff;
+	}
+
+	.character-creator-content .form-control:focus {
+		border-color: #006bc4;
+		outline: none;
+		box-shadow: 0 0 0 2px rgb(0 107 196 / 20%);
+	}
+
+	.character-creator-content .form-control.is-invalid {
+		border-color: #dc3545;
+	}
+
+	.character-creator-content .invalid-feedback {
+		display: block;
+		color: #dc3545;
+		font-size: 12px;
+		margin-top: 5px;
+	}
+
+	.character-creator-content textarea.form-control {
+		resize: vertical;
+		min-height: 80px;
+	}
+
+	/* Modal styling adjustments for night mode */
+	.ve-night-mode .modal-content {
+		background-color: #222;
+		border-color: #555;
+	}
+
+	.ve-night-mode .modal-header {
+		border-bottom-color: #555;
+	}
+
+	.ve-night-mode .modal-footer {
+		border-top-color: #555;
+	}
+
+	.ve-night-mode .modal-title {
+		color: #fff;
+	}
+
+	/* Responsive design for mobile */
+	@media (max-width: 768px) {
+		.character-abilities-grid {
+			grid-template-columns: repeat(2, 1fr);
+		}
+
+		.character-name {
+			font-size: 20px;
+		}
+
+		.character-statblock {
+			padding: 10px;
+		}
+	}
+
+	@media (max-width: 480px) {
+		.character-abilities-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.character-name {
+			font-size: 18px;
+		}
+	}
+
+	/* Stats table styling for characters */
+	.stats--character {
+		background: url("../img/bestiary/stat-block-top-texture.webp") no-repeat, repeat top center, #fdf1dc;
+	}
+
+	.ve-night-mode .stats--character {
+		background: #222 !important;
+	}
+}
