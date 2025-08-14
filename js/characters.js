@@ -74,18 +74,18 @@ class CharactersSublistManager extends SublistManager {
 	}
 }
 
-class CharactersPage extends ListPage {
+class CharactersPage extends ListPageMultiSource {
 	constructor () {
 		const pageFilter = new PageFilterCharacters();
 		const pFnGetFluff = null; // Characters don't have fluff data
 
 		super({
-			dataSource: null, // Characters are loaded from homebrew
-			dataSourceFluff: null,
-			pFnGetFluff,
 			pageFilter,
-			listClass: "characters",
+			listOptions: {
+				fnSort: PageFilterCharacters.sortCharacters,
+			},
 			dataProps: ["character"],
+			brewDataSource: () => this._pGetBrewData(),
 			bookViewOptions: {
 				$btnOpen: $(`#btn-book`),
 				$eleNoneVisible: $(`<span class="initial-message">If you wish to view multiple characters, please first make a list</span>`),
@@ -100,32 +100,63 @@ class CharactersPage extends ListPage {
 				colTransforms: {
 					name: UtilsTableview.COL_TRANSFORM_NAME,
 					source: UtilsTableview.COL_TRANSFORM_SOURCE,
+					level: {name: "Level"},
+					class: {name: "Class"},
+					race: {name: "Race"},
+					background: {name: "Background"},
 				},
-				filter: {generator: pageFilter},
 			},
+			propEntryData: "character",
+			propLoader: "character",
+			listSyntax: new ListSyntaxCharacters({fnGetDataList: () => this._dataList}),
 		});
 
 		this._sublistManager = new CharactersSublistManager();
 	}
 
-	getListItem (character, chI, isExcluded) {
+	async _pGetBrewData () {
+		const characters = await CharacterStorageUtil.pLoadCharacters();
+		return {character: characters};
+	}
+
+	getListItem (character, chI) {
+		const hash = UrlUtil.autoEncodeHash(character);
+		if (this._seenHashes.has(hash)) return null;
+		this._seenHashes.add(hash);
+
+		const isExcluded = ExcludeUtil.isExcluded(hash, "character", character.source);
+
 		this._pageFilter.mutateAndAddToFilters(character, isExcluded);
 
-		const eleLi = document.createElement("div");
-		eleLi.className = "lst__row ve-flex-col";
-
-		const hash = UrlUtil.autoEncodeHash(character);
-		const source = character.source || "HOMEBREW";
+		const source = Parser.sourceJsonToAbv(character.source || "HOMEBREW");
 		const characterClass = character.class ? character.class.name : "Unknown";
 		const level = character.level || 1;
 		const race = character.race ? character.race.name : "Unknown";
 
-		eleLi.innerHTML = `<a href="#${hash}" class="lst__row-border lst__row-inner">
-			<span class="bold ve-col-4-2 pl-0">${character.name}</span>
-			<span class="ve-col-3 px-1">${characterClass}</span>
-			<span class="ve-col-1-7 px-1 ve-text-center">${level}</span>
-			<span class="ve-col-2-3 pr-0">${race}</span>
-		</a>`;
+		const eleLi = e_({
+			tag: "div",
+			clazz: `lst__row ve-flex-col ${isExcluded ? "lst__row--blocklisted" : ""}`,
+			click: (evt) => this._list.doSelect(listItem, evt),
+			contextmenu: (evt) => this._openContextMenu(evt, this._list, listItem),
+			children: [
+				e_({
+					tag: "a",
+					href: `#${hash}`,
+					clazz: "lst__row-border lst__row-inner",
+					children: [
+						e_({tag: "span", clazz: `bold ve-col-4-2 pl-0 pr-1`, text: character.name}),
+						e_({tag: "span", clazz: `ve-col-3 px-1`, text: characterClass}),
+						e_({tag: "span", clazz: `ve-col-1-7 px-1 ve-text-center`, text: level}),
+						e_({
+							tag: "span",
+							clazz: `ve-col-2-3 ve-text-center ${Parser.sourceJsonToSourceClassname(character.source || "HOMEBREW")} pl-1 pr-0`,
+							title: `${Parser.sourceJsonToFull(character.source || "HOMEBREW")}`,
+							text: source,
+						}),
+					],
+				}),
+			],
+		});
 
 		const listItem = new ListItem(
 			chI,
@@ -137,14 +168,12 @@ class CharactersPage extends ListPage {
 				level,
 				class: characterClass,
 				race,
+				...ListItem.getCommonValues(character),
 			},
 			{
 				isExcluded,
 			},
 		);
-
-		eleLi.addEventListener("click", (evt) => this._list.doSelect(listItem, evt));
-		eleLi.addEventListener("contextmenu", (evt) => this._openContextMenu(evt, this._list, listItem));
 
 		return listItem;
 	}
@@ -154,13 +183,6 @@ class CharactersPage extends ListPage {
 	}
 
 	async _pOnLoad_pPreDataLoad () {
-		// Load homebrew character data
-		await BrewUtil2.pAddBrewData();
-
-		// Load character data from homebrew storage
-		const brewData = await BrewUtil2.pGetBrewProcessed();
-		this._dataList = brewData?.character || [];
-
 		// Initialize character creation button
 		document.getElementById("btn-add-character").addEventListener("click", () => {
 			this._pHandleAddCharacter();
@@ -168,23 +190,23 @@ class CharactersPage extends ListPage {
 	}
 
 	async _pHandleAddCharacter () {
-		// Placeholder for character creation - will be implemented in later tasks
-		JqueryUtil.doToast({
-			content: "Character creation will be implemented in a future update.",
-			type: "info",
-		});
+		const characterCreator = new CharacterCreator();
+		await characterCreator.pShow();
 	}
 
-	async pDoLoadHash (id) {
+	async _pDoLoadHash ({id, lockToken}) {
 		const character = this._dataList[id];
 		if (!character) return;
 
-		await this._pOnLoad_pLoadSubHash([]);
 		this._renderStats_doBuildStatsTab({ent: character});
+		await this._pDoLoadSubHash({sub: [], lockToken});
+		this._updateSelected();
 	}
 
-	async _pOnLoad_pLoadSubHash (sub) {
-		// Handle subhashes if needed
+	async _pDoLoadSubHash ({sub, lockToken}) {
+		sub = await super._pDoLoadSubHash({sub, lockToken});
+		// Handle character-specific subhashes if needed in the future
+		return sub;
 	}
 }
 
@@ -240,6 +262,31 @@ class RenderCharacters {
 		$tbody.append(`<tr><th class="ve-tbl-border" colspan="6"></th></tr>`);
 
 		return $content;
+	}
+}
+
+// Character list syntax for search integration
+class ListSyntaxCharacters extends ListUiUtil.ListSyntax {
+	_getSearchCacheStats (entity) {
+		const ptrOut = {_: ""};
+
+		// Add searchable content from character features
+		if (entity.customNotes) {
+			ptrOut._ += ` ${entity.customNotes}`;
+		}
+
+		if (entity.customFeatures) {
+			entity.customFeatures.forEach(feature => {
+				ptrOut._ += ` ${feature.name} ${feature.description || ""}`;
+			});
+		}
+
+		// Add class and race information for search
+		if (entity.class) ptrOut._ += ` ${entity.class.name}`;
+		if (entity.race) ptrOut._ += ` ${entity.race.name}`;
+		if (entity.background) ptrOut._ += ` ${entity.background.name}`;
+
+		return ptrOut._;
 	}
 }
 

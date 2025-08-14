@@ -90,11 +90,15 @@
 					<button type="button" class="ve-btn ve-btn-default" id="reset">Reset</button>
 				</div>
 
+				<div class="filtertools" id="filtertools">
+					<button type="button" class="ve-btn ve-btn-default ve-btn-xs" id="btn-filter">Filter</button>
+				</div>
+
 				<div id="filtertools" class="input-group input-group--bottom ve-flex no-shrink">
 					<button type="button" class="ve-col-4-2 sort ve-btn ve-btn-default ve-btn-xs" data-sort="name">Name</button>
 					<button type="button" class="ve-col-3 sort ve-btn ve-btn-default ve-btn-xs" data-sort="class">Class</button>
 					<button type="button" class="ve-col-1-7 sort ve-btn ve-btn-default ve-btn-xs" data-sort="level">Level</button>
-					<button type="button" class="sort ve-btn ve-btn-default ve-btn-xs ve-grow" data-sort="race">Race</button>
+					<button type="button" class="sort ve-btn ve-btn-default ve-btn-xs ve-grow" data-sort="source">Source</button>
 				</div>
 
 				<div class="ve-flex-v-center mb-2">
@@ -107,6 +111,17 @@
 			<div class="cancer__wrp-mobile-1 cancer__anchor"><div class="cancer__disp-cancer"></div><!--5ETOOLS_AD_MOB_PLAYER_1--></div>
 
 			<div id="contentwrapper" class="view-col">
+				<div id="sublistcontainer" class="sublist sublist--resizable no-print">
+					<div id="sublistsort" class="ve-btn-group sublist__wrp-cols">
+						<button type="button" class="ve-col-5 sort ve-btn ve-btn-default ve-btn-xs" data-sort="name">Name</button>
+						<button type="button" class="ve-col-3 sort ve-btn ve-btn-default ve-btn-xs" data-sort="class">Class</button>
+						<button type="button" class="ve-col-1-7 sort ve-btn ve-btn-default ve-btn-xs" data-sort="level">Level</button>
+						<button type="button" class="ve-col-2-3 sort ve-btn ve-btn-default ve-btn-xs" data-sort="race">Race</button>
+					</div>
+
+					<div id="sublist" class="list"></div>
+				</div>
+
 				<div class="w-100 ve-flex" id="stat-tabs">
 					<div class="ml-auto ve-flex" id="tabs-right"></div>
 				</div>
@@ -161,6 +176,8 @@
 <script type="text/javascript" defer src="js/listpage.js"></script>
 <script type="text/javascript" defer src="js/multisource.js"></script>
 <script type="text/javascript" defer src="js/filter-common.js"></script>
+<script type="text/javascript" defer src="js/utils-characters.js"></script>
+<script type="text/javascript" defer src="js/render-characters.js"></script>
 <script type="text/javascript" defer src="js/filter-characters.js"></script>
 <script type="module" src="js/characters.js"></script>
 <script type="text/javascript" defer src="js/list2.js"></script>
