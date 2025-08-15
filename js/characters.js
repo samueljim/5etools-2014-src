@@ -890,6 +890,124 @@ class CharacterCreator {
 				.ve-night-mode .class-card-type {
 					color: #999;
 				}
+
+				/* Subclass card styles - reuse class card styling */
+				.subclass-list-container {
+					max-height: 400px;
+					overflow-y: auto;
+					border: 1px solid #e69a28;
+					border-radius: 4px;
+					background-color: #fdf1dc;
+				}
+				.subclass-list {
+					padding: 0;
+				}
+				.subclass-card {
+					border-bottom: 1px solid #e69a28;
+					padding: 12px 16px;
+					cursor: pointer;
+					transition: all 0.2s ease;
+					position: relative;
+					font-family: Convergence, Arial, sans-serif;
+					background-color: #fdf1dc;
+				}
+				.subclass-card:hover {
+					background-color: #fff;
+					border-left: 4px solid #822000;
+					padding-left: 12px;
+				}
+				.subclass-card:last-child {
+					border-bottom: none;
+				}
+				.subclass-card.selected {
+					background-color: #fff;
+					border-left: 4px solid #822000;
+					padding-left: 12px;
+					box-shadow: inset 0 0 0 1px #822000;
+				}
+				.subclass-card-header {
+					display: flex;
+					justify-content: space-between;
+					align-items: center;
+					margin-bottom: 8px;
+				}
+				.subclass-card-name {
+					font-weight: bold;
+					font-size: 16px;
+					color: #822000;
+					font-family: "Times New Roman", serif;
+					font-variant: small-caps;
+				}
+				.subclass-card-source {
+					font-size: 12px;
+					background-color: #e69a28;
+					color: #fff;
+					padding: 2px 6px;
+					border-radius: 3px;
+					font-weight: bold;
+				}
+				.subclass-card-details {
+					display: grid;
+					grid-template-columns: 1fr 1fr;
+					gap: 8px;
+					margin-bottom: 8px;
+					font-size: 13px;
+				}
+				.subclass-card-detail {
+					color: #333;
+				}
+				.subclass-card-detail strong {
+					color: #822000;
+				}
+				.subclass-card-features {
+					font-size: 13px;
+					color: #2e7d32;
+					font-weight: 500;
+					margin-bottom: 4px;
+				}
+				.subclass-card-type {
+					font-size: 12px;
+					color: #555;
+					line-height: 1.3;
+				}
+
+				/* Night mode subclass card styles */
+				.ve-night-mode .subclass-list-container {
+					border-color: #565656;
+					background-color: #222;
+				}
+				.ve-night-mode .subclass-card {
+					border-bottom-color: #565656;
+					background-color: #222;
+				}
+				.ve-night-mode .subclass-card:hover {
+					background-color: #333;
+					border-left-color: #d29a38;
+				}
+				.ve-night-mode .subclass-card.selected {
+					background-color: #333;
+					border-left-color: #d29a38;
+					box-shadow: inset 0 0 0 1px #d29a38;
+				}
+				.ve-night-mode .subclass-card-name {
+					color: #d29a38;
+				}
+				.ve-night-mode .subclass-card-source {
+					background-color: #565656;
+					color: #bbb;
+				}
+				.ve-night-mode .subclass-card-detail {
+					color: #bbb;
+				}
+				.ve-night-mode .subclass-card-detail strong {
+					color: #d29a38;
+				}
+				.ve-night-mode .subclass-card-features {
+					color: #81c784;
+				}
+				.ve-night-mode .subclass-card-type {
+					color: #999;
+				}
 			</style>
 			<div class="character-creator-progress">
 				<div class="progress">
@@ -1705,16 +1823,31 @@ class CharacterCreator {
 			console.log("DataUtil.class.loadJSON() returned:", classData);
 
 			this._allClasses = classData.class || [];
+			this._allSubclasses = classData.subclass || [];
 			console.log("Classes loaded:", this._allClasses.length, "classes");
+			console.log("Subclasses loaded:", this._allSubclasses.length, "subclasses");
 
 			if (this._allClasses.length === 0) {
 				console.error("ERROR: No classes loaded from data!");
 				return;
 			}
 
+			// Associate subclasses with their parent classes
+			this._allClasses.forEach(cls => {
+				// Find all subclasses that belong to this class
+				const classSubclasses = this._allSubclasses.filter(sc => 
+					sc.className === cls.name && sc.classSource === cls.source
+				);
+				
+				// Add the subclasses array to the class object
+				cls.subclasses = classSubclasses;
+				
+				console.log(`Class ${cls.name} has ${classSubclasses.length} subclasses:`, 
+					classSubclasses.map(sc => sc.name));
+			});
+
 			// Create a list prioritizing subclasses for selection
 			this._allClassesFlattened = [];
-			this._allSubclasses = [];
 
 			this._allClasses.forEach(cls => {
 				console.log("Processing class:", cls.name, "source:", cls.source, "isSidekick:", cls.isSidekick);
@@ -1758,7 +1891,6 @@ class CharacterCreator {
 							casterProgression: cls.casterProgression
 						};
 						this._allClassesFlattened.push(flattenedSubclass);
-						this._allSubclasses.push(flattenedSubclass);
 					});
 				} else {
 					console.log("No subclasses found for", cls.name);
@@ -2327,23 +2459,40 @@ class CharacterCreator {
 	 */
 	_renderSubclassSelectionStep () {
 		return `
-			<div class="character-creator__step">
-				<div class="row">
-					<div class="col-md-8">
-						<h3>Choose Your Subclass</h3>
-						<p class="text-muted mb-3">Select a subclass specialization for your ${this._selectedClass ? this._selectedClass.name : 'selected class'}.</p>
+			<div class="ve-flex-col">
+				<div class="form-group">
+					<label class="ve-flex-v-center">
+						<span>Choose Your Subclass</span>
+						<span class="text-danger ml-1">*</span>
+					</label>
+					<div class="invalid-feedback" id="subclass-error"></div>
+					<small class="form-text text-muted">Browse subclasses for your ${this._selectedClass ? this._selectedClass.name : 'selected class'} below and click to select.</small>
+				</div>
 
-						<div class="form-group">
-							<label for="subclass-search" class="form-label">Search Subclasses</label>
-							<input type="text" class="form-control" id="subclass-search" placeholder="Search for a subclass...">
-							<div class="invalid-feedback" id="subclass-error"></div>
-						</div>
+				<div class="form-group">
+					<input
+						type="text"
+						class="form-control"
+						id="subclass-search"
+						placeholder="Search subclasses by name..."
+						autocomplete="off"
+					>
+				</div>
 
-						<div id="subclass-list" class="character-creator__list">
-							<!-- Subclass list will be populated here -->
+				<div class="ve-flex">
+					<div class="ve-col-4 pr-2">
+						<div id="subclass-list-container" class="subclass-list-container">
+							<div id="subclass-list" class="subclass-list">
+								<div class="text-center p-3">
+									<div class="spinner-border" role="status">
+										<span class="sr-only">Loading subclasses...</span>
+									</div>
+									<div class="mt-2">Loading subclasses...</div>
+								</div>
+							</div>
 						</div>
 					</div>
-					<div class="col-md-4">
+					<div class="ve-col-8 pl-2">
 						<div id="subclass-details" class="race-details" style="display: none;">
 							<div class="alert alert-info">
 								<strong>Subclass Details</strong>
@@ -2384,7 +2533,7 @@ class CharacterCreator {
 				this._characterData.class.subclass = {
 					name: this._selectedSubclass.name,
 					source: this._selectedSubclass.source,
-					features: this._selectedSubclass.subclassFeatures || []
+					features: this._selectedSubclass.subclass.subclassFeatures || []
 				};
 				console.log("Applied subclass to character:", this._selectedSubclass.name);
 			} catch (error) {
@@ -2411,6 +2560,7 @@ class CharacterCreator {
 
 		try {
 			console.log("Initializing subclass selection for class:", this._selectedClass?.name);
+			console.log("Selected class object:", this._selectedClass);
 
 			if (!this._selectedClass) {
 				console.error("No class selected - cannot initialize subclass selection");
@@ -2419,15 +2569,44 @@ class CharacterCreator {
 
 			// Get subclasses for the selected class
 			this._availableSubclasses = [];
-			if (this._selectedClass.subclasses && this._selectedClass.subclasses.length > 0) {
-				this._availableSubclasses = this._selectedClass.subclasses;
-				console.log("Found", this._availableSubclasses.length, "subclasses for", this._selectedClass.name);
+			
+			// Check if a subclass was already selected in step 2 (from combined entry)
+			if (this._selectedClass.subclass) {
+				console.log("A subclass was already selected in step 2:", this._selectedClass.subclass);
+				// Find the subclass in the parent class data
+				if (this._selectedClass.class && this._selectedClass.class.subclasses) {
+					const preSelectedSubclass = this._selectedClass.class.subclasses.find(sc => 
+						sc.name === this._selectedClass.subclass
+					);
+					if (preSelectedSubclass) {
+						this._availableSubclasses = [preSelectedSubclass];
+						this._selectedSubclass = {
+							name: preSelectedSubclass.name,
+							source: preSelectedSubclass.source,
+							value: `${preSelectedSubclass.name}|${preSelectedSubclass.source}`,
+							subclass: preSelectedSubclass
+						};
+						console.log("Pre-selected subclass found:", preSelectedSubclass.name);
+					}
+				}
 			} else {
-				console.log("No subclasses found for", this._selectedClass.name);
+				// Get subclasses from the selected base class
+				if (this._selectedClass.class && this._selectedClass.class.subclasses && this._selectedClass.class.subclasses.length > 0) {
+					this._availableSubclasses = this._selectedClass.class.subclasses;
+					console.log("Found", this._availableSubclasses.length, "subclasses for", this._selectedClass.name);
+				} else {
+					console.log("No subclasses found for", this._selectedClass.name);
+				}
 			}
 
-			// Setup search functionality
-			this._setupSubclassSearch();
+			// Set up event handlers
+			const $subclassSearch = this._$modalInner.find("#subclass-search");
+			// Restore previous search value
+			$subclassSearch.val(this._searchStates.subclassSearch);
+			$subclassSearch.off("input").on("input", (e) => {
+				this._searchStates.subclassSearch = $(e.target).val();
+				this._handleSubclassSearch();
+			});
 
 			// Load and display subclasses
 			await this._loadAndDisplaySubclasses();
@@ -2447,134 +2626,169 @@ class CharacterCreator {
 	}
 
 	/**
-	 * Sets up subclass search functionality
-	 * @private
-	 */
-	_setupSubclassSearch () {
-		const $search = this._$modalInner.find("#subclass-search");
-
-		$search.off("input").on("input", (e) => {
-			const query = e.target.value.toLowerCase();
-			this._filterSubclasses(query);
-		});
-
-		// Restore previous search state
-		if (this._searchStates.subclassSearch) {
-			$search.val(this._searchStates.subclassSearch);
-		}
-	}
-
-	/**
-	 * Filters visible subclasses based on search query
-	 * @private
-	 */
-	_filterSubclasses (query) {
-		this._searchStates.subclassSearch = query;
-
-		const $items = this._$modalInner.find("#subclass-list .character-creator__list-item");
-
-		$items.each((i, item) => {
-			const $item = $(item);
-			const text = $item.text().toLowerCase();
-
-			if (text.includes(query)) {
-				$item.show();
-			} else {
-				$item.hide();
-			}
-		});
-	}
-
-	/**
 	 * Loads and displays available subclasses
 	 * @private
 	 */
 	async _loadAndDisplaySubclasses () {
 		const $subclassList = this._$modalInner.find("#subclass-list");
 
+		console.log("Loading and displaying subclasses...");
+		console.log("Available subclasses:", this._availableSubclasses);
+
 		if (!this._availableSubclasses || this._availableSubclasses.length === 0) {
+			console.log("No subclasses available to display");
 			$subclassList.html(`
 				<div class="text-center p-3">
 					<div class="mb-2">No subclasses available</div>
 					<div class="small text-muted">This class does not have subclasses, or they may not be loaded.</div>
+					<div class="small text-muted mt-2">Selected class: ${this._selectedClass?.name || 'None'}</div>
+					<div class="small text-muted">Class object: ${this._selectedClass?.class ? 'Present' : 'Missing'}</div>
 				</div>
 			`);
 			return;
 		}
 
-		let html = '';
+		// Sort subclasses by name
+		const sortedSubclasses = [...this._availableSubclasses].sort((a, b) => a.name.localeCompare(b.name));
 
-		this._availableSubclasses.forEach((subclass, index) => {
-			const isSelected = this._selectedSubclass && this._selectedSubclass.name === subclass.name;
+		console.log("Sorted subclasses:", sortedSubclasses.map(sc => sc.name));
 
-			html += `
-				<div class="character-creator__list-item ${isSelected ? 'active' : ''}" data-subclass-index="${index}">
-					<div class="split-v-center">
-						<div>
-							<div class="h6 mb-1">${subclass.name}</div>
-							<div class="small text-muted">
-								${Parser.sourceJsonToAbv(subclass.source)}
-								${subclass.shortName ? ` • ${subclass.shortName}` : ''}
-							</div>
-						</div>
-						<div class="text-right">
-							<button class="ve-btn ve-btn-xs ve-btn-default" data-subclass-index="${index}">
-								View Details
-							</button>
-						</div>
-					</div>
+		// Generate subclass cards
+		const subclassCardsHtml = sortedSubclasses.map(subclass => this._generateSubclassCard(subclass)).join('');
+
+		$subclassList.html(subclassCardsHtml);
+
+		// Add click handlers to subclass cards
+		$subclassList.find('.subclass-card').off('click').on('click', (e) => {
+			const subclassValue = $(e.currentTarget).data('subclass-value');
+			console.log("Subclass card clicked:", subclassValue);
+			this._selectSubclassFromCard(subclassValue);
+		});
+
+		// Restore previously selected subclass if returning to this step
+		if (this._selectedSubclass && this._selectedSubclass.value) {
+			console.log("Restoring previous subclass selection:", this._selectedSubclass.value);
+			this._selectSubclassFromCard(this._selectedSubclass.value);
+		}
+		// Auto-select the first subclass only if no subclass is already selected
+		else if (sortedSubclasses.length > 0) {
+			const firstSubclass = sortedSubclasses[0];
+			const firstSubclassValue = `${firstSubclass.name}|${firstSubclass.source}`;
+			console.log("Auto-selecting first subclass:", firstSubclassValue);
+			this._selectSubclassFromCard(firstSubclassValue);
+		}
+
+		console.log("Subclass list loaded successfully");
+	}
+
+	_generateSubclassCard (subclass) {
+		const source = Parser.sourceJsonToAbv(subclass.source);
+		
+		// Get subclass level range
+		let levelRange = "N/A";
+		if (subclass.subclassFeatures && subclass.subclassFeatures.length > 0) {
+			// Most subclasses start at level 3, with features at levels 3, 6, 10, 14, 18, etc.
+			const featureCount = subclass.subclassFeatures.filter(levelFeatures => 
+				levelFeatures && levelFeatures.length > 0
+			).length;
+			if (featureCount > 0) {
+				levelRange = `${featureCount} feature levels`;
+			}
+		}
+
+		// Get a brief description if available
+		let shortDescription = "Specialized archetype";
+		if (subclass.shortName) {
+			shortDescription = subclass.shortName;
+		} else if (subclass.fluff && subclass.fluff.entries && subclass.fluff.entries[0]) {
+			const firstEntry = subclass.fluff.entries[0];
+			if (typeof firstEntry === 'string') {
+				shortDescription = firstEntry.substring(0, 80) + (firstEntry.length > 80 ? '...' : '');
+			}
+		}
+
+		return `
+			<div class="subclass-card" data-subclass-value="${subclass.name}|${subclass.source}">
+				<div class="subclass-card-header">
+					<div class="subclass-card-name">${subclass.name}</div>
+					<div class="subclass-card-source">${source}</div>
 				</div>
-			`;
+				<div class="subclass-card-details">
+					<div class="subclass-card-detail"><strong>Class:</strong> ${this._selectedClass.name}</div>
+					<div class="subclass-card-detail"><strong>Features:</strong> ${levelRange}</div>
+				</div>
+				<div class="subclass-card-features">${shortDescription}</div>
+				<div class="subclass-card-type">
+					Subclass Specialization
+				</div>
+			</div>
+		`;
+	}
+
+	_handleSubclassSearch () {
+		const searchTerm = this._$modalInner.find("#subclass-search").val().toLowerCase().trim();
+		const $subclassCards = this._$modalInner.find(".subclass-card");
+		let firstVisibleSubclass = null;
+
+		$subclassCards.each((i, card) => {
+			const $card = $(card);
+			const subclassName = $card.find(".subclass-card-name").text().toLowerCase();
+			const subclassSource = $card.find(".subclass-card-source").text().toLowerCase();
+
+			if (!searchTerm || subclassName.includes(searchTerm) || subclassSource.includes(searchTerm)) {
+				$card.show();
+				if (!firstVisibleSubclass) {
+					firstVisibleSubclass = $card.data('subclass-value');
+				}
+			} else {
+				$card.hide();
+			}
 		});
 
-		$subclassList.html(html);
-
-		// Add click handlers
-		$subclassList.find(".character-creator__list-item").off("click").on("click", (e) => {
-			const index = parseInt($(e.currentTarget).data("subclass-index"));
-			this._selectSubclass(index);
-		});
-
-		$subclassList.find("button[data-subclass-index]").off("click").on("click", (e) => {
-			e.stopPropagation();
-			const index = parseInt($(e.currentTarget).data("subclass-index"));
-			this._displaySubclassDetails(index);
-		});
-
-		// Apply any existing search filter
-		if (this._searchStates.subclassSearch) {
-			this._filterSubclasses(this._searchStates.subclassSearch);
+		// Auto-select the first visible subclass after search
+		if (firstVisibleSubclass && searchTerm) {
+			this._selectSubclassFromCard(firstVisibleSubclass);
 		}
 	}
 
-	/**
-	 * Selects a subclass
-	 * @private
-	 */
-	_selectSubclass (index) {
-		if (index >= 0 && index < this._availableSubclasses.length) {
-			this._selectedSubclass = this._availableSubclasses[index];
+	_selectSubclassFromCard (subclassValue) {
+		const [subclassName, subclassSource] = subclassValue.split("|");
 
-			// Update UI
-			this._$modalInner.find(".character-creator__list-item").removeClass("active");
-			this._$modalInner.find(`[data-subclass-index="${index}"]`).addClass("active");
+		// Find the subclass in the available subclasses
+		const subclass = this._availableSubclasses.find(sc => 
+			sc.name === subclassName && sc.source === subclassSource
+		);
 
-			// Update search input
-			this._$modalInner.find("#subclass-search").val(this._selectedSubclass.name);
+		if (!subclass) return;
 
-			console.log("Selected subclass:", this._selectedSubclass.name);
+		// Update selected subclass
+		this._selectedSubclass = {
+			name: subclassName,
+			source: subclassSource,
+			value: subclassValue,
+			subclass: subclass
+		};
 
-			// Display details automatically when selected
-			this._displaySubclassDetails(index);
-		}
+		// Update UI
+		this._updateSubclassSelection(subclass);
+		this._displaySubclassDetails(subclass);
+	}
+
+	_updateSubclassSelection (subclass) {
+		// Clear previous selection
+		this._$modalInner.find(".subclass-card").removeClass("selected");
+
+		// Mark selected card
+		this._$modalInner.find(`.subclass-card[data-subclass-value="${subclass.name}|${subclass.source}"]`).addClass("selected");
+
+		console.log("Selected subclass:", subclass.name);
 	}
 
 	/**
 	 * Displays detailed information about a subclass
 	 * @private
 	 */
-	async _displaySubclassDetails (index) {
-		const subclass = this._availableSubclasses[index];
+	async _displaySubclassDetails (subclass) {
 		if (!subclass) return;
 
 		console.log("Displaying details for subclass:", subclass.name);
@@ -2582,7 +2796,7 @@ class CharacterCreator {
 		const $subclassDetails = this._$modalInner.find("#subclass-details");
 
 		try {
-			let html = `<div class="character-creator__detailed-subclass">`;
+			let html = `<div class="race-details-content">`;
 
 			// Header with subclass name and source
 			html += `<div class="split-v-center mb-3">`;
@@ -2591,14 +2805,15 @@ class CharacterCreator {
 			html += `</div>`;
 
 			// Short description if available
-			if (subclass.shortName || subclass.fluff) {
-				html += `<div class="alert alert-info mb-3">`;
-				html += `<h5 class="mb-2"><span class="glyphicon glyphicon-star"></span> ${this._selectedClass.name} Subclass</h5>`;
-				if (subclass.shortName) {
-					html += `<p><strong>${subclass.shortName}</strong></p>`;
-				}
-				html += `</div>`;
+			html += `<div class="alert alert-info mb-3">`;
+			html += `<h5 class="mb-2"><span class="glyphicon glyphicon-star"></span> ${this._selectedClass.name} Subclass</h5>`;
+			if (subclass.shortName) {
+				html += `<p><strong>${subclass.shortName}</strong></p>`;
 			}
+			if (subclass.source) {
+				html += `<p class="small mb-0">This subclass specialization provides unique features and abilities for the ${this._selectedClass.name} class.</p>`;
+			}
+			html += `</div>`;
 
 			// Display subclass features by level
 			if (subclass.subclassFeatures && subclass.subclassFeatures.length > 0) {
@@ -2616,7 +2831,7 @@ class CharacterCreator {
 					const actualLevel = (levelIndex * 3) + 3; // Most subclasses start at 3rd level
 
 					html += `<div class="mb-3">`;
-					html += `<h6 class="mb-2">Level ${actualLevel}</h6>`;
+					html += `<h6 class="mb-2 text-primary">Level ${actualLevel}</h6>`;
 
 					levelFeatures.forEach(featureRef => {
 						try {
@@ -2624,13 +2839,24 @@ class CharacterCreator {
 							const parts = featureRef.split('|');
 							const featureName = parts[0];
 
-							html += `<div class="mb-2">`;
-							html += `<strong>${featureName}</strong>`;
+							html += `<div class="race-trait mb-2">`;
+							html += `<div class="race-trait-name">${featureName}</div>`;
+							
+							// Try to provide some context based on common subclass feature patterns
+							if (featureName.toLowerCase().includes('spell')) {
+								html += `<p class="mb-0 small text-muted">Provides spellcasting abilities or additional spells.</p>`;
+							} else if (featureName.toLowerCase().includes('feature') || featureName.toLowerCase().includes('ability')) {
+								html += `<p class="mb-0 small text-muted">Grants special abilities unique to this subclass.</p>`;
+							} else {
+								html += `<p class="mb-0 small text-muted">See class source material for full details.</p>`;
+							}
 							html += `</div>`;
 						} catch (renderError) {
 							console.warn("Error processing feature reference:", renderError);
 							if (typeof featureRef === 'string') {
-								html += `<p>${featureRef}</p>`;
+								html += `<div class="race-trait mb-2">`;
+								html += `<div class="race-trait-name">${featureRef}</div>`;
+								html += `</div>`;
 							}
 						}
 					});
@@ -2641,13 +2867,55 @@ class CharacterCreator {
 				html += `</div>`;
 			} else {
 				html += `<div class="alert alert-warning mb-3">`;
-				html += `<p>Detailed features for this subclass are not available in the current data.</p>`;
+				html += `<h6>No Features Available</h6>`;
+				html += `<p class="mb-0">Detailed features for this subclass are not available in the current data. Check the official source material for complete subclass features.</p>`;
 				html += `</div>`;
 			}
 
+			// Show basic class information at the bottom for context
+			html += `<hr class="hr-2">`;
+			html += `<h5>Base ${this._selectedClass.name} Class Stats</h5>`;
+			html += `<div class="row">`;
+			html += `<div class="col-md-6">`;
+			html += `<p><strong>Hit Die:</strong> d${this._selectedClass.hd?.faces || "?"}</p>`;
+			if (this._selectedClass.primaryAbility) {
+				const abilities = Array.isArray(this._selectedClass.primaryAbility) ?
+					this._selectedClass.primaryAbility.map(ab => {
+						if (typeof ab === 'string') return ab.toUpperCase();
+						if (ab.choose && ab.choose.from) {
+							return `Choose from: ${ab.choose.from.join(', ').toUpperCase()}`;
+						}
+						return ab.toString().toUpperCase();
+					}).join(" or ") :
+					this._selectedClass.primaryAbility.toString().toUpperCase();
+				html += `<p><strong>Primary Abilities:</strong> ${abilities}</p>`;
+			}
+			if (this._selectedClass.proficiency) {
+				const saves = Array.isArray(this._selectedClass.proficiency) ?
+					this._selectedClass.proficiency.join(", ").toUpperCase() :
+					this._selectedClass.proficiency.toString().toUpperCase();
+				html += `<p><strong>Saving Throws:</strong> ${saves}</p>`;
+			}
+			html += `</div>`;
+			html += `<div class="col-md-6">`;
+			if (this._selectedClass.startingProficiencies?.armor) {
+				const armor = Array.isArray(this._selectedClass.startingProficiencies.armor) ?
+					this._selectedClass.startingProficiencies.armor.join(", ") :
+					this._selectedClass.startingProficiencies.armor.toString();
+				html += `<p><strong>Armor:</strong> ${armor}</p>`;
+			}
+			if (this._selectedClass.startingProficiencies?.weapons) {
+				const weapons = Array.isArray(this._selectedClass.startingProficiencies.weapons) ?
+					this._selectedClass.startingProficiencies.weapons.join(", ") :
+					this._selectedClass.startingProficiencies.weapons.toString();
+				html += `<p><strong>Weapons:</strong> ${weapons}</p>`;
+			}
+			html += `</div>`;
 			html += `</div>`;
 
-			$subclassDetails.html(`<div class="race-details-content">${html}</div>`);
+			html += `</div>`;
+
+			$subclassDetails.html(html);
 			$subclassDetails.show();
 
 			console.log("Successfully displayed subclass details for:", subclass.name);
