@@ -482,14 +482,9 @@ class CharacterCreator {
 				validate: () => this._validateRaceSelection(),
 			},
 			{
-				title: "Class Selection",
+				title: "Class & Subclass Selection",
 				render: () => this._renderClassSelectionStep(),
 				validate: () => this._validateClassSelection(),
-			},
-			{
-				title: "Subclass Selection",
-				render: () => this._renderSubclassSelectionStep(),
-				validate: () => this._validateSubclassSelection(),
 			},
 		];
 	}
@@ -1008,6 +1003,36 @@ class CharacterCreator {
 				.ve-night-mode .subclass-card-type {
 					color: #999;
 				}
+
+				/* Level progression table styles */
+				.level-progression-table {
+					border: 1px solid var(--rgb-border--statblock);
+					border-radius: 4px;
+					background: var(--rgb-bg);
+				}
+				.level-progression-table thead th {
+					background: var(--rgb-bg--alt);
+					border-bottom: 2px solid var(--rgb-border--statblock);
+					color: var(--rgb-name);
+					font-weight: bold;
+					padding: 8px 12px;
+					font-size: 12px;
+				}
+				.level-progression-table tbody td {
+					padding: 6px 12px;
+					border-bottom: 1px solid var(--rgb-border--statblock);
+					font-size: 12px;
+					color: var(--rgb-font);
+				}
+				.level-progression-table tbody tr:nth-child(even) {
+					background: var(--rgb-bg--alt);
+				}
+				.level-progression-table tbody tr:hover {
+					background: rgba(130, 32, 0, 0.1);
+				}
+				.ve-night-mode .level-progression-table tbody tr:hover {
+					background: rgba(210, 154, 56, 0.1);
+				}
 			</style>
 			<div class="character-creator-progress">
 				<div class="progress">
@@ -1050,15 +1075,10 @@ class CharacterCreator {
 			console.log("Initializing race selection step");
 			this._initializeRaceSelection();
 		} else if (this._currentStep === 2) {
-			// Class selection step
-			console.log("Initializing class selection step");
-			document.title = "Step 2: Class Selection - 5etools"; // Visual confirmation
+			// Class & Subclass selection step (merged)
+			console.log("Initializing class & subclass selection step");
+			document.title = "Step 3: Class & Subclass Selection - 5etools"; // Visual confirmation
 			this._initializeClassSelection();
-		} else if (this._currentStep === 3) {
-			// Subclass selection step
-			console.log("Initializing subclass selection step");
-			document.title = "Step 3: Subclass Selection - 5etools"; // Visual confirmation
-			this._initializeSubclassSelection();
 		}
 	}
 
@@ -1835,14 +1855,14 @@ class CharacterCreator {
 			// Associate subclasses with their parent classes
 			this._allClasses.forEach(cls => {
 				// Find all subclasses that belong to this class
-				const classSubclasses = this._allSubclasses.filter(sc => 
+				const classSubclasses = this._allSubclasses.filter(sc =>
 					sc.className === cls.name && sc.classSource === cls.source
 				);
-				
+
 				// Add the subclasses array to the class object
 				cls.subclasses = classSubclasses;
-				
-				console.log(`Class ${cls.name} has ${classSubclasses.length} subclasses:`, 
+
+				console.log(`Class ${cls.name} has ${classSubclasses.length} subclasses:`,
 					classSubclasses.map(sc => sc.name));
 			});
 
@@ -1957,7 +1977,9 @@ class CharacterCreator {
 		// Auto-select the first class only if no class is already selected
 		else if (sortedClasses.length > 0) {
 			const firstClass = sortedClasses[0];
-			const firstClassValue = `${firstClass.name}|${firstClass.source}`;
+			const firstClassValue = firstClass._isSubclass
+				? `${firstClass._parentClassName}|${firstClass._parentClassSource}|${firstClass._subclassName}|${firstClass.source}`
+				: `${firstClass.name}|${firstClass.source}`;
 			this._selectClassFromCard(firstClassValue);
 		}
 	}
@@ -1966,12 +1988,22 @@ class CharacterCreator {
 		const source = Parser.sourceJsonToAbv(cls.source);
 		const hitDie = cls.hd?.faces || cls._parentClass?.hd?.faces || "?";
 
-		// Get primary abilities
-		let primaryAbilities = "None";
-		if (cls.primaryAbility || cls._parentClass?.primaryAbility) {
-			const abilities = cls.primaryAbility || cls._parentClass.primaryAbility;
-			if (Array.isArray(abilities) && abilities.length > 0) {
-				primaryAbilities = abilities.map(ab => ab.toUpperCase()).join(", ");
+		// Get starting proficiencies
+		let startingProficiencies = "";
+		if (cls.startingProficiencies) {
+			const proficiencies = cls.startingProficiencies;
+			if (Array.isArray(proficiencies.armor) && proficiencies.armor.length > 0) {
+				startingProficiencies += proficiencies.armor.map(ab => {
+					// Handle both string and object formats
+					if (typeof ab === 'string') {
+						return ab.toUpperCase();
+					} else if (typeof ab === 'object' && ab.full) {
+						return ab.full.toUpperCase();
+					} else if (typeof ab === 'object' && ab.proficiency) {
+						return ab.proficiency.toUpperCase();
+					}
+					return String(ab).toUpperCase();
+				}).join(", ");
 			}
 		}
 
@@ -1980,7 +2012,17 @@ class CharacterCreator {
 		if (cls.proficiency || cls._parentClass?.proficiency) {
 			const profs = cls.proficiency || cls._parentClass.proficiency;
 			if (Array.isArray(profs) && profs.length > 0) {
-				savingThrows = profs.map(prof => prof.toUpperCase()).join(", ");
+				savingThrows = profs.map(prof => {
+					// Handle both string and object formats
+					if (typeof prof === 'string') {
+						return prof.toUpperCase();
+					} else if (typeof prof === 'object' && prof.full) {
+						return prof.full.toUpperCase();
+					} else if (typeof prof === 'object' && prof.proficiency) {
+						return prof.proficiency.toUpperCase();
+					}
+					return String(prof).toUpperCase();
+				}).join(", ");
 			}
 		}
 
@@ -1988,8 +2030,13 @@ class CharacterCreator {
 		const isSubclass = cls._isSubclass;
 		const displayName = cls.name;
 
+		// Use a unique identifier for data-class-value that can distinguish between base classes and subclasses
+		const dataValue = isSubclass
+			? `${cls._parentClassName}|${cls._parentClassSource}|${cls._subclassName}|${cls.source}`
+			: `${cls.name}|${cls.source}`;
+
 		return `
-			<div class="class-card" data-class-value="${cls.name}|${cls.source}">
+			<div class="class-card" data-class-value="${dataValue}">
 				<div class="class-card-header">
 					<div class="class-card-name">${displayName}</div>
 					<div class="class-card-source">${source}</div>
@@ -1998,7 +2045,7 @@ class CharacterCreator {
 					<div class="class-card-detail"><strong>Hit Die:</strong> d${hitDie}</div>
 					<div class="class-card-detail"><strong>Saves:</strong> ${savingThrows}</div>
 				</div>
-				<div class="class-card-primary">${primaryAbilities}</div>
+				<div class="class-card-primary">${startingProficiencies}</div>
 				<div class="class-card-type">
 					${isSubclass ? 'Subclass' : 'Base Class'}
 				</div>
@@ -2265,11 +2312,6 @@ class CharacterCreator {
 			html += `<small class="text-muted">Source: ${Parser.sourceJsonToAbv(subclass.source)}</small>`;
 			html += `</div>`;
 
-			html += `<div class="alert alert-info mb-3">`;
-			html += `<h5 class="mb-2"><span class="glyphicon glyphicon-star"></span> ${classData.name} Subclass</h5>`;
-			html += `<p>This is a specialized path for the ${classData.name} class.</p>`;
-			html += `</div>`;
-
 			// Get and display subclass fluff (description)
 			try {
 				const subclassFluff = await Renderer.subclass.pGetFluff(subclass);
@@ -2317,15 +2359,15 @@ class CharacterCreator {
 					// Get the level from the first feature
 					const level = levelFeatures[0].level || (levelIndex + 1) * 3; // Subclasses typically get features at levels 3, 6, 10, 14
 
-					html += `<div class="subclass-level-block mb-4 p-3" style="border: 1px solid #ddd; border-radius: 4px; background: #f9f9f9;">`;
-					html += `<h6 class="subclass-level-header mb-3" style="color: #337ab7; border-bottom: 1px solid #ddd; padding-bottom: 8px; font-weight: bold;">Level ${level}</h6>`;
+					html += `<div class="subclass-level-block mb-4 p-3" >`;
+					html += `<h6 class="subclass-level-header mb-3">Level ${level}</h6>`;
 
 					// Process each feature at this level
 					for (const feature of levelFeatures) {
 						if (!feature.name) continue;
 
-						html += `<div class="subclass-feature mb-3" style="border-left: 3px solid #337ab7; padding-left: 12px;">`;
-						html += `<h6 class="feature-name mb-2" style="color: #333; font-weight: bold;">${feature.name}</h6>`;
+						html += `<div class="subclass-feature mb-3">`;
+						html += `<h6 class="feature-name mb-2">${feature.name}</h6>`;
 
 						// Render feature description
 						if (feature.entries && feature.entries.length > 0) {
@@ -2516,10 +2558,10 @@ class CharacterCreator {
 
 		let isValid = true;
 
-		// Validate subclass selection
+		// Validate subclass selection - now required!
 		if (!this._selectedSubclass) {
 			this._$modalInner.find("#subclass-search").addClass("is-invalid");
-			this._$modalInner.find("#subclass-error").text("Subclass selection is required");
+			this._$modalInner.find("#subclass-error").text("You must select a subclass to continue");
 			isValid = false;
 		} else {
 			this._$modalInner.find("#subclass-search").addClass("is-valid");
@@ -2569,13 +2611,13 @@ class CharacterCreator {
 
 			// Get subclasses for the selected class
 			this._availableSubclasses = [];
-			
+
 			// Check if a subclass was already selected in step 2 (from combined entry)
 			if (this._selectedClass.subclass) {
 				console.log("A subclass was already selected in step 2:", this._selectedClass.subclass);
 				// Find the subclass in the parent class data
 				if (this._selectedClass.class && this._selectedClass.class.subclasses) {
-					const preSelectedSubclass = this._selectedClass.class.subclasses.find(sc => 
+					const preSelectedSubclass = this._selectedClass.class.subclasses.find(sc =>
 						sc.name === this._selectedClass.subclass
 					);
 					if (preSelectedSubclass) {
@@ -2683,12 +2725,12 @@ class CharacterCreator {
 
 	_generateSubclassCard (subclass) {
 		const source = Parser.sourceJsonToAbv(subclass.source);
-		
+
 		// Get subclass level range
 		let levelRange = "N/A";
 		if (subclass.subclassFeatures && subclass.subclassFeatures.length > 0) {
 			// Most subclasses start at level 3, with features at levels 3, 6, 10, 14, 18, etc.
-			const featureCount = subclass.subclassFeatures.filter(levelFeatures => 
+			const featureCount = subclass.subclassFeatures.filter(levelFeatures =>
 				levelFeatures && levelFeatures.length > 0
 			).length;
 			if (featureCount > 0) {
@@ -2755,7 +2797,7 @@ class CharacterCreator {
 		const [subclassName, subclassSource] = subclassValue.split("|");
 
 		// Find the subclass in the available subclasses
-		const subclass = this._availableSubclasses.find(sc => 
+		const subclass = this._availableSubclasses.find(sc =>
 			sc.name === subclassName && sc.source === subclassSource
 		);
 
@@ -2800,81 +2842,22 @@ class CharacterCreator {
 
 			// Header with subclass name and source
 			html += `<div class="split-v-center mb-3">`;
-			html += `<h4 class="m-0">${subclass.name}</h4>`;
+			html += `<h3 class="m-0">${subclass.name}</h3>`;
 			html += `<small class="text-muted">Source: ${Parser.sourceJsonToAbv(subclass.source)}</small>`;
 			html += `</div>`;
 
-			// Short description if available
-			html += `<div class="alert alert-info mb-3">`;
-			html += `<h5 class="mb-2"><span class="glyphicon glyphicon-star"></span> ${this._selectedClass.name} Subclass</h5>`;
+			// Subclass overview
+			html += `<div class="race-ability-scores mb-3">`;
+			html += `<h5><span class="glyphicon glyphicon-star"></span> ${this._selectedClass.name} Subclass</h5>`;
 			if (subclass.shortName) {
 				html += `<p><strong>${subclass.shortName}</strong></p>`;
 			}
-			if (subclass.source) {
-				html += `<p class="small mb-0">This subclass specialization provides unique features and abilities for the ${this._selectedClass.name} class.</p>`;
-			}
+			html += `<p class="small mb-0">This specialized archetype provides unique features and abilities for the ${this._selectedClass.name} class at various levels.</p>`;
 			html += `</div>`;
 
-			// Display subclass features by level
-			if (subclass.subclassFeatures && subclass.subclassFeatures.length > 0) {
-				html += `<div class="mb-4">`;
-				html += `<h5>${subclass.name} Features by Level</h5>`;
-
-				const renderer = Renderer.get().setFirstSection(true);
-
-				// Process each level of subclass features
-				for (let levelIndex = 0; levelIndex < subclass.subclassFeatures.length; levelIndex++) {
-					const levelFeatures = subclass.subclassFeatures[levelIndex];
-					if (!levelFeatures || levelFeatures.length === 0) continue;
-
-					// Calculate the actual level (subclass features typically start at level 3)
-					const actualLevel = (levelIndex * 3) + 3; // Most subclasses start at 3rd level
-
-					html += `<div class="mb-3">`;
-					html += `<h6 class="mb-2 text-primary">Level ${actualLevel}</h6>`;
-
-					levelFeatures.forEach(featureRef => {
-						try {
-							// Feature references are usually strings like "Feature Name|Class|Source|Level"
-							const parts = featureRef.split('|');
-							const featureName = parts[0];
-
-							html += `<div class="race-trait mb-2">`;
-							html += `<div class="race-trait-name">${featureName}</div>`;
-							
-							// Try to provide some context based on common subclass feature patterns
-							if (featureName.toLowerCase().includes('spell')) {
-								html += `<p class="mb-0 small text-muted">Provides spellcasting abilities or additional spells.</p>`;
-							} else if (featureName.toLowerCase().includes('feature') || featureName.toLowerCase().includes('ability')) {
-								html += `<p class="mb-0 small text-muted">Grants special abilities unique to this subclass.</p>`;
-							} else {
-								html += `<p class="mb-0 small text-muted">See class source material for full details.</p>`;
-							}
-							html += `</div>`;
-						} catch (renderError) {
-							console.warn("Error processing feature reference:", renderError);
-							if (typeof featureRef === 'string') {
-								html += `<div class="race-trait mb-2">`;
-								html += `<div class="race-trait-name">${featureRef}</div>`;
-								html += `</div>`;
-							}
-						}
-					});
-
-					html += `</div>`;
-				}
-
-				html += `</div>`;
-			} else {
-				html += `<div class="alert alert-warning mb-3">`;
-				html += `<h6>No Features Available</h6>`;
-				html += `<p class="mb-0">Detailed features for this subclass are not available in the current data. Check the official source material for complete subclass features.</p>`;
-				html += `</div>`;
-			}
-
-			// Show basic class information at the bottom for context
-			html += `<hr class="hr-2">`;
-			html += `<h5>Base ${this._selectedClass.name} Class Stats</h5>`;
+			// Base class stats overview
+			html += `<div class="race-ability-scores mb-3">`;
+			html += `<h5>Class Overview</h5>`;
 			html += `<div class="row">`;
 			html += `<div class="col-md-6">`;
 			html += `<p><strong>Hit Die:</strong> d${this._selectedClass.hd?.faces || "?"}</p>`;
@@ -2898,27 +2881,161 @@ class CharacterCreator {
 			}
 			html += `</div>`;
 			html += `<div class="col-md-6">`;
-			if (this._selectedClass.startingProficiencies?.armor) {
-				const armor = Array.isArray(this._selectedClass.startingProficiencies.armor) ?
-					this._selectedClass.startingProficiencies.armor.join(", ") :
-					this._selectedClass.startingProficiencies.armor.toString();
-				html += `<p><strong>Armor:</strong> ${armor}</p>`;
+			if (this._selectedClass.spellcastingAbility) {
+				html += `<p><strong>Spellcasting:</strong> ${this._selectedClass.spellcastingAbility.toUpperCase()}-based</p>`;
 			}
-			if (this._selectedClass.startingProficiencies?.weapons) {
-				const weapons = Array.isArray(this._selectedClass.startingProficiencies.weapons) ?
-					this._selectedClass.startingProficiencies.weapons.join(", ") :
-					this._selectedClass.startingProficiencies.weapons.toString();
-				html += `<p><strong>Weapons:</strong> ${weapons}</p>`;
+			if (this._selectedClass.casterProgression) {
+				const progression = this._selectedClass.casterProgression === "full" ? "Full Caster" :
+								   this._selectedClass.casterProgression === "1/2" ? "Half Caster" :
+								   this._selectedClass.casterProgression === "1/3" ? "Third Caster" :
+								   this._selectedClass.casterProgression;
+				html += `<p><strong>Caster Type:</strong> ${progression}</p>`;
 			}
 			html += `</div>`;
 			html += `</div>`;
+			html += `</div>`;
+
+			// Class Features by Level Table
+			html += `<div class="mb-4">`;
+			html += `<h5>Class Features by Level</h5>`;
+			html += `<div style="max-height: 300px; overflow-y: auto;" class="level-progression-table">`;
+			html += `<table class="table table-sm table-striped mb-0 level-progression-table" style="font-size: 12px;">`;
+			html += `<thead style="position: sticky; top: 0; z-index: 10;">`;
+			html += `<tr>`;
+			html += `<th style="min-width: 40px;">Level</th>`;
+			html += `<th style="min-width: 60px;">Prof. Bonus</th>`;
+			html += `<th>Features</th>`;
+			if (this._selectedClass.spellcastingAbility) {
+				html += `<th style="min-width: 80px;">Spell Slots</th>`;
+			}
+			html += `</tr>`;
+			html += `</thead>`;
+			html += `<tbody>`;
+
+			// Generate level progression (1-20)
+			for (let level = 1; level <= 20; level++) {
+				const profBonus = Math.ceil(level / 4) + 1;
+
+				html += `<tr>`;
+				html += `<td><strong>${level}</strong></td>`;
+				html += `<td>+${profBonus}</td>`;
+
+				// Features column
+				html += `<td>`;
+				let features = [];
+
+				// Base class features (this would need to be loaded from class data)
+				// For now, show key levels where subclass features appear
+				if (level === 1) {
+					features.push("Class Features Begin");
+				}
+				if (level === 3 && subclass.subclassFeatures && subclass.subclassFeatures[0]) {
+					features.push(`<strong>${subclass.name} Features</strong>`);
+				}
+				if (level === 6 && subclass.subclassFeatures && subclass.subclassFeatures[1]) {
+					features.push(`<strong>${subclass.name} Features</strong>`);
+				}
+				if (level === 10 && subclass.subclassFeatures && subclass.subclassFeatures[2]) {
+					features.push(`<strong>${subclass.name} Features</strong>`);
+				}
+				if (level === 14 && subclass.subclassFeatures && subclass.subclassFeatures[3]) {
+					features.push(`<strong>${subclass.name} Features</strong>`);
+				}
+				if (level === 18 && subclass.subclassFeatures && subclass.subclassFeatures[4]) {
+					features.push(`<strong>${subclass.name} Features</strong>`);
+				}
+
+				html += features.length > 0 ? features.join(", ") : "—";
+				html += `</td>`;
+
+				// Spell slots column (if spellcaster)
+				if (this._selectedClass.spellcastingAbility) {
+					html += `<td style="font-size: 11px;">`;
+					if (this._selectedClass.casterProgression === "full" && level >= 1) {
+						// Full caster progression
+						const spellLevel = Math.min(Math.ceil(level / 2), 9);
+						html += `1st-${spellLevel > 1 ? spellLevel + 'th' : '1st'}`;
+					} else if (this._selectedClass.casterProgression === "1/2" && level >= 2) {
+						// Half caster progression
+						const spellLevel = Math.min(Math.ceil((level - 1) / 4), 5);
+						html += spellLevel > 0 ? `1st-${spellLevel > 1 ? spellLevel + 'th' : '1st'}` : "—";
+					} else if (this._selectedClass.casterProgression === "1/3" && level >= 3) {
+						// Third caster progression
+						const spellLevel = Math.min(Math.ceil((level - 2) / 6), 4);
+						html += spellLevel > 0 ? `1st-${spellLevel > 1 ? spellLevel + 'th' : '1st'}` : "—";
+					} else {
+						html += "—";
+					}
+					html += `</td>`;
+				}
+
+				html += `</tr>`;
+			}
+
+			html += `</tbody>`;
+			html += `</table>`;
+			html += `</div>`;
+			html += `</div>`;
+
+			// Detailed subclass features
+			if (subclass.subclassFeatures && subclass.subclassFeatures.length > 0) {
+				html += `<div class="mb-4">`;
+				html += `<h5>${subclass.name} Subclass Features</h5>`;
+
+				// Process each level of subclass features
+				const subclassLevels = [3, 6, 10, 14, 18]; // Standard subclass feature levels
+				for (let i = 0; i < Math.min(subclass.subclassFeatures.length, 5); i++) {
+					const levelFeatures = subclass.subclassFeatures[i];
+					if (!levelFeatures || levelFeatures.length === 0) continue;
+
+					const actualLevel = subclassLevels[i];
+
+					html += `<div class="race-trait mb-3">`;
+					html += `<div class="race-trait-name">Level ${actualLevel} Features</div>`;
+
+					levelFeatures.forEach(featureRef => {
+						try {
+							// Feature references are usually strings like "Feature Name|Class|Source|Level"
+							const parts = featureRef.split('|');
+							const featureName = parts[0];
+
+							html += `<div class="mb-2">`;
+							html += `<strong>${featureName}</strong>`;
+
+							// Try to provide some context based on common subclass feature patterns
+							if (featureName.toLowerCase().includes('spell')) {
+								html += `<div class="small text-muted">Provides spellcasting abilities or additional spells.</div>`;
+							} else if (featureName.toLowerCase().includes('feature') || featureName.toLowerCase().includes('ability')) {
+								html += `<div class="small text-muted">Grants special abilities unique to this subclass.</div>`;
+							} else {
+								html += `<div class="small text-muted">See class source material for full details.</div>`;
+							}
+							html += `</div>`;
+						} catch (renderError) {
+							console.warn("Error processing feature reference:", renderError);
+							if (typeof featureRef === 'string') {
+								html += `<div class="mb-2"><strong>${featureRef}</strong></div>`;
+							}
+						}
+					});
+
+					html += `</div>`;
+				}
+
+				html += `</div>`;
+			} else {
+				html += `<div class="race-trait mb-3">`;
+				html += `<div class="race-trait-name">Subclass Features</div>`;
+				html += `<p class="mb-0">Detailed features for this subclass are not available in the current data. Check the official source material for complete subclass features and descriptions.</p>`;
+				html += `</div>`;
+			}
 
 			html += `</div>`;
 
 			$subclassDetails.html(html);
 			$subclassDetails.show();
 
-			console.log("Successfully displayed subclass details for:", subclass.name);
+			console.log("Successfully displayed detailed subclass information");
 
 		} catch (e) {
 			console.error("Error displaying subclass details:", e);
@@ -3171,9 +3288,31 @@ class CharacterCreator {
 
 	async _selectClassFromCard(classValue) {
 		if (!classValue) return;
-		const [className, classSource] = classValue.split("|");
-		let selectedEntry = this._allClassesFlattened.find(cls => cls.name === className && cls.source === classSource);
+
+		const parts = classValue.split("|");
+		let selectedEntry;
+
+		if (parts.length === 4) {
+			// This is a subclass: parentClass|parentSource|subclassName|subclassSource
+			const [parentClassName, parentClassSource, subclassName, subclassSource] = parts;
+			selectedEntry = this._allClassesFlattened.find(cls =>
+				cls._isSubclass &&
+				cls._parentClassName === parentClassName &&
+				cls._parentClassSource === parentClassSource &&
+				cls._subclassName === subclassName
+			);
+		} else {
+			// This is a base class: className|classSource
+			const [className, classSource] = parts;
+			selectedEntry = this._allClassesFlattened.find(cls =>
+				!cls._isSubclass &&
+				cls.name === className &&
+				cls.source === classSource
+			);
+		}
+
 		if (!selectedEntry) return;
+
 		if (selectedEntry._isSubclass) {
 			this._selectedClass = {
 				name: selectedEntry._parentClassName,
@@ -3181,32 +3320,31 @@ class CharacterCreator {
 				subclass: selectedEntry._subclassName,
 				value: classValue,
 				class: selectedEntry._parentClass,
-				displayName: className
+				displayName: selectedEntry.name
 			};
 		} else {
 			this._selectedClass = {
-				name: className,
-				source: classSource,
+				name: selectedEntry.name,
+				source: selectedEntry.source,
 				subclass: null,
 				value: classValue,
 				class: selectedEntry,
-				displayName: className
+				displayName: selectedEntry.name
 			};
 		}
+
 		this._$modalInner.find(".class-card").removeClass("selected");
 		this._$modalInner.find(`.class-card[data-class-value='${classValue}']`).addClass("selected");
+
 		const $classDetails = this._$modalInner.find("#class-details");
 		try {
-			const classForSummary = selectedEntry._isSubclass ? selectedEntry._parentClassName : className;
-			const sourceForSummary = selectedEntry._isSubclass ? selectedEntry._parentClassSource : classSource;
-
 			// Display the class details directly
 			this._displayClassDetails(selectedEntry);
 		} catch (error) {
 			console.error("Failed to load class details:", error);
 			$classDetails.html(`
 				<div class="alert alert-warning">
-					<h4>${className}</h4>
+					<h4>${selectedEntry.name}</h4>
 					<p>Unable to load detailed class information. Please try selecting another class.</p>
 				</div>
 			`);
