@@ -19,12 +19,13 @@ globalThis.CharacterRaceUtil = class {
 		if (this._isLoaded) return;
 
 		try {
-			const raceData = await DataUtil.loadJSON("data/races.json");
-			this._raceData = raceData.race || [];
-			this._subraceData = raceData.subrace || [];
+			// Load raw race data to get both races and subraces separately
+			const rawRaceData = await DataUtil.loadJSON("data/races.json");
+			this._raceData = rawRaceData.race || [];
+			this._subraceData = rawRaceData.subrace || [];
 			this._isLoaded = true;
 		} catch (error) {
-
+			console.error("Failed to load race data:", error);
 			this._raceData = [];
 			this._subraceData = [];
 			this._isLoaded = true;
