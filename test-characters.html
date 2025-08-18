@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Character Storage Test</title>
+    <script src="lib/localforage.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/utils-characters.js"></script>
+</head>
+<body>
+    <h1>Character Storage Test</h1>
+    <div id="output"></div>
+    
+    <script>
+        async function testCharacterStorage() {
+            const output = document.getElementById('output');
+            
+            try {
+                output.innerHTML += '<p>Testing character storage...</p>';
+                
+                // Test loading characters
+                const characters = await CharacterStorageUtil.pLoadCharacters();
+                output.innerHTML += `<p>Loaded ${characters.length} characters:</p>`;
+                
+                characters.forEach(char => {
+                    output.innerHTML += `<p>- ${char.name} (${char.class?.name} ${char.level})</p>`;
+                });
+                
+                // Test creating a new character
+                const newChar = CharacterUtil.createNewCharacter({
+                    name: "Test Wizard",
+                    class: {name: "Wizard", source: "PHB"},
+                    level: 3
+                });
+                
+                output.innerHTML += `<p>Created new character: ${newChar.name}</p>`;
+                
+            } catch (error) {
+                output.innerHTML += `<p style="color: red;">Error: ${error.message}</p>`;
+                console.error('Character storage test failed:', error);
+            }
+        }
+        
+        // Wait for libraries to load
+        window.addEventListener('load', () => {
+            setTimeout(testCharacterStorage, 500);
+        });
+    </script>
+</body>
+</html>

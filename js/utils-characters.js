@@ -217,7 +217,7 @@ globalThis.CharacterStorageUtil = class {
 	static _isDirty = false;
 
 	/**
-	 * Loads all characters from storage
+	 * Loads all characters from storage, adding default characters if none exist.
 	 * @returns {Promise<Array>} Array of character objects
 	 */
 	static async pLoadCharacters () {
@@ -226,15 +226,198 @@ globalThis.CharacterStorageUtil = class {
 		}
 
 		try {
-			const stored = await StorageUtil.pGet(CharacterUtil.STORAGE_KEY);
-			this._cache = stored || [];
+			let stored = await StorageUtil.pGet(CharacterUtil.STORAGE_KEY);
+
+			// If no characters are stored, add some default ones
+			if (!stored || stored.length === 0) {
+				stored = this.getDefaultCharacters();
+				await this.pSaveCharacters(stored);
+			}
+
+			this._cache = stored;
 			this._isDirty = false;
 			return this._cache;
 		} catch (error) {
 			console.error("Failed to load characters from storage:", error);
-			this._cache = [];
+			this._cache = this.getDefaultCharacters(); // Fallback to defaults on error
 			return this._cache;
 		}
+	}
+
+	/**
+	 * Returns an array of default characters for testing and initial setup.
+	 * @returns {Array} An array of character objects.
+	 */
+	static getDefaultCharacters () {
+		return [
+			CharacterUtil.createNewCharacter({
+				name: "Evelyn Reed",
+				level: 5,
+				race: {name: "Human", source: "PHB"},
+				class: {name: "Rogue", source: "PHB", subclass: {name: "Thief", source: "PHB"}},
+				background: {name: "Urchin", source: "PHB"},
+				abilityScores: {str: 10, dex: 18, con: 14, int: 12, wis: 11, cha: 14},
+				hitPoints: {max: 38, current: 38, temp: 0},
+				speed: "30 ft.",
+				savingThrows: {dex: true, int: true},
+				skills: {
+					stealth: true,
+					thieves_tools: true,
+					acrobatics: true,
+					insight: true
+				},
+				equipment: [
+					{
+						name: "Rapier",
+						type: "weapon",
+						damage: "1d8",
+						damageType: "piercing",
+						ability: "dex",
+						proficient: true,
+						enchantment: 0
+					},
+					{
+						name: "Leather Armor",
+						type: "armor",
+						ac: 11
+					},
+					{
+						name: "Thieves' Tools",
+						type: "equipment"
+					}
+				],
+				features: [
+					{
+						name: "Sneak Attack",
+						description: "Once per turn, you can deal an extra 3d6 damage to one creature you hit with an attack if you have advantage on the attack roll."
+					},
+					{
+						name: "Thieves' Cant",
+						description: "You know thieves' cant, a secret mix of dialect, jargon, and code."
+					}
+				]
+			}),
+			CharacterUtil.createNewCharacter({
+				name: "Grommash Hellscream",
+				level: 8,
+				race: {name: "Orc", source: "VGM"},
+				class: {name: "Barbarian", source: "PHB", subclass: {name: "Path of the Berserker", source: "PHB"}},
+				background: {name: "Outlander", source: "PHB"},
+				abilityScores: {str: 20, dex: 14, con: 18, int: 8, wis: 12, cha: 10},
+				hitPoints: {max: 92, current: 92, temp: 0},
+				speed: "30 ft., climb 30 ft.",
+				savingThrows: {str: true, con: true},
+				skills: {
+					athletics: true,
+					intimidation: true,
+					survival: true,
+					perception: true
+				},
+				equipment: [
+					{
+						name: "Greataxe",
+						type: "weapon",
+						damage: "1d12",
+						damageType: "slashing",
+						ability: "str",
+						proficient: true,
+						enchantment: 1
+					},
+					{
+						name: "Javelin",
+						type: "weapon",
+						damage: "1d6",
+						damageType: "piercing",
+						ability: "str",
+						proficient: true,
+						enchantment: 0
+					},
+					{
+						name: "Chain Mail",
+						type: "armor",
+						ac: 16
+					}
+				],
+				features: [
+					{
+						name: "Rage",
+						description: "In battle, you fight with primal ferocity. On your turn, you can enter a rage as a bonus action."
+					},
+					{
+						name: "Reckless Attack",
+						description: "You can throw aside all concern for defense to attack with fierce desperation."
+					},
+					{
+						name: "Danger Sense",
+						description: "You have advantage on Dexterity saving throws against effects that you can see."
+					}
+				]
+			}),
+			CharacterUtil.createNewCharacter({
+				name: "Lyralei Moonwhisper",
+				level: 6,
+				race: {name: "Elf", source: "PHB", subrace: "High Elf"},
+				class: {name: "Wizard", source: "PHB", subclass: {name: "School of Evocation", source: "PHB"}},
+				background: {name: "Sage", source: "PHB"},
+				abilityScores: {str: 8, dex: 14, con: 13, int: 18, wis: 12, cha: 10},
+				hitPoints: {max: 42, current: 42, temp: 0},
+				speed: "30 ft.",
+				savingThrows: {int: true, wis: true},
+				skills: {
+					arcana: true,
+					history: true,
+					investigation: true,
+					insight: true
+				},
+				spellcasting: {
+					slots: {
+						"1": {max: 4, used: 1},
+						"2": {max: 3, used: 0},
+						"3": {max: 3, used: 2}
+					},
+					known: [
+						{name: "Fireball", level: 3},
+						{name: "Magic Missile", level: 1},
+						{name: "Shield", level: 1},
+						{name: "Counterspell", level: 3},
+						{name: "Misty Step", level: 2}
+					]
+				},
+				equipment: [
+					{
+						name: "Quarterstaff",
+						type: "weapon",
+						damage: "1d6",
+						damageType: "bludgeoning",
+						ability: "str",
+						proficient: true,
+						enchantment: 0
+					},
+					{
+						name: "Arcane Focus",
+						type: "equipment"
+					},
+					{
+						name: "Spellbook",
+						type: "equipment"
+					}
+				],
+				features: [
+					{
+						name: "Spellcasting",
+						description: "You are a 6th-level spellcaster. Your spellcasting ability is Intelligence (spell save DC 15, +7 to hit with spell attacks)."
+					},
+					{
+						name: "Arcane Recovery",
+						description: "You have learned to regain some of your magical energy by studying your spellbook."
+					},
+					{
+						name: "Sculpt Spells",
+						description: "You can create pockets of relative safety within the effects of your evocation spells."
+					}
+				]
+			})
+		];
 	}
 
 	/**

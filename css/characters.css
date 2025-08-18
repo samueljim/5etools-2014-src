@@ -13,42 +13,37 @@
 		border-color: #555;
 	}
 
-	.character-header {
-		border-bottom: 2px solid #922610;
-		margin-bottom: 15px;
-		padding-bottom: 10px;
-	}
-
-	.ve-night-mode .character-header {
-		border-bottom-color: #c9302c;
-	}
-
-	.character-name {
-		font-size: 24px;
+	/* Character stat block header uses standard bestiary styling */
+	.stats--character .stats-name {
+		font-size: 23px;
 		font-weight: bold;
 		margin: 0 0 5px 0;
 		color: #922610;
+		font-family: "Libre Baskerville", "Lora", "Calisto MT", "Bookman Old Style", Bookman, "Goudy Old Style", Garamond, "Hoefler Text", "Bitstream Charter", Georgia, serif;
 	}
 
-	.ve-night-mode .character-name {
+	.ve-night-mode .stats--character .stats-name {
 		color: #c9302c;
 	}
 
-	.character-meta {
+	.stats--character .stats-size-type-alignment {
 		font-style: italic;
 		color: #666;
 		font-size: 14px;
+		margin: 0 0 10px 0;
 	}
 
-	.ve-night-mode .character-meta {
+	.ve-night-mode .stats--character .stats-size-type-alignment {
 		color: #ccc;
 	}
 
-	.character-abilities {
-		margin-bottom: 15px;
-	}
-
-	.character-abilities h3 {
+	.character-racial-features h3,
+	.character-class-features h3,
+	.character-proficiencies h3,
+	.character-spellcasting h3,
+	.character-custom-features h3,
+	.character-notes h3,
+	.character-hit-points h3 {
 		font-size: 16px;
 		font-weight: bold;
 		margin: 0 0 10px 0;
@@ -57,45 +52,22 @@
 		padding-bottom: 5px;
 	}
 
-	.ve-night-mode .character-abilities h3 {
+	.ve-night-mode .character-racial-features h3,
+	.ve-night-mode .character-class-features h3,
+	.ve-night-mode .character-proficiencies h3,
+	.ve-night-mode .character-spellcasting h3,
+	.ve-night-mode .character-custom-features h3,
+	.ve-night-mode .character-notes h3,
+	.ve-night-mode .character-hit-points h3 {
 		color: #c9302c;
 		border-bottom-color: #555;
-	}
-
-	.character-abilities-grid {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: 10px;
-		font-family: monospace;
-	}
-
-	.character-abilities-grid div {
-		padding: 5px;
-		background: rgba(146, 38, 16, 0.1);
-		border-radius: 3px;
-	}
-
-	.ve-night-mode .character-abilities-grid div {
-		background: rgba(201, 48, 44, 0.1);
 	}
 
 	.character-notes {
 		margin-bottom: 15px;
 	}
 
-	.character-notes h3 {
-		font-size: 16px;
-		font-weight: bold;
-		margin: 0 0 10px 0;
-		color: #922610;
-		border-bottom: 1px solid #ddd;
-		padding-bottom: 5px;
-	}
 
-	.ve-night-mode .character-notes h3 {
-		color: #c9302c;
-		border-bottom-color: #555;
-	}
 
 	.character-notes p {
 		margin: 0;
@@ -147,50 +119,9 @@
 		border-bottom-color: #555;
 	}
 
-	/* Character info display */
-	.character-basic-info {
-		margin-bottom: 15px;
-	}
+	/* Character info now uses standard bestiary table styling */
 
-	.character-info-grid {
-		display: grid;
-		grid-template-columns: repeat(2, 1fr);
-		gap: 10px;
-		font-family: monospace;
-	}
-
-	.character-info-grid div {
-		padding: 5px;
-		background: rgba(146, 38, 16, 0.1);
-		border-radius: 3px;
-	}
-
-	.ve-night-mode .character-info-grid div {
-		background: rgba(201, 48, 44, 0.1);
-	}
-
-	/* Ability scores styling */
-	.ability-score {
-		text-align: center;
-		padding: 8px;
-		background: rgba(146, 38, 16, 0.1);
-		border-radius: 3px;
-	}
-
-	.ve-night-mode .ability-score {
-		background: rgba(201, 48, 44, 0.1);
-	}
-
-	.ability-name {
-		font-size: 12px;
-		font-weight: bold;
-		margin-bottom: 4px;
-	}
-
-	.ability-value {
-		font-size: 14px;
-		font-family: monospace;
-	}
+	/* Ability scores now use standard bestiary table styling */
 
 	/* Hit points styling */
 	.character-hit-points {
@@ -226,13 +157,13 @@
 		font-size: 14px;
 		font-weight: bold;
 		margin: 0 0 5px 0;
-		color: #922610;
+		color: #4682b4;
 	}
 
 	.ve-night-mode .spell-slots h4,
 	.ve-night-mode .spells-known h4,
 	.ve-night-mode .spells-prepared h4 {
-		color: #c9302c;
+		color: #87ceeb;
 	}
 
 	/* Racial features styling */
@@ -265,6 +196,40 @@
 	}
 
 	.racial-feature p {
+		margin: 0;
+		line-height: 1.4;
+	}
+
+	/* Class features styling */
+	.character-class-features {
+		margin-bottom: 15px;
+	}
+
+	.class-feature {
+		margin-bottom: 10px;
+		padding: 10px;
+		background: rgba(70, 130, 180, 0.05);
+		border-left: 3px solid #4682b4;
+		border-radius: 0 3px 3px 0;
+	}
+
+	.ve-night-mode .class-feature {
+		background: rgba(135, 206, 235, 0.05);
+		border-left-color: #87ceeb;
+	}
+
+	.class-feature h4 {
+		font-size: 14px;
+		font-weight: bold;
+		margin: 0 0 5px 0;
+		color: #4682b4;
+	}
+
+	.ve-night-mode .class-feature h4 {
+		color: #87ceeb;
+	}
+
+	.class-feature p {
 		margin: 0;
 		line-height: 1.4;
 	}
@@ -549,11 +514,7 @@
 
 	/* Responsive design for mobile */
 	@media (max-width: 768px) {
-		.character-abilities-grid {
-			grid-template-columns: repeat(2, 1fr);
-		}
-
-		.character-name {
+		.stats--character .stats-name {
 			font-size: 20px;
 		}
 
@@ -563,11 +524,7 @@
 	}
 
 	@media (max-width: 480px) {
-		.character-abilities-grid {
-			grid-template-columns: 1fr;
-		}
-
-		.character-name {
+		.stats--character .stats-name {
 			font-size: 18px;
 		}
 	}

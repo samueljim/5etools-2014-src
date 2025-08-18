@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Character Demo - 5etools</title>
+    <link rel="stylesheet" href="css/bootstrap.css">
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/statgen-bundle.css">
+    <link rel="stylesheet" href="css/characters.css">
+    <style>
+        body { padding: 20px; }
+        .character-demo { max-width: 800px; margin: 0 auto; }
+        .character-list { margin-bottom: 30px; }
+        .character-item { 
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 10px;
+            cursor: pointer;
+        }
+        .character-item:hover {
+            background: #e9ecef;
+        }
+        .character-sheet {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            background: white;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="character-demo">
+        <h1>Character Demo</h1>
+        <p>This demonstrates the character rendering system with clickable stat blocks.</p>
+        
+        <div class="character-list" id="character-list">
+            <h3>Available Characters:</h3>
+            <!-- Characters will be loaded here -->
+        </div>
+        
+        <div id="character-display">
+            <h3>Select a character above to view their stat block</h3>
+        </div>
+    </div>
+
+    <!-- Include necessary 5etools scripts -->
+    <script src="lib/jquery.js"></script>
+    <script src="js/parser.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/render.js"></script>
+    <script src="js/render-dice.js"></script>
+    <script src="js/utils-characters.js"></script>
+    <script src="js/render-characters-clean.js"></script>
+    
+    <script>
+        $(document).ready(function() {
+            console.log("Character demo loading...");
+            
+            // Get default characters
+            const characters = CharacterStorageUtil.getDefaultCharacters();
+            console.log("Loaded characters:", characters);
+            
+            const $characterList = $('#character-list');
+            const $characterDisplay = $('#character-display');
+            
+            // Display character list
+            characters.forEach((character, index) => {
+                const $item = $(`
+                    <div class="character-item" data-index="${index}">
+                        <strong>${character.name}</strong> - 
+                        Level ${character.level || 1} ${character.class?.name || 'Unknown'} 
+                        (${character.race?.name || 'Unknown'})
+                    </div>
+                `);
+                
+                $item.click(() => {
+                    console.log("Displaying character:", character.name);
+                    const $rendered = RenderCharacters.$getRenderedCharacter(character);
+                    $characterDisplay.empty().append($rendered);
+                    
+                    // Scroll to character display
+                    $characterDisplay[0].scrollIntoView({ behavior: 'smooth' });
+                });
+                
+                $characterList.append($item);
+            });
+        });
+    </script>
+</body>
+</html>

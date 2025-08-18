@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Character Test</title>
+    <link rel="stylesheet" href="css/bootstrap.css">
+    <link rel="stylesheet" href="css/main.css">
+    <style>
+        .character-container {
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        
+        .ability-score {
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        
+        .ability-score:hover {
+            background-color: #f0f0f0;
+        }
+        
+        .hit-points {
+            cursor: pointer;
+            color: #d20;
+            font-weight: bold;
+        }
+        
+        .weapon-item {
+            cursor: pointer;
+            color: #0066cc;
+        }
+        
+        .spell-item {
+            cursor: pointer;
+            color: #9966cc;
+        }
+    </style>
+</head>
+<body>
+    <div class="character-container">
+        <h1>Character Sheet Test</h1>
+        <div id="character-display"></div>
+        
+        <div class="mt-4">
+            <button id="load-test-character" class="btn btn-primary">Load Test Character</button>
+        </div>
+    </div>
+
+    <script src="lib/jquery.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/parser.js"></script>
+    <script src="js/render-dice.js"></script>
+    <script src="js/render.js"></script>
+    <script src="js/utils-characters.js"></script>
+    <script src="js/render-characters-clean.js"></script>
+    
+    <script>
+        // Test our character rendering
+        async function loadTestCharacter() {
+            try {
+                // Create a test character with rich data
+                const testCharacter = CharacterUtil.createNewCharacter({
+                    name: "Elara Brightblade",
+                    level: 4,
+                    race: {name: "Half-Elf", source: "PHB"},
+                    class: {name: "Paladin", source: "PHB"},
+                    background: {name: "Noble", source: "PHB"},
+                    abilityScores: {str: 16, dex: 12, con: 14, int: 10, wis: 13, cha: 15},
+                    hitPoints: {max: 34, current: 28, temp: 5},
+                    speed: "30 ft.",
+                    savingThrows: {wis: true, cha: true},
+                    skills: {
+                        athletics: true,
+                        insight: true,
+                        intimidation: true,
+                        persuasion: true
+                    },
+                    equipment: [
+                        {
+                            name: "Longsword",
+                            type: "weapon",
+                            damage: "1d8",
+                            damageType: "slashing",
+                            ability: "str",
+                            proficient: true,
+                            enchantment: 1
+                        },
+                        {
+                            name: "Shield",
+                            type: "armor",
+                            ac: 2
+                        },
+                        {
+                            name: "Chain Mail",
+                            type: "armor",
+                            ac: 16
+                        }
+                    ],
+                    spellcasting: {
+                        slots: {
+                            "1": {max: 3, used: 1}
+                        },
+                        known: [
+                            {name: "Cure Wounds", level: 1},
+                            {name: "Divine Favor", level: 1},
+                            {name: "Bless", level: 1}
+                        ]
+                    },
+                    features: [
+                        {
+                            name: "Divine Sense",
+                            description: "You can sense the presence of celestials, fiends, and undead within 60 feet."
+                        },
+                        {
+                            name: "Lay on Hands",
+                            description: "You have a pool of 20 hit points that you can use to heal yourself or others."
+                        },
+                        {
+                            name: "Fighting Style: Dueling",
+                            description: "When wielding a one-handed weapon with no other weapons, you gain +2 damage."
+                        }
+                    ]
+                });
+                
+                console.log("Test character created:", testCharacter);
+                
+                // Render the character
+                const $characterSheet = RenderCharacters.$getRenderedCharacter(testCharacter);
+                $('#character-display').empty().append($characterSheet);
+                
+                console.log("Character rendered successfully");
+                
+            } catch (error) {
+                console.error("Error loading test character:", error);
+                $('#character-display').html(`<div class="alert alert-danger">Error: ${error.message}</div>`);
+            }
+        }
+        
+        // Initialize when page loads
+        $(document).ready(function() {
+            $('#load-test-character').click(loadTestCharacter);
+            
+            // Auto-load test character
+            setTimeout(loadTestCharacter, 500);
+        });
+    </script>
+</body>
+</html>

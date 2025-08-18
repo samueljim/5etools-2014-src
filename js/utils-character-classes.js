@@ -78,21 +78,42 @@ class CharacterClassUtil {
 		const cls = await this.pGetClass(name, source);
 		if (!cls) return null;
 
+		// Extract primary abilities from the class data
+		let primaryAbilities = [];
+		if (cls.primaryAbility) {
+			primaryAbilities = Array.isArray(cls.primaryAbility) ? cls.primaryAbility : [cls.primaryAbility];
+		}
+
+		// Get skill proficiency choices
+		let skillChoices = [];
+		if (cls.startingProficiencies?.skills) {
+			cls.startingProficiencies.skills.forEach(skillEntry => {
+				if (skillEntry.choose) {
+					skillChoices.push({
+						from: skillEntry.choose.from || [],
+						count: skillEntry.choose.count || 1
+					});
+				}
+			});
+		}
+
 		return {
 			name: cls.name,
 			source: cls.source,
 			hitDie: cls.hd?.faces || 6,
-			primaryAbility: cls.primaryAbility || [],
-			savingThrows: cls.proficiency || [],
-			skillProficiencies: cls.skillProficiencies || [],
+			primaryAbilities: primaryAbilities,
+			savingThrowProficiencies: cls.proficiency || [],
+			skillProficiencyChoices: skillChoices,
 			startingProficiencies: cls.startingProficiencies || {},
 			startingEquipment: cls.startingEquipment || {},
-			features: this._getLevel1Features(cls),
+			level1Features: this._getLevel1Features(cls),
 			subclasses: cls.subclasses || [],
 			spellcasting: cls.spellcastingAbility ? {
 				ability: cls.spellcastingAbility,
+				progression: cls.casterProgression || "full",
 				ritual: cls.casterProgression === "full" || cls.casterProgression === "1/2" || cls.casterProgression === "1/3"
-			} : null
+			} : null,
+			multiclassing: cls.multiclassing || null
 		};
 	}
 
@@ -106,13 +127,31 @@ class CharacterClassUtil {
 		const level1Features = [];
 
 		// Look for level 1 features in classFeatures array
-		for (const feature of cls.classFeatures) {
-			if (feature.level === 1) {
-				level1Features.push({
-					name: feature.name,
-					source: feature.source || cls.source,
-					entries: feature.entries || []
-				});
+		// Class features are stored as UIDs like "Fighting Style|Fighter||1"
+		for (const featureUid of cls.classFeatures) {
+			try {
+				// Handle both string UIDs and object references
+				const uid = typeof featureUid === 'string' ? featureUid : featureUid.classFeature;
+				if (!uid) continue;
+
+				// Unpack the UID to get feature details
+				const unpacked = DataUtil.class.unpackUidClassFeature(uid);
+
+				// Only include level 1 features
+				if (unpacked.level === 1) {
+					level1Features.push({
+						name: unpacked.name,
+						className: unpacked.className,
+						classSource: unpacked.classSource,
+						level: unpacked.level,
+						source: unpacked.source,
+						uid: uid,
+						// Note: The actual feature content would need to be loaded separately
+						// from the class feature data files if needed for display
+					});
+				}
+			} catch (error) {
+				console.warn("Failed to parse class feature UID:", featureUid, error);
 			}
 		}
 
@@ -208,6 +247,21 @@ class CharacterClassUtil {
 			if (cls.startingProficiencies.tools) {
 				updatedCharacter.proficiencies.tools = [...(cls.startingProficiencies.tools || [])];
 			}
+
+			// Handle skill proficiencies (usually choices, but store the options)
+			if (cls.startingProficiencies.skills) {
+				updatedCharacter.skillProficiencyChoices = cls.startingProficiencies.skills;
+				// Note: Actual skill selection would need to be handled in character creation UI
+			}
+		}
+
+		// Apply starting equipment
+		if (cls.startingEquipment) {
+			updatedCharacter.startingEquipment = {
+				default: cls.startingEquipment.default || [],
+				goldAlternative: cls.startingEquipment.goldAlternative || null,
+				additionalFromBackground: cls.startingEquipment.additionalFromBackground || false
+			};
 		}
 
 		// Apply level 1 class features
@@ -245,25 +299,135 @@ class CharacterClassUtil {
 	static _calculateSpellSlots(cls, level) {
 		if (!cls.spellcastingAbility) return {};
 
-		// This is a simplified spell slot calculation
-		// In a full implementation, you'd need to handle different caster progressions
 		const slots = {};
 
+		// Use the standard D&D 5e spell slot progression tables
 		if (cls.casterProgression === "full") {
-			// Full casters like Wizard, Sorcerer
-			if (level >= 1) slots["1"] = {max: 2, used: 0};
-			if (level >= 3) slots["2"] = {max: 1, used: 0};
-			if (level >= 5) slots["3"] = {max: 1, used: 0};
-			// ... continue for higher levels
+			// Full casters like Wizard, Sorcerer, Cleric, Druid, Bard
+			const fullCasterSlots = [
+				[2], // Level 1
+				[3], // Level 2
+				[4, 2], // Level 3
+				[4, 3], // Level 4
+				[4, 3, 2], // Level 5
+				[4, 3, 3], // Level 6
+				[4, 3, 3, 1], // Level 7
+				[4, 3, 3, 2], // Level 8
+				[4, 3, 3, 3, 1], // Level 9
+				[4, 3, 3, 3, 2], // Level 10
+				[4, 3, 3, 3, 2, 1], // Level 11
+				[4, 3, 3, 3, 2, 1], // Level 12
+				[4, 3, 3, 3, 2, 1, 1], // Level 13
+				[4, 3, 3, 3, 2, 1, 1], // Level 14
+				[4, 3, 3, 3, 2, 1, 1, 1], // Level 15
+				[4, 3, 3, 3, 2, 1, 1, 1], // Level 16
+				[4, 3, 3, 3, 2, 1, 1, 1, 1], // Level 17
+				[4, 3, 3, 3, 3, 1, 1, 1, 1], // Level 18
+				[4, 3, 3, 3, 3, 2, 1, 1, 1], // Level 19
+				[4, 3, 3, 3, 3, 2, 2, 1, 1] // Level 20
+			];
+
+			if (level >= 1 && level <= 20) {
+				const levelSlots = fullCasterSlots[level - 1];
+				for (let i = 0; i < levelSlots.length; i++) {
+					slots[`${i + 1}`] = {max: levelSlots[i], used: 0};
+				}
+			}
 		} else if (cls.casterProgression === "1/2") {
-			// Half casters like Paladin, Ranger
-			if (level >= 2) slots["1"] = {max: 1, used: 0};
-			if (level >= 5) slots["2"] = {max: 1, used: 0};
-			// ... continue for higher levels
+			// Half casters like Paladin, Ranger (start at level 2)
+			const halfCasterSlots = [
+				[], // Level 1 - no spells
+				[2], // Level 2
+				[3], // Level 3
+				[3], // Level 4
+				[4, 2], // Level 5
+				[4, 2], // Level 6
+				[4, 3], // Level 7
+				[4, 3], // Level 8
+				[4, 3, 2], // Level 9
+				[4, 3, 2], // Level 10
+				[4, 3, 3], // Level 11
+				[4, 3, 3], // Level 12
+				[4, 3, 3, 1], // Level 13
+				[4, 3, 3, 1], // Level 14
+				[4, 3, 3, 2], // Level 15
+				[4, 3, 3, 2], // Level 16
+				[4, 3, 3, 3, 1], // Level 17
+				[4, 3, 3, 3, 1], // Level 18
+				[4, 3, 3, 3, 2], // Level 19
+				[4, 3, 3, 3, 2] // Level 20
+			];
+
+			if (level >= 1 && level <= 20) {
+				const levelSlots = halfCasterSlots[level - 1];
+				for (let i = 0; i < levelSlots.length; i++) {
+					slots[`${i + 1}`] = {max: levelSlots[i], used: 0};
+				}
+			}
 		} else if (cls.casterProgression === "1/3") {
-			// Third casters like Eldritch Knight
-			if (level >= 3) slots["1"] = {max: 1, used: 0};
-			// ... continue for higher levels
+			// Third casters like Eldritch Knight, Arcane Trickster (start at level 3)
+			const thirdCasterSlots = [
+				[], // Level 1 - no spells
+				[], // Level 2 - no spells
+				[2], // Level 3
+				[3], // Level 4
+				[3], // Level 5
+				[3], // Level 6
+				[4, 2], // Level 7
+				[4, 2], // Level 8
+				[4, 2], // Level 9
+				[4, 3], // Level 10
+				[4, 3], // Level 11
+				[4, 3], // Level 12
+				[4, 3, 2], // Level 13
+				[4, 3, 2], // Level 14
+				[4, 3, 2], // Level 15
+				[4, 3, 3], // Level 16
+				[4, 3, 3], // Level 17
+				[4, 3, 3], // Level 18
+				[4, 3, 3, 1], // Level 19
+				[4, 3, 3, 1] // Level 20
+			];
+
+			if (level >= 1 && level <= 20) {
+				const levelSlots = thirdCasterSlots[level - 1];
+				for (let i = 0; i < levelSlots.length; i++) {
+					slots[`${i + 1}`] = {max: levelSlots[i], used: 0};
+				}
+			}
+		} else if (cls.name === "Warlock") {
+			// Warlock has unique spell slot progression (Pact Magic)
+			const warlockSlots = [
+				[1], // Level 1 - 1 slot, 1st level
+				[2], // Level 2 - 2 slots, 1st level
+				[0, 2], // Level 3 - 2 slots, 2nd level
+				[0, 2], // Level 4 - 2 slots, 2nd level
+				[0, 0, 2], // Level 5 - 2 slots, 3rd level
+				[0, 0, 2], // Level 6 - 2 slots, 3rd level
+				[0, 0, 0, 2], // Level 7 - 2 slots, 4th level
+				[0, 0, 0, 2], // Level 8 - 2 slots, 4th level
+				[0, 0, 0, 0, 2], // Level 9 - 2 slots, 5th level
+				[0, 0, 0, 0, 2], // Level 10 - 2 slots, 5th level
+				[0, 0, 0, 0, 3], // Level 11 - 3 slots, 5th level
+				[0, 0, 0, 0, 3], // Level 12 - 3 slots, 5th level
+				[0, 0, 0, 0, 3], // Level 13 - 3 slots, 5th level
+				[0, 0, 0, 0, 3], // Level 14 - 3 slots, 5th level
+				[0, 0, 0, 0, 3], // Level 15 - 3 slots, 5th level
+				[0, 0, 0, 0, 3], // Level 16 - 3 slots, 5th level
+				[0, 0, 0, 0, 4], // Level 17 - 4 slots, 5th level
+				[0, 0, 0, 0, 4], // Level 18 - 4 slots, 5th level
+				[0, 0, 0, 0, 4], // Level 19 - 4 slots, 5th level
+				[0, 0, 0, 0, 4] // Level 20 - 4 slots, 5th level
+			];
+
+			if (level >= 1 && level <= 20) {
+				const levelSlots = warlockSlots[level - 1];
+				for (let i = 0; i < levelSlots.length; i++) {
+					if (levelSlots[i] > 0) {
+						slots[`${i + 1}`] = {max: levelSlots[i], used: 0};
+					}
+				}
+			}
 		}
 
 		return slots;
