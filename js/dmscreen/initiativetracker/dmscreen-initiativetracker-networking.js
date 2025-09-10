@@ -39,10 +39,21 @@ export class InitiativeTrackerNetworking {
 			// Check if the WebSocket connection has the required method
 			if (typeof this._wsConnection.sendStateToClients === 'function') {
 				console.log('Sending state via WebSocket');
-				return this._wsConnection.sendStateToClients({fnGetToSend});
+				try {
+					return this._wsConnection.sendStateToClients({fnGetToSend});
+				} catch (error) {
+					console.error('Error calling WebSocket sendStateToClients:', error);
+					// Fall back to p2p mode on error
+					return this._sendMessageToClients({fnGetToSend});
+				}
 			} else {
-				console.warn('WebSocket connection does not have sendStateToClients method, available methods:', Object.getOwnPropertyNames(this._wsConnection));
-				return;
+				console.warn('WebSocket connection does not have sendStateToClients method');
+				console.warn('WebSocket connection type:', typeof this._wsConnection);
+				console.warn('WebSocket connection constructor:', this._wsConnection.constructor.name);
+				console.warn('Available methods:', Object.getOwnPropertyNames(this._wsConnection));
+				console.warn('Available methods (prototype):', Object.getOwnPropertyNames(Object.getPrototypeOf(this._wsConnection)));
+				// Fall back to p2p mode
+				return this._sendMessageToClients({fnGetToSend});
 			}
 		}
 		console.log('Using p2p mode for sendStateToClients');
@@ -630,7 +641,7 @@ export class InitiativeTrackerNetworking {
 	 * Handle WebSocket channel creation
 	 */
 	handleClick_createWebSocketChannel({doUpdateExternalStates}) {
-		const {$modalInner} = UiUtil.getShowModal({
+		const {$modalInner, doClose} = UiUtil.getShowModal({
 			title: "Create Initiative Channel",
 			isUncappedHeight: true,
 			isHeight100: true,
@@ -663,22 +674,13 @@ export class InitiativeTrackerNetworking {
 						dmName
 					});
 					
-					JqueryUtil.doToast({
-						content: `WebSocket channel "${channelName}" created successfully!`,
-						type: 'success'
-					});
-					
-					$modalInner.closest('.modal').find('.close').click();
-					doUpdateExternalStates();
-					
-					// Set up player join/leave handlers
+					// Set up player join/leave handlers before closing modal
 					if (this._wsConnection) {
 						this._wsConnection.setOnPlayerJoined((player) => {
 							JqueryUtil.doToast({
 								content: `${player.name} joined the channel`,
 								type: 'info'
 							});
-							showConnectedPlayers();
 						});
 						
 						this._wsConnection.setOnPlayerLeft((player) => {
@@ -686,9 +688,17 @@ export class InitiativeTrackerNetworking {
 								content: `${player.name} left the channel`,
 								type: 'info'
 							});
-							showConnectedPlayers();
 						});
 					}
+					
+					JqueryUtil.doToast({
+						content: `WebSocket channel "${channelName}" created successfully!`,
+						type: 'success'
+					});
+					
+					// Close the modal using the proper close function
+					doClose();
+					doUpdateExternalStates();
 				} catch (error) {
 					console.error('Error creating channel:', error);
 					JqueryUtil.doToast({

@@ -1,7 +1,7 @@
 /**
  * WebSocket-based initiative tracker networking module.
  */
-class InitiativeTrackerWebSocket {
+export class InitiativeTrackerWebSocket {
 	constructor ({board}) {
 		this._board = board;
 		this._ws = null;
@@ -214,5 +214,3 @@ class InitiativeTrackerWebSocket {
 	setOnPlayerJoined (handler) { this._onPlayerJoined = handler; }
 	setOnPlayerLeft (handler) { this._onPlayerLeft = handler; }
 }
-
-export {InitiativeTrackerWebSocket};
