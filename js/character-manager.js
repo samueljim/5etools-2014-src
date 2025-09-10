@@ -716,17 +716,9 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 	 */
 	static async init() {
 		// Prevent multiple simultaneous initialization attempts
-		if (this._connectionState === 'connecting') {
-			console.log('CharacterP2P: Already connecting, ignoring duplicate init()');
+		if (this._connectionState === 'connecting' || this._connectionState === 'connected') {
 			return;
 		}
-
-		if (this._connectionState === 'connected') {
-			console.log('CharacterP2P: Already connected');
-			return;
-		}
-
-		console.log('CharacterP2P: Connecting to Cloudflare real-time session...');
 
 		try {
 			// Connect to Cloudflare session
@@ -744,31 +736,15 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 		this._connectionState = 'connecting';
 
 		try {
-			console.log('CharacterP2P: Connecting to Cloudflare Workers WebSocket...');
-
-			// Replace with your actual Cloudflare Worker URL
-			// Deploy the worker and update this URL
 			const workerUrl = 'wss://5etools-character-sync.thesamueljim.workers.dev';
 			const wsUrl = `${workerUrl}?room=character-sync&userId=${this.clientId}`;
-
-			console.log('CharacterP2P: Connecting to:', wsUrl);
 
 			// Create WebSocket connection to Cloudflare Worker
 			this._ws = new WebSocket(wsUrl);
 
 			this._ws.onopen = () => {
-				console.log('CharacterP2P: WebSocket connected to Cloudflare Worker');
 				this._connectionState = 'connected';
 				this._reconnectAttempts = 0;
-
-				// Send test message
-				setTimeout(() => {
-					console.log('CharacterP2P: Sending cross-device test message...');
-					this._sendMessage({
-						type: 'TEST_MESSAGE',
-						message: 'Hello from device ' + this.clientId
-					});
-				}, 1000);
 
 				// Notify listeners
 				this._onOpen.forEach(fn => fn());
@@ -785,9 +761,13 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 			};
 
 			this._ws.onclose = (event) => {
-				console.log('CharacterP2P: WebSocket closed:', event.code, event.reason);
+				if (event.code !== 1000) { // Only log if not a normal closure
+					console.warn('CharacterP2P: WebSocket closed unexpectedly:', event.code, event.reason);
+				}
 				this._connectionState = 'disconnected';
-				this._scheduleReconnect();
+				if (event.code !== 1000) {
+					this._scheduleReconnect();
+				}
 			};
 
 			this._ws.onerror = (error) => {
@@ -814,12 +794,10 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 		switch (data.type) {
 			case 'USER_JOINED':
 				this._connectedUsers.add(data.userId);
-				console.log(`CharacterP2P: User ${data.userId} joined (${this._connectedUsers.size} total users)`);
 				break;
 
 			case 'USER_LEFT':
 				this._connectedUsers.delete(data.userId);
-				console.log(`CharacterP2P: User ${data.userId} left (${this._connectedUsers.size} total users)`);
 				break;
 
 			case 'CHARACTER_UPDATED':
@@ -842,13 +820,20 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 				}
 				break;
 
-			case 'TEST_MESSAGE':
-				console.log('CharacterP2P: Received test message:', data.message);
+			case 'DICE_ROLL':
+				// Handle synchronized dice rolls from other users
+				if (typeof DiceBox !== 'undefined' && DiceBox._handleRemoteDiceRoll) {
+					DiceBox._handleRemoteDiceRoll(data);
+				} else if (typeof Renderer !== 'undefined' && Renderer.dice && Renderer.dice._handleRemoteDiceRoll) {
+					Renderer.dice._handleRemoteDiceRoll(data);
+				}
 				break;
 
-			case 'HEARTBEAT':
-				// Heartbeat from another user, ignore
-				break;
+			case 'TEST_MESSAGE':
+				case 'CONNECTED':
+				case 'HEARTBEAT':
+					// Silent handling for common system messages
+					break;
 
 			default:
 				console.debug('CharacterP2P: Unknown message type:', data.type);
@@ -865,7 +850,6 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 				userId: this.clientId,
 				timestamp: Date.now()
 			};
-			console.log('CharacterP2P: Sending message:', data.type, 'to Cloudflare Worker');
 
 			try {
 				this._ws.send(JSON.stringify(message));
@@ -873,7 +857,8 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 			} catch (error) {
 				console.warn('CharacterP2P: Failed to send message via WebSocket:', error);
 			}
-		} else {
+		} else if (data.type !== 'HEARTBEAT') {
+			// Only warn for non-heartbeat messages when disconnected
 			console.warn('CharacterP2P: Cannot send message, WebSocket not open. State:', this._ws ? this._ws.readyState : 'null');
 		}
 		return false;
@@ -914,7 +899,10 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 		this._reconnectAttempts++;
 		const delay = Math.min(1000 * Math.pow(2, this._reconnectAttempts), 30000);
 
-		console.log(`CharacterP2P: Reconnecting in ${delay}ms (attempt ${this._reconnectAttempts})`);
+		if (this._reconnectAttempts <= 3) {
+			// Only log first few reconnection attempts to avoid spam
+			console.log(`CharacterP2P: Reconnecting in ${delay}ms (attempt ${this._reconnectAttempts})`);
+		}
 
 		this._reconnectTimer = setTimeout(() => {
 			this._reconnectTimer = null;
@@ -941,6 +929,22 @@ static _sendLocalNetworkIceCandidate(candidate, targetClientId = null) {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Send dice roll to all users for synchronization
+	 */
+	static sendDiceRoll(rollData) {
+		return this._sendMessage({
+			type: 'DICE_ROLL',
+			roll: rollData.roll,
+			result: rollData.result,
+			characterName: rollData.characterName || 'Unknown Character',
+			rollType: rollData.rollType || 'dice',
+			originalRoller: rollData.originalRoller || this.clientId,
+			diceExpression: rollData.diceExpression,
+			timestamp: Date.now()
+		});
 	}
 
 	/**

@@ -1274,6 +1274,20 @@ Renderer.dice = {
 				Renderer.dice._scrollBottom();
 			}
 
+			// Only send dice roll to other users if it comes from a character sheet
+			if (Renderer.dice._isCharacterRoll(rolledBy, opts)) {
+				Renderer.dice._sendDiceRollSync({
+					roll: tree.toString(),
+					result: result,
+					characterName: rolledBy.characterName || rolledBy.label || 'Unknown Character',
+					rollType: 'character',
+					diceExpression: tree.toString(),
+					rolledBy: rolledBy.name || 'Unknown',
+					fullHtml: fullHtml,
+					target: opts.target
+				});
+			}
+
 			return result;
 		} else {
 			if (!opts.isHidden) {
@@ -1526,6 +1540,165 @@ Use <span class="out-roll-item-code">/macro list</span> to list saved macros.<br
 			Renderer.dice._$lastRolledBy = $(`<div class="out-roll-wrp" data-rollbox-last-rolled-by-name="${name.qq()}"></div>`);
 			Renderer.dice._$outRoll.prepend(Renderer.dice._$lastRolledBy);
 		}
+	},
+
+	/**
+	 * Determine if a roll comes from a character sheet
+	 */
+	_isCharacterRoll (rolledBy, opts) {
+		// Check if explicitly marked as a character roll
+		if (rolledBy.isCharacterRoll || opts.isCharacterRoll) {
+			return true;
+		}
+
+		// Check if it has character-specific data
+		if (rolledBy.characterName) {
+			return true;
+		}
+
+		// Most reliable: Check if rolledBy name comes from a character (not a page title)
+		if (rolledBy && rolledBy.name) {
+			const rollerName = rolledBy.name;
+			
+			// Skip generic page/system names that indicate non-character rolls
+			const genericNames = [
+				'Characters', 'Character Editor', 'Spells', 'Items', 'Monsters', 
+				'Bestiary', 'DM Screen', 'Dungeon Master', 'Rules', 'Tables',
+				'Anon', 'Anonymous'
+			];
+			
+			// If the roller name is not a generic system name, it's likely a character
+			const isGeneric = genericNames.some(generic => 
+				rollerName.toLowerCase() === generic.toLowerCase() ||
+				rollerName.toLowerCase().includes(generic.toLowerCase())
+			);
+			
+			if (!isGeneric && rollerName.length > 2) {
+				// This looks like a character name
+				return true;
+			}
+		}
+
+		// Check if the additional data indicates this is from a character sheet
+		if (opts.additionalData) {
+			// Common character sheet data attributes
+			const characterIndicators = [
+				'character-id',
+				'character-name', 
+				'char-id',
+				'char-name',
+				'characterId',
+				'characterName',
+				'isCharacterRoll'
+			];
+			
+			for (const indicator of characterIndicators) {
+				if (opts.additionalData[indicator]) {
+					return true;
+				}
+			}
+		}
+
+		// Check if the roll originated from a character sheet context
+		// This looks at the DOM context where the roll was triggered
+		if (typeof document !== 'undefined') {
+			// Check if we're on a character page AND have character sheet indicators
+			const isCharacterPage = 
+				window.location.pathname.includes('character') ||
+				window.location.href.includes('characters.html');
+				
+			if (isCharacterPage) {
+				// Look for character sheet context markers in DOM
+				const characterSheetSelectors = [
+					'[data-roll-name-ancestor-roller]', // Primary indicator from character renderer
+					'#pagecontent', // Character display area on characters.html
+					'.character-sheet',
+					'.character-builder',
+					'[data-character-sheet]',
+					'[data-character-roll]',
+					'.character-editor'
+				];
+
+				// Check if we have character sheet context
+				for (const selector of characterSheetSelectors) {
+					const element = document.querySelector(selector);
+					if (element) {
+						// Additional validation for data-roll-name-ancestor-roller
+						if (selector === '[data-roll-name-ancestor-roller]') {
+							const rollerName = element.getAttribute('data-roll-name-ancestor-roller');
+							// Make sure it's actually a character name, not a page title
+							if (rollerName && rollerName.length > 2 && 
+								!['Characters', 'Character Editor', 'DM Screen'].includes(rollerName)) {
+								return true;
+							}
+						} else {
+							return true;
+						}
+					}
+				}
+			}
+		}
+
+		// Default to false - only sync character rolls
+		return false;
+	},
+
+	/**
+	 * Send dice roll data to other users via WebSocket
+	 * Only sends if users are in the same initiative tracker channel
+	 */
+	_sendDiceRollSync (rollData) {
+		// First try initiative tracker WebSocket (preferred when in a channel)
+		if (typeof InitiativeTrackerWebSocket !== 'undefined' && InitiativeTrackerWebSocket.isConnected && InitiativeTrackerWebSocket.currentChannel) {
+			InitiativeTrackerWebSocket.sendDiceRoll(rollData);
+			return;
+		}
+		
+		// Fallback to character sync for general rolls (but only if not filtering by channel)
+		if (typeof CharacterP2P !== 'undefined' && CharacterP2P.sendDiceRoll) {
+			// Only use CharacterP2P if no initiative channel is active
+			if (typeof InitiativeTrackerWebSocket === 'undefined' || !InitiativeTrackerWebSocket.currentChannel) {
+				CharacterP2P.sendDiceRoll(rollData);
+			}
+		}
+	},
+
+	/**
+	 * Handle incoming dice rolls from other users
+	 */
+	_handleRemoteDiceRoll (data) {
+		if (data.userId === (typeof CharacterP2P !== 'undefined' ? CharacterP2P.clientId : null)) {
+			return; // Don't show our own rolls twice
+		}
+
+		// Create a rolled by object for remote rolls
+		const rolledBy = {
+			name: `${data.characterName} (Remote)`,
+			label: data.characterName
+		};
+
+		Renderer.dice._showBox();
+		Renderer.dice._checkHandleName(rolledBy.name);
+		const $out = Renderer.dice._$lastRolledBy;
+
+		// Create a visual indicator that this is a remote roll
+		const title = `${data.characterName} rolled: ${data.diceExpression}`;
+		const targetPart = data.target != null
+			? data.result >= data.target ? ` <b>&geq;${data.target}</b>` : ` <span class="ve-muted">&lt;${data.target}</span>`
+			: "";
+
+		$out.append(`
+			<div class="out-roll-item out-roll-item--remote" title="${title}" style="border-left: 3px solid #007bff;">
+				<div>
+					<span class="roll-label">${data.characterName}: </span>
+					<span class="roll">${data.result}</span>
+					${targetPart}
+					<span class="all-rolls ve-muted">${data.fullHtml || data.diceExpression}</span>
+					<span class="ve-muted ve-small"> [Remote Roll]</span>
+				</div>
+			</div>`);
+
+		Renderer.dice._scrollBottom();
 	},
 };
 

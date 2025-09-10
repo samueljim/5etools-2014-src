@@ -13,6 +13,7 @@ class _InitiativeTrackerNetworkingP2pMetaV0 {
 		this.serverInfo = null;
 	}
 }
+import {InitiativeTrackerSfuNetworking, InitiativeTrackerWebSocket} from "./dmscreen-initiativetracker-sfu.js";
 
 export class InitiativeTrackerNetworking {
 	constructor ({board}) {
@@ -20,15 +21,23 @@ export class InitiativeTrackerNetworking {
 
 		this._p2pMetaV1 = new _InitiativeTrackerNetworkingP2pMetaV1();
 		this._p2pMetaV0 = new _InitiativeTrackerNetworkingP2pMetaV0();
+		this._sfuConnection = null;
+		this._mode = 'p2p'; // 'p2p' or 'websocket'
 	}
 
 	/* -------------------------------------------- */
 
 	sendStateToClients ({fnGetToSend}) {
+		if (this._mode === 'websocket' && this._sfuConnection) {
+			return this._sfuConnection.sendStateToClients({fnGetToSend});
+		}
 		return this._sendMessageToClients({fnGetToSend});
 	}
 
 	sendShowImageMessageToClients ({imageHref}) {
+		if (this._mode === 'websocket' && this._sfuConnection) {
+			return this._sfuConnection.sendShowImageMessageToClients({imageHref});
+		}
 		return this._sendMessageToClients({
 			fnGetToSend: () => ({
 				type: "showImage",
@@ -558,5 +567,201 @@ export class InitiativeTrackerNetworking {
 		);
 		clientView.clientData = clientData;
 		await PeerUtilV0.pConnectClientsToServers([rowMeta.serverInfo], clientData.textifiedSdp);
+	}
+
+	/* -------------------------------------------- */
+	// WebSocket Channel Methods
+
+	/**
+	 * Start WebSocket mode for channel-based initiative tracking
+	 */
+	async startWebSocketMode({doUpdateExternalStates}) {
+		this._mode = 'websocket';
+		this._sfuConnection = new InitiativeTrackerSfuNetworking({board: this._board});
+		await this._sfuConnection.initializeAsDm();
+		return true;
+	}
+
+	/**
+	 * Join WebSocket mode as a player
+	 */
+	async joinWebSocketMode({clientView}) {
+		this._mode = 'websocket';
+		this._sfuConnection = new InitiativeTrackerSfuNetworking({board: this._board});
+		await this._sfuConnection.initializeAsPlayer();
+		
+		// Set up message handlers for the client view
+		this._sfuConnection.setMessageHandlers({
+			onStateMessage: (msg) => clientView.handleMessage(msg),
+			onShowImageMessage: (msg) => clientView.handleMessage(msg)
+		});
+		return true;
+	}
+
+	/**
+	 * Handle WebSocket channel creation
+	 */
+	handleClick_createWebSocketChannel({doUpdateExternalStates}) {
+		const {$modalInner} = UiUtil.getShowModal({
+			title: "Create Initiative Channel",
+		});
+
+		const $wrpCreate = UiUtil.$getAddModalRow($modalInner, "div");
+
+		const $iptChannelName = $(`<input class="form-control mb-2" placeholder="Channel Name" value="Combat Session">`);
+		const $iptDmName = $(`<input class="form-control mb-2" placeholder="DM Name" value="Dungeon Master">`);
+		const $btnCreate = $(`<button class="ve-btn ve-btn-primary">Create Channel</button>`)
+			.click(async () => {
+				const channelName = $iptChannelName.val().trim();
+				const dmName = $iptDmName.val().trim();
+				
+				if (!channelName || !dmName) {
+					JqueryUtil.doToast({
+						content: 'Please provide both channel and DM name',
+						type: 'warning'
+					});
+					return;
+				}
+				
+				try {
+					if (!this._sfuConnection) {
+						await this.startWebSocketMode({doUpdateExternalStates});
+					}
+					
+					const channelId = await this._sfuConnection.createChannel({channelName, dmName});
+					JqueryUtil.doToast({
+						content: `Channel "${channelName}" created successfully!`,
+						type: 'success'
+					});
+					
+					$modalInner.closest('.modal').find('.close').click();
+					doUpdateExternalStates();
+				} catch (error) {
+					console.error('Error creating channel:', error);
+					JqueryUtil.doToast({
+						content: 'Failed to create channel',
+						type: 'danger'
+					});
+				}
+			});
+
+		$$`<div class="ve-flex-col">
+			<div class="mb-2">
+				<label class="control-label">Channel Name:</label>
+				${$iptChannelName}
+			</div>
+			<div class="mb-2">
+				<label class="control-label">Your DM Name:</label>
+				${$iptDmName}
+			</div>
+			<div class="ve-flex-vh-center">
+				${$btnCreate}
+			</div>
+		</div>`.appendTo($wrpCreate);
+	}
+
+	/**
+	 * Handle joining a WebSocket channel
+	 */
+	handleClick_joinWebSocketChannel({clientView}) {
+		const {$modalInner} = UiUtil.getShowModal({
+			title: "Join Initiative Channel",
+		});
+
+		const $wrpJoin = UiUtil.$getAddModalRow($modalInner, "div");
+		const $wrpChannels = $(`<div class="mb-3"></div>`).appendTo($wrpJoin);
+		const $iptPlayerName = $(`<input class="form-control mb-2" placeholder="Your Character Name">`);
+		const $btnRefresh = $(`<button class="ve-btn ve-btn-default mb-2">Refresh Channels</button>`);
+		const $btnJoin = $(`<button class="ve-btn ve-btn-primary" disabled>Join Selected Channel</button>`);
+
+		let selectedChannelId = null;
+
+		const refreshChannels = async () => {
+			try {
+				if (!this._sfuConnection) {
+					await this.joinWebSocketMode({clientView});
+				}
+				
+				const channels = await this._sfuConnection.getAvailableChannels();
+				$wrpChannels.empty();
+				
+				if (!channels || channels.length === 0) {
+					$wrpChannels.append(`<div class="ve-muted">No active channels found</div>`);
+					return;
+				}
+				
+				channels.forEach(channel => {
+					const $channelRow = $(`
+						<div class="ve-flex-v-center p-2 clickable" data-channel-id="${channel.id}" style="border: 1px solid #ccc; margin-bottom: 5px;">
+							<div>
+								<strong>${channel.name}</strong><br>
+								<span class="ve-muted">DM: ${channel.dmName} | Players: ${channel.playerCount || 0}</span>
+							</div>
+						</div>
+					`).click(() => {
+						$wrpChannels.find('.clickable').removeClass('selected');
+						$channelRow.addClass('selected');
+						selectedChannelId = channel.id;
+						$btnJoin.prop('disabled', false);
+					});
+					
+					$wrpChannels.append($channelRow);
+				});
+			} catch (error) {
+				console.error('Error refreshing channels:', error);
+				$wrpChannels.html(`<div class="text-danger">Failed to load channels</div>`);
+			}
+		};
+
+		$btnRefresh.click(refreshChannels);
+		$btnJoin.click(async () => {
+			const playerName = $iptPlayerName.val().trim();
+			if (!playerName || !selectedChannelId) {
+				JqueryUtil.doToast({
+					content: 'Please enter your character name and select a channel',
+					type: 'warning'
+				});
+				return;
+			}
+			
+			try {
+				await this._sfuConnection.joinChannel({
+					channelId: selectedChannelId,
+					playerName,
+					characterData: null // TODO: Get character data from character manager
+				});
+				
+				JqueryUtil.doToast({
+					content: `Joined channel successfully as ${playerName}!`,
+					type: 'success'
+				});
+				
+				$modalInner.closest('.modal').find('.close').click();
+			} catch (error) {
+				console.error('Error joining channel:', error);
+				JqueryUtil.doToast({
+					content: 'Failed to join channel',
+					type: 'danger'
+				});
+			}
+		});
+
+		$$`<div class="ve-flex-col">
+			<div class="mb-3">
+				<label class="control-label">Available Channels:</label>
+				${$wrpChannels}
+				${$btnRefresh}
+			</div>
+			<div class="mb-2">
+				<label class="control-label">Your Character Name:</label>
+				${$iptPlayerName}
+			</div>
+			<div class="ve-flex-vh-center">
+				${$btnJoin}
+			</div>
+		</div>`.appendTo($wrpJoin);
+
+		// Auto-refresh channels on modal open
+		refreshChannels();
 	}
 }
