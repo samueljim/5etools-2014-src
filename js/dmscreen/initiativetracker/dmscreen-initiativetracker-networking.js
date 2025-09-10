@@ -28,15 +28,35 @@ export class InitiativeTrackerNetworking {
 	/* -------------------------------------------- */
 
 	sendStateToClients ({fnGetToSend}) {
-		if (this._mode === 'websocket' && this._wsConnection) {
-			return this._wsConnection.sendStateToClients({fnGetToSend});
+		console.log('sendStateToClients called - mode:', this._mode, 'wsConnection:', !!this._wsConnection);
+		
+		if (this._mode === 'websocket') {
+			if (!this._wsConnection) {
+				console.warn('WebSocket mode is set but no connection available, falling back to p2p');
+				return this._sendMessageToClients({fnGetToSend});
+			}
+			
+			// Check if the WebSocket connection has the required method
+			if (typeof this._wsConnection.sendStateToClients === 'function') {
+				console.log('Sending state via WebSocket');
+				return this._wsConnection.sendStateToClients({fnGetToSend});
+			} else {
+				console.warn('WebSocket connection does not have sendStateToClients method, available methods:', Object.getOwnPropertyNames(this._wsConnection));
+				return;
+			}
 		}
+		console.log('Using p2p mode for sendStateToClients');
 		return this._sendMessageToClients({fnGetToSend});
 	}
 
 	sendShowImageMessageToClients ({imageHref}) {
 		if (this._mode === 'websocket' && this._wsConnection) {
-			return this._wsConnection.sendShowImageMessageToClients({imageHref});
+			if (typeof this._wsConnection.sendShowImageMessageToClients === 'function') {
+				return this._wsConnection.sendShowImageMessageToClients({imageHref});
+			} else {
+				console.warn('WebSocket connection does not have sendShowImageMessageToClients method');
+				return;
+			}
 		}
 		return this._sendMessageToClients({
 			fnGetToSend: () => ({
@@ -576,10 +596,18 @@ export class InitiativeTrackerNetworking {
 	 * Start WebSocket mode for channel-based initiative tracking
 	 */
 	async startWebSocketMode({doUpdateExternalStates}) {
-		this._mode = 'websocket';
-		this._wsConnection = new InitiativeTrackerWebSocket({board: this._board});
-		await this._wsConnection.initializeAsDm();
-		return true;
+		try {
+			this._mode = 'websocket';
+			this._wsConnection = new InitiativeTrackerWebSocket({board: this._board});
+			await this._wsConnection.initializeAsDm();
+			console.log('WebSocket mode initialized successfully for DM');
+			return true;
+		} catch (error) {
+			console.error('Failed to initialize WebSocket mode:', error);
+			this._mode = 'p2p'; // Fall back to p2p mode
+			this._wsConnection = null;
+			throw error;
+		}
 	}
 
 	/**

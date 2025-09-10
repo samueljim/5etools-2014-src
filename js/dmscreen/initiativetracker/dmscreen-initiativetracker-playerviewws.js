@@ -20,14 +20,19 @@ export class InitiativeTrackerPlayerViewWS {
         // Character selection UI
         const $wrpCharacterSelect = $(`<div class="mb-3 w-100" style="max-width: 300px;"></div>`);
         const $lblCharacter = $(`<label class="mb-1">Select Character:</label>`);
-        const $selCharacter = $(`<select class="form-control input-xs mb-2">
+        
+        // Character dropdown with refresh button
+        const $wrpCharacterDropdown = $(`<div class="ve-flex mb-2"></div>`);
+        const $selCharacter = $(`<select class="form-control input-xs ve-flex-1 mr-1">
             <option value="">Choose a character...</option>
         </select>`);
+        const $btnLoadCharacters = $(`<button class="btn btn-xs btn-default" title="Refresh Characters"><span class="glyphicon glyphicon-refresh"></span></button>`);
+        $wrpCharacterDropdown.append($selCharacter).append($btnLoadCharacters);
+        
         const $inputCustomName = $(`<input type="text" class="form-control input-xs mb-2" placeholder="Or enter custom name" style="display: none;">`);
         const $btnUseCustomName = $(`<button class="btn btn-xs btn-default mb-2">Use Custom Name</button>`);
-        const $btnLoadCharacters = $(`<button class="btn btn-xs btn-default mb-2">Refresh Characters</button>`);
         
-        $wrpCharacterSelect.append($lblCharacter).append($selCharacter).append($inputCustomName).append($btnUseCustomName).append($btnLoadCharacters);
+        $wrpCharacterSelect.append($lblCharacter).append($wrpCharacterDropdown).append($inputCustomName).append($btnUseCustomName);
         
         const $btnJoinChannel = $(`<button class="btn btn-primary btn-sm mb-2" disabled>Join WebSocket Channel</button>`);
         const $message = $(`<div class="text-muted small text-center">Select a character or enter a name to join</div>`);
@@ -53,12 +58,12 @@ export class InitiativeTrackerPlayerViewWS {
         $btnUseCustomName.click(() => {
             useCustomName = !useCustomName;
             if (useCustomName) {
-                $selCharacter.hide();
+                $wrpCharacterDropdown.hide();
                 $inputCustomName.show().focus();
                 $btnUseCustomName.text("Use Character List");
                 $message.text("Enter your character name");
             } else {
-                $selCharacter.show();
+                $wrpCharacterDropdown.show();
                 $inputCustomName.hide();
                 $btnUseCustomName.text("Use Custom Name");
                 $message.text("Select a character or enter a name to join");
