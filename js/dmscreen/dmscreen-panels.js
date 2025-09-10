@@ -170,16 +170,15 @@ export class PanelContentManager_InitiativeTrackerPlayerViewV0 extends _PanelCon
 }
 
 export class PanelContentManager_InitiativeTrackerPlayerViewWS extends _PanelContentManager {
-	static _PANEL_TYPE = PANEL_TYP_INITIATIVE_TRACKER_PLAYER_WS;
-	static _TITLE = "Initiative Tracker Player View (WebSocket)";
-	static _IS_STATELESS = true;
-
-	static _ = this._register();
+	static get _PANEL_TYPE () { return PANEL_TYP_INITIATIVE_TRACKER_PLAYER_WS; }
+	static get _TITLE () { return "Initiative Tracker Player View (WebSocket)"; }
+	static get _IS_STATELESS () { return true; }
 
 	_$getPanelElement ({state}) {
 		return InitiativeTrackerPlayerViewWS.$getPanelElement(this._board, state);
 	}
 }
+PanelContentManager_InitiativeTrackerPlayerViewWS._register();
 
 export class PanelContentManager_Characters
 	static _PANEL_TYPE = PANEL_TYP_CHARACTERS;
