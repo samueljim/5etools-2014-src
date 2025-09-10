@@ -1024,23 +1024,31 @@ globalThis.CharacterP2P = CharacterP2P;
 globalThis.p2pStatus = () => CharacterP2P.getStatus();
 globalThis.p2pInit = () => CharacterP2P.init();
 
+// Flag to prevent duplicate auto-initialization
+let _p2pAutoInitialized = false;
+
 // Auto-initialization in browser environment
 try {
 	if (typeof document !== 'undefined' && typeof window !== 'undefined') {
 		// Initialize P2P connection after a short delay
 		setTimeout(() => {
 			try {
+				if (_p2pAutoInitialized) return; // Prevent duplicate initialization
+				
 				const CM = window['CharacterManager'];
 				if (CM && typeof CM.p2pInit === 'function') {
+					_p2pAutoInitialized = true;
 					console.info('CharacterManager: Auto-initializing P2P connection...');
 					try {
 						CharacterP2P.init();
 					} catch (e) {
 						console.info('CharacterManager: auto p2pInit failed', e);
+						_p2pAutoInitialized = false; // Reset flag on failure
 					}
 				}
 			} catch (e) {
 				console.info('CharacterManager: auto p2pInit failed', e);
+				_p2pAutoInitialized = false; // Reset flag on failure
 			}
 		}, 500);
 	}
@@ -2467,20 +2475,25 @@ try {
 		// Defer slightly so other scripts can register listeners if needed
 		setTimeout(() => {
 			try {
-					const CM = window['CharacterManager'];
-					if (CM && typeof CM.p2pInit === 'function') {
-						// If a TURN key is present on window or a meta tag, pass it to p2pInit so
-						// the browser can fetch TurnWebRTC credentials directly (insecure to expose key).
-
-						console.info('CharacterManager: Auto-initializing P2P connection...');
-						try {
-							CharacterP2P.init();
-						} catch (e) {
-							console.info('CharacterManager: auto p2pInit failed', e);
-						}
+				if (_p2pAutoInitialized) return; // Prevent duplicate initialization
+				
+				const CM = window['CharacterManager'];
+				if (CM && typeof CM.p2pInit === 'function') {
+					// If a TURN key is present on window or a meta tag, pass it to p2pInit so
+					// the browser can fetch TurnWebRTC credentials directly (insecure to expose key).
+					
+					_p2pAutoInitialized = true;
+					console.info('CharacterManager: Auto-initializing P2P connection...');
+					try {
+						CharacterP2P.init();
+					} catch (e) {
+						console.info('CharacterManager: auto p2pInit failed', e);
+						_p2pAutoInitialized = false; // Reset flag on failure
 					}
+				}
 			} catch (e) {
 				console.info('CharacterManager: auto p2pInit failed', e);
+				_p2pAutoInitialized = false; // Reset flag on failure
 			}
 		}, 500);
 	}
