@@ -1313,10 +1313,20 @@ doPopulate_Empty (ixOpt) {
 		// Initialize the player view
 		if (isWebSocket) {
 			// Use player view component for WebSocket mode
+			let characterData = null;
+			try {
+				const characters = await CharacterManager.loadCharacters();
+				// Use first available character or create default
+				characterData = characters.length > 0 ? characters[0] : { name: "Player" };
+			} catch (error) {
+				console.warn('Failed to load characters for player view:', error);
+				characterData = { name: "Player" };
+			}
+			
 			const view = new InitiativeTrackerPlayerView();
 			const $wrpContent = view.pOpenPlayerView({
 				networking: new InitiativeTrackerWebSocket({board: this.board}),
-				characterData: await CharacterManager.getCurrentCharacter()
+				characterData: characterData
 			});
 			$content.append($wrpContent);
 		} else {
