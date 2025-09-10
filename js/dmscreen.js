@@ -30,11 +30,12 @@ import {
 } from "./dmscreen/dmscreen-timetracker.js";
 import {Counter} from "./dmscreen/dmscreen-counter.js";
 import {
+	PanelContentManager_Characters,
 	PanelContentManager_InitiativeTracker,
 	PanelContentManager_InitiativeTrackerCreatureViewer,
 	PanelContentManager_InitiativeTrackerPlayerViewV0,
 	PanelContentManager_InitiativeTrackerPlayerViewV1,
-	PanelContentManagerFactory,
+	PanelContentManager_InitiativeTrackerPlayerViewWS,
 } from "./dmscreen/dmscreen-panels.js";
 
 import {OmnisearchBacking} from "./omnisearch/omnisearch-backing.js";
