@@ -3517,9 +3517,21 @@ class AddMenuSpecialTab extends AddMenuTab {
 					await pcm.pDoPopulate();
 				});
 
-			$$`<div class="ui-modal__row">
+$$`<div class="ui-modal__row">
 			<span>Initiative Tracker Player View (Manual/Legacy)</span>
 			${$btnPlayerTrackerV0}
+			</div>`.appendTo($tab);
+
+			const $btnPlayerTrackerWS = $(`<button class="ve-btn ve-btn-primary ve-btn-sm">Add</button>`)
+				.on("click", async () => {
+					const pcm = new PanelContentManager_InitiativeTrackerPlayerViewWS({board: this._board, panel: this.menu.pnl});
+					this.menu.doClose();
+					await pcm.pDoPopulate();
+				});
+
+			$$`<div class="ui-modal__row">
+			<span>Initiative Tracker Player View (WebSocket)</span>
+			${$btnPlayerTrackerWS}
 			</div>`.appendTo($tab);
 
 			$(`<hr class="hr-2">`).appendTo($tab);
