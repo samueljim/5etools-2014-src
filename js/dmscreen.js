@@ -1038,6 +1038,7 @@ class SideMenu {
 
 class Panel {
 	constructor (board, x, y, width = 1, height = 1, title = "") {
+		this._websocketMode = false;
 		this.id = board.getNextId();
 		this.board = board;
 		this.x = x;
@@ -1274,8 +1275,53 @@ class Panel {
 
 	// region Panel population
 
-	doPopulate_Empty (ixOpt) {
+doPopulate_Empty (ixOpt) {
 		this.close$TabContent(ixOpt);
+	}
+
+	async doPopulate_InitiativeTracker ({isWebSocket = false} = {}) {
+		this._websocketMode = isWebSocket;
+
+		const $content = $(`<div class="panel-content-wrapper-inner"></div>`);
+		this.set$ContentTab(
+			PANEL_TYP_INITIATIVE_TRACKER,
+			null,
+			$content,
+			"Initiative Tracker",
+			true
+		);
+
+		// Initialize the tracker
+		const tracker = new InitiativeTracker(this.board, isWebSocket);
+		await tracker.initializeAsDm($content);
+	}
+
+	async doPopulate_InitiativeTrackerPlayer ({isWebSocket = false} = {}) {
+		this._websocketMode = isWebSocket;
+
+		const $content = $(`<div class="panel-content-wrapper-inner"></div>`);
+		this.set$ContentTab(
+			PANEL_TYP_INITIATIVE_TRACKER_PLAYER_V1,
+			null,
+			$content,
+			"Initiative Tracker Player View",
+			true
+		);
+
+		// Initialize the player view
+		if (isWebSocket) {
+			// Use player view component for WebSocket mode
+			const view = new InitiativeTrackerPlayerView();
+			const $wrpContent = view.pOpenPlayerView({
+				networking: new InitiativeTrackerWebSocket({board: this.board}),
+				characterData: await CharacterManager.getCurrentCharacter()
+			});
+			$content.append($wrpContent);
+		} else {
+			// Use existing token-based player view for manual mode
+			const player = new InitiativeTrackerPlayerV1(this.board);
+			$content.append(player.$getView());
+		}
 	}
 
 	doPopulate_Loading (message) {
