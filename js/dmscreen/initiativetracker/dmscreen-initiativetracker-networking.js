@@ -13,7 +13,7 @@ class _InitiativeTrackerNetworkingP2pMetaV0 {
 		this.serverInfo = null;
 	}
 }
-import {InitiativeTrackerSfuNetworking, InitiativeTrackerWebSocket} from "./dmscreen-initiativetracker-sfu.js";
+import {InitiativeTrackerWebSocket} from "./dmscreen-initiativetracker-ws.js";
 
 export class InitiativeTrackerNetworking {
 	constructor ({board}) {
@@ -21,22 +21,22 @@ export class InitiativeTrackerNetworking {
 
 		this._p2pMetaV1 = new _InitiativeTrackerNetworkingP2pMetaV1();
 		this._p2pMetaV0 = new _InitiativeTrackerNetworkingP2pMetaV0();
-		this._sfuConnection = null;
+		this._wsConnection = null;
 		this._mode = 'p2p'; // 'p2p' or 'websocket'
 	}
 
 	/* -------------------------------------------- */
 
 	sendStateToClients ({fnGetToSend}) {
-		if (this._mode === 'websocket' && this._sfuConnection) {
-			return this._sfuConnection.sendStateToClients({fnGetToSend});
+		if (this._mode === 'websocket' && this._wsConnection) {
+			return this._wsConnection.sendStateToClients({fnGetToSend});
 		}
 		return this._sendMessageToClients({fnGetToSend});
 	}
 
 	sendShowImageMessageToClients ({imageHref}) {
-		if (this._mode === 'websocket' && this._sfuConnection) {
-			return this._sfuConnection.sendShowImageMessageToClients({imageHref});
+		if (this._mode === 'websocket' && this._wsConnection) {
+			return this._wsConnection.sendShowImageMessageToClients({imageHref});
 		}
 		return this._sendMessageToClients({
 			fnGetToSend: () => ({
@@ -577,8 +577,8 @@ export class InitiativeTrackerNetworking {
 	 */
 	async startWebSocketMode({doUpdateExternalStates}) {
 		this._mode = 'websocket';
-		this._sfuConnection = new InitiativeTrackerSfuNetworking({board: this._board});
-		await this._sfuConnection.initializeAsDm();
+		this._wsConnection = new InitiativeTrackerWebSocket({board: this._board});
+		await this._wsConnection.initializeAsDm();
 		return true;
 	}
 
@@ -587,11 +587,11 @@ export class InitiativeTrackerNetworking {
 	 */
 	async joinWebSocketMode({clientView}) {
 		this._mode = 'websocket';
-		this._sfuConnection = new InitiativeTrackerSfuNetworking({board: this._board});
-		await this._sfuConnection.initializeAsPlayer();
+		this._wsConnection = new InitiativeTrackerWebSocket({board: this._board});
+		await this._wsConnection.initializeAsPlayer();
 		
 		// Set up message handlers for the client view
-		this._sfuConnection.setMessageHandlers({
+		this._wsConnection.setMessageHandlers({
 			onStateMessage: (msg) => clientView.handleMessage(msg),
 			onShowImageMessage: (msg) => clientView.handleMessage(msg)
 		});
@@ -624,13 +624,13 @@ export class InitiativeTrackerNetworking {
 				}
 				
 				try {
-					if (!this._sfuConnection) {
-						await this.startWebSocketMode({doUpdateExternalStates});
-					}
-					
-					const channelId = await this._sfuConnection.createChannel({channelName, dmName});
+				if (!this._wsConnection) {
+					await this.startWebSocketMode({doUpdateExternalStates});
+				}
+				
+				const channelId = await this._wsConnection
 					JqueryUtil.doToast({
-						content: `Channel "${channelName}" created successfully!`,
+					content: `WebSocket channel "${channelName}" created successfully!`,
 						type: 'success'
 					});
 					
@@ -678,11 +678,11 @@ export class InitiativeTrackerNetworking {
 
 		const refreshChannels = async () => {
 			try {
-				if (!this._sfuConnection) {
+				if (!this._wsConnection) {
 					await this.joinWebSocketMode({clientView});
 				}
 				
-				const channels = await this._sfuConnection.getAvailableChannels();
+				const channels = await this._wsConnection
 				$wrpChannels.empty();
 				
 				if (!channels || channels.length === 0) {
@@ -725,14 +725,14 @@ export class InitiativeTrackerNetworking {
 			}
 			
 			try {
-				await this._sfuConnection.joinChannel({
+				await this._wsConnection.joinChannel({
 					channelId: selectedChannelId,
 					playerName,
 					characterData: null // TODO: Get character data from character manager
 				});
 				
 				JqueryUtil.doToast({
-					content: `Joined channel successfully as ${playerName}!`,
+					content: `Joined WebSocket channel successfully as ${playerName}!`,
 					type: 'success'
 				});
 				
