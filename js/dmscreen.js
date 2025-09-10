@@ -30,6 +30,7 @@ import {
 } from "./dmscreen/dmscreen-timetracker.js";
 import {Counter} from "./dmscreen/dmscreen-counter.js";
 import {
+	PanelContentManagerFactory,
 	PanelContentManager_Characters,
 	PanelContentManager_InitiativeTracker,
 	PanelContentManager_InitiativeTrackerCreatureViewer,
