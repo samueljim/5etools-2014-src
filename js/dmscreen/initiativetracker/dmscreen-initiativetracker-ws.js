@@ -46,6 +46,7 @@ class InitiativeTrackerWebSocket {
 			dmName,
 		});
 
+		this._currentChannelId = channelId;
 		return channelId;
 	}
 
@@ -78,6 +79,42 @@ class InitiativeTrackerWebSocket {
 		return Array.from(this._channels.values());
 	}
 
+	// Methods expected by the networking layer
+	sendStateToClients ({fnGetToSend}) {
+		if (!this._isDm || !this._currentChannelId) return;
+		
+		const stateData = fnGetToSend();
+		this._send({
+			type: "INITIATIVE_STATE_UPDATE",
+			channelId: this._currentChannelId,
+			state: stateData,
+		});
+	}
+
+	sendShowImageMessageToClients ({imageHref}) {
+		if (!this._isDm || !this._currentChannelId) return;
+		
+		this._send({
+			type: "SHOW_IMAGE",
+			channelId: this._currentChannelId,
+			imageHref,
+		});
+	}
+
+	setMessageHandlers ({onStateMessage, onShowImageMessage}) {
+		this._onStateMessage = onStateMessage;
+		this._onShowImageMessage = onShowImageMessage;
+	}
+
+	cleanup () {
+		if (this._ws) {
+			this._ws.close();
+			this._ws = null;
+		}
+		this._currentChannelId = null;
+		this._channels.clear();
+	}
+
 	_handleWebSocketMessage (event) {
 		const message = JSON.parse(event.data);
 
@@ -98,6 +135,46 @@ class InitiativeTrackerWebSocket {
 			case "CHANNEL_DELETED":
 				this._channels.delete(message.channelId);
 				this._onChannelsUpdated?.(Array.from(this._channels.values()));
+				break;
+
+			case "PLAYER_JOINED":
+				if (message.channelId === this._currentChannelId) {
+					this._onPlayerJoined?.(message.player);
+					// Update channel info with new player count
+					const channel = this._channels.get(message.channelId);
+					if (channel) {
+						channel.playerCount = (channel.playerCount || 0) + 1;
+						channel.players = channel.players || [];
+						channel.players.push(message.player);
+					}
+				}
+				break;
+
+			case "PLAYER_LEFT":
+				if (message.channelId === this._currentChannelId) {
+					this._onPlayerLeft?.(message.player);
+					// Update channel info with reduced player count
+					const channel = this._channels.get(message.channelId);
+					if (channel) {
+						channel.playerCount = Math.max(0, (channel.playerCount || 1) - 1);
+						channel.players = (channel.players || []).filter(p => p.id !== message.player.id);
+					}
+				}
+				break;
+
+			case "INITIATIVE_STATE_UPDATE":
+				if (message.channelId === this._currentChannelId && !this._isDm) {
+					this._onStateMessage?.(message.state);
+				}
+				break;
+
+			case "SHOW_IMAGE":
+				if (message.channelId === this._currentChannelId && !this._isDm) {
+					this._onShowImageMessage?.({
+						type: "showImage",
+						payload: { imageHref: message.imageHref }
+					});
+				}
 				break;
 
 			case "DICE_ROLL":
@@ -134,6 +211,8 @@ class InitiativeTrackerWebSocket {
 	setOnChannelsUpdated (handler) { this._onChannelsUpdated = handler; }
 	setOnDiceRoll (handler) { this._onDiceRoll = handler; }
 	setOnCharacterUpdate (handler) { this._onCharacterUpdate = handler; }
+	setOnPlayerJoined (handler) { this._onPlayerJoined = handler; }
+	setOnPlayerLeft (handler) { this._onPlayerLeft = handler; }
 }
 
 export {InitiativeTrackerWebSocket};

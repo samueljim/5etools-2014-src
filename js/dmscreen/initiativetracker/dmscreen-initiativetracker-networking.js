@@ -604,6 +604,8 @@ export class InitiativeTrackerNetworking {
 	handleClick_createWebSocketChannel({doUpdateExternalStates}) {
 		const {$modalInner} = UiUtil.getShowModal({
 			title: "Create Initiative Channel",
+			isUncappedHeight: true,
+			isHeight100: true,
 		});
 
 		const $wrpCreate = UiUtil.$getAddModalRow($modalInner, "div");
@@ -624,18 +626,41 @@ export class InitiativeTrackerNetworking {
 				}
 				
 				try {
-				if (!this._wsConnection) {
-					await this.startWebSocketMode({doUpdateExternalStates});
-				}
-				
-				const channelId = await this._wsConnection
+					if (!this._wsConnection) {
+						await this.startWebSocketMode({doUpdateExternalStates});
+					}
+					
+					const channelId = await this._wsConnection.createChannel({
+						channelName,
+						dmName
+					});
+					
 					JqueryUtil.doToast({
-					content: `WebSocket channel "${channelName}" created successfully!`,
+						content: `WebSocket channel "${channelName}" created successfully!`,
 						type: 'success'
 					});
 					
 					$modalInner.closest('.modal').find('.close').click();
 					doUpdateExternalStates();
+					
+					// Set up player join/leave handlers
+					if (this._wsConnection) {
+						this._wsConnection.setOnPlayerJoined((player) => {
+							JqueryUtil.doToast({
+								content: `${player.name} joined the channel`,
+								type: 'info'
+							});
+							showConnectedPlayers();
+						});
+						
+						this._wsConnection.setOnPlayerLeft((player) => {
+							JqueryUtil.doToast({
+								content: `${player.name} left the channel`,
+								type: 'info'
+							});
+							showConnectedPlayers();
+						});
+					}
 				} catch (error) {
 					console.error('Error creating channel:', error);
 					JqueryUtil.doToast({
@@ -658,6 +683,33 @@ export class InitiativeTrackerNetworking {
 				${$btnCreate}
 			</div>
 		</div>`.appendTo($wrpCreate);
+
+		// Add connected players section
+		UiUtil.addModalSep($modalInner);
+		const $wrpConnected = UiUtil.$getAddModalRow($modalInner, "div").addClass("flx-col");
+
+		const showConnectedPlayers = () => {
+			if (!this._wsConnection || !this._wsConnection._currentChannelId) {
+				$wrpConnected.html(`<div class="w-100 ve-flex-vh-center"><i>No active channel.</i></div>`);
+				return;
+			}
+
+			const channel = this._wsConnection._channels.get(this._wsConnection._currentChannelId);
+			if (!channel || !channel.players || channel.players.length === 0) {
+				$wrpConnected.html(`<div class="w-100 ve-flex-vh-center"><i>No players connected.</i></div>`);
+				return;
+			}
+
+			let stack = `<div class="w-100"><h5>Connected Players:</h5><ul>`;
+			channel.players
+				.map(player => player.name || "(Unknown)")
+				.sort(SortUtil.ascSortLower)
+				.forEach(name => stack += `<li>${name.escapeQuotes()}</li>`);
+			stack += "</ul></div>";
+			$wrpConnected.html(stack);
+		};
+
+		showConnectedPlayers();
 	}
 
 	/**
@@ -682,7 +734,7 @@ export class InitiativeTrackerNetworking {
 					await this.joinWebSocketMode({clientView});
 				}
 				
-				const channels = await this._wsConnection
+				const channels = await this._wsConnection.getChannels();
 				$wrpChannels.empty();
 				
 				if (!channels || channels.length === 0) {
@@ -691,16 +743,27 @@ export class InitiativeTrackerNetworking {
 				}
 				
 				channels.forEach(channel => {
+					const playerList = (channel.players || []).map(p => p.name).join(', ') || 'None';
 					const $channelRow = $(`
-						<div class="ve-flex-v-center p-2 clickable" data-channel-id="${channel.id}" style="border: 1px solid #ccc; margin-bottom: 5px;">
-							<div>
-								<strong>${channel.name}</strong><br>
-								<span class="ve-muted">DM: ${channel.dmName} | Players: ${channel.playerCount || 0}</span>
+						<div class="ve-flex p-2 clickable" data-channel-id="${channel.id}" style="border: 1px solid #ccc; margin-bottom: 8px; border-radius: 4px;">
+							<div class="ve-flex-col ve-flex-1">
+								<div class="ve-flex-v-center mb-1">
+									<strong class="mr-2">${channel.name}</strong>
+									<span class="badge badge-info">${channel.playerCount || 0} players</span>
+								</div>
+								<div class="ve-muted small">
+									<div><strong>DM:</strong> ${channel.dmName}</div>
+									<div><strong>Players:</strong> ${playerList}</div>
+									${channel.description ? `<div><strong>Description:</strong> ${channel.description}</div>` : ''}
+								</div>
+							</div>
+							<div class="ve-flex-vh-center">
+								<i class="fa fa-chevron-right ve-muted"></i>
 							</div>
 						</div>
 					`).click(() => {
-						$wrpChannels.find('.clickable').removeClass('selected');
-						$channelRow.addClass('selected');
+						$wrpChannels.find('.clickable').removeClass('selected').css('border-color', '#ccc');
+						$channelRow.addClass('selected').css('border-color', '#337ab7');
 						selectedChannelId = channel.id;
 						$btnJoin.prop('disabled', false);
 					});
@@ -760,6 +823,14 @@ export class InitiativeTrackerNetworking {
 				${$btnJoin}
 			</div>
 		</div>`.appendTo($wrpJoin);
+
+		// Set up auto-refresh for channels
+		const refreshInterval = setInterval(refreshChannels, 10000); // Refresh every 10 seconds
+		
+		// Clean up interval when modal closes
+		$modalInner.closest('.modal').on('hidden.bs.modal', () => {
+			clearInterval(refreshInterval);
+		});
 
 		// Auto-refresh channels on modal open
 		refreshChannels();
