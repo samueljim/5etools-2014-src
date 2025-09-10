@@ -2,10 +2,12 @@ import {
 	PANEL_TYP_INITIATIVE_TRACKER, PANEL_TYP_INITIATIVE_TRACKER_CREATURE_VIEWER,
 	PANEL_TYP_INITIATIVE_TRACKER_PLAYER_V0,
 	PANEL_TYP_INITIATIVE_TRACKER_PLAYER_V1,
+	PANEL_TYP_INITIATIVE_TRACKER_PLAYER_WS,
 	PANEL_TYP_CHARACTERS,
 } from "./dmscreen-consts.js";
 import {InitiativeTracker} from "./initiativetracker/dmscreen-initiativetracker.js";
 import {InitiativeTrackerPlayerV0, InitiativeTrackerPlayerV1} from "./dmscreen-playerinitiativetracker.js";
+import {InitiativeTrackerPlayerViewWS} from "./initiativetracker/dmscreen-initiativetracker-playerviewws.js";
 import {InitiativeTrackerCreatureViewer} from "./dmscreen-initiativetrackercreatureviewer.js";
 import {RenderCharacters} from "../render-characters.js";
 // CharacterManager is available globally via character-manager.js script tag
@@ -167,7 +169,19 @@ export class PanelContentManager_InitiativeTrackerPlayerViewV0 extends _PanelCon
 	}
 }
 
-export class PanelContentManager_Characters extends _PanelContentManager {
+export class PanelContentManager_InitiativeTrackerPlayerViewWS extends _PanelContentManager {
+	static _PANEL_TYPE = PANEL_TYP_INITIATIVE_TRACKER_PLAYER_WS;
+	static _TITLE = "Initiative Tracker Player View (WebSocket)";
+	static _IS_STATELESS = true;
+
+	static _ = this._register();
+
+	_$getPanelElement ({state}) {
+		return InitiativeTrackerPlayerViewWS.$getPanelElement(this._board, state);
+	}
+}
+
+export class PanelContentManager_Characters
 	static _PANEL_TYPE = PANEL_TYP_CHARACTERS;
 	static _TITLE = "Characters";
 	static _IS_STATELESS = false;

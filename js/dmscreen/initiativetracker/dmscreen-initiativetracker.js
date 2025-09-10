@@ -224,13 +224,21 @@ export class InitiativeTracker extends BaseComponent {
 
 		const menuPlayerWindow = ContextUtil.getMenu([
 			new ContextUtil.Action(
-				"Standard",
+				"Create WebSocket Channel",
+				async () => {
+					await this._networking.startWebSocketMode({doUpdateExternalStates});
+					await this._networking.handleClick_createWebSocketChannel({doUpdateExternalStates});
+				},
+			),
+			null, // Divider
+			new ContextUtil.Action(
+				"Standard P2P",
 				async () => {
 					this._networking.handleClick_playerWindowV1({doUpdateExternalStates});
 				},
 			),
 			new ContextUtil.Action(
-				"Manual (Legacy)",
+				"Manual P2P (Legacy)",
 				async () => {
 					this._networking.handleClick_playerWindowV0({doUpdateExternalStates});
 				},
