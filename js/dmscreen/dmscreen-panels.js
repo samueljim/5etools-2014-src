@@ -170,24 +170,16 @@ export class PanelContentManager_InitiativeTrackerPlayerViewV0 extends _PanelCon
 }
 
 export class PanelContentManager_InitiativeTrackerPlayerViewWS extends _PanelContentManager {
+	_$getPanelElement ({state}) {
+		return InitiativeTrackerPlayerViewWS.$getPanelElement(this._board, state);
+	}
 }
 PanelContentManager_InitiativeTrackerPlayerViewWS._PANEL_TYPE = PANEL_TYP_INITIATIVE_TRACKER_PLAYER_WS;
 PanelContentManager_InitiativeTrackerPlayerViewWS._TITLE = "Initiative Tracker Player View (WebSocket)";
 PanelContentManager_InitiativeTrackerPlayerViewWS._IS_STATELESS = true;
-
-PanelContentManager_InitiativeTrackerPlayerViewWS.prototype._$getPanelElement = function ({state}) {
-	return InitiativeTrackerPlayerViewWS.$getPanelElement(this._board, state);
-};
-
-PanelContentManager_InitiativeTrackerPlayerViewWS._register();
+PanelContentManager_InitiativeTrackerPlayerViewWS._ = PanelContentManager_InitiativeTrackerPlayerViewWS._register();
 
 export class PanelContentManager_Characters extends _PanelContentManager {
-}
-PanelContentManager_Characters._PANEL_TYPE = PANEL_TYP_CHARACTERS;
-PanelContentManager_Characters._TITLE = "Characters";
-PanelContentManager_Characters._IS_STATELESS = false;
-PanelContentManager_Characters._ = PanelContentManager_Characters._register();
-
 	_$getPanelElement ({state}) {
 		const $container = $(`<div class="ve-flex-col h-100 min-h-0"></div>`);
 		
