@@ -180,12 +180,10 @@ export class PanelContentManager_InitiativeTrackerPlayerViewWS extends _PanelCon
 }
 PanelContentManager_InitiativeTrackerPlayerViewWS._register();
 
-export class PanelContentManager_Characters
-	static _PANEL_TYPE = PANEL_TYP_CHARACTERS;
-	static _TITLE = "Characters";
-	static _IS_STATELESS = false;
-
-	static _ = this._register();
+export class PanelContentManager_Characters extends _PanelContentManager {
+	static get _PANEL_TYPE () { return PANEL_TYP_CHARACTERS; }
+	static get _TITLE () { return "Characters"; }
+	static get _IS_STATELESS () { return false; }
 
 	_$getPanelElement ({state}) {
 		const $container = $(`<div class="ve-flex-col h-100 min-h-0"></div>`);
