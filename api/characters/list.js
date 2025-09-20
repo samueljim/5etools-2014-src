@@ -5,7 +5,7 @@ export default async function handler (req, res) {
 	// Set CORS headers first - exactly like save.js but without credentials
 	res.setHeader("Access-Control-Allow-Origin", "*");
 	res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS,PATCH,DELETE,POST,PUT");
-	res.setHeader("Access-Control-Allow-Headers", "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version");
+	res.setHeader("Access-Control-Allow-Headers", "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Cache-Control, Pragma, Expires");
 
 	// Handle preflight
 	if (req.method === "OPTIONS") {
@@ -54,8 +54,8 @@ export default async function handler (req, res) {
 							};
 						});
 
-            // Cache the processed results
-            setCachedBlobs(characters);
+					// Cache the processed results
+					setCachedBlobs(characters);
 				} catch (blobError) {
 					console.error("Blob storage error:", blobError);
 					// Try to use stale cache if available
