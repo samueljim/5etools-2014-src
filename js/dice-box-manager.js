@@ -12,7 +12,7 @@ class DiceBoxManager {
 	static _activeRolls = new Set(); // Track active roll IDs
 	static _rollCounter = 0; // Generate unique roll IDs
 	static _currentTheme = "default"; // Current theme
-	static _availableThemes = new Set(["default", "blueGreenMetal", "diceOfRolling", "diceOfRolling-fate", "gemstone", "rock", "rust", "wooden"]); // Available themes
+	static _availableThemes = new Set(["default", "blueGreenMetal", "diceOfRolling", "diceOfRolling-fate", "rock", "rust", "wooden"]); // Available themes
 	// Map of rollId -> timeoutId for pending fade countdowns
 	static _fadeTimeouts = new Map();
 
