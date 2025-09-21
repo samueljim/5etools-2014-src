@@ -2986,22 +2986,28 @@ class CharacterEditorPage {
 				spellProgression['0'] = cantripIndex >= 0 ? classData.cantripProgression[cantripIndex] : 0;
 			}
 
-			// Get spells known progression
+			// Get spells known progression for known-spells classes
 			if (classData.spellsKnownProgressionFixed) {
 				const spellsKnownIndex = Math.min(level - 1, classData.spellsKnownProgressionFixed.length - 1);
 				const totalSpellsKnown = spellsKnownIndex >= 0 ? classData.spellsKnownProgressionFixed[spellsKnownIndex] : 0;
 
-				// Distribute known spells across levels based on spell slots available
-				const spellSlots = this.calculateSpellSlots(level, classData.casterProgression || 'full');
-				this.distributeKnownSpells(totalSpellsKnown, spellSlots, spellProgression);
+				// For known-spells casters, distribute total spells across levels
+				// This is more accurate than using spell slots
+				this.distributeKnownSpellsForSelection(totalSpellsKnown, level, className, spellProgression);
 			} else {
-				// For prepared casters (like Wizard, Cleric), base on spell slots but be more conservative
-				const spellSlots = this.calculateSpellSlots(level, classData.casterProgression || 'full');
-				Object.entries(spellSlots).forEach(([levelKey, slots]) => {
-					const spellLevel = levelKey.replace('level', '');
-					// For prepared casters, allow them to know/prepare spells equal to slots + a small buffer
-					spellProgression[spellLevel] = Math.max(slots, Math.min(slots + 2, 6)); // More conservative
-				});
+				// For prepared casters (like Wizard, Cleric), base on class level + modifier
+				// But allow generous selection since they can change spells
+				const casterProgression = this.getCasterType(className);
+				const spellSlots = this.calculateSpellSlots(level, casterProgression);
+				
+				// For prepared casters, allow knowing more spells than they can prepare
+				for (let spellLevel = 1; spellLevel <= 9; spellLevel++) {
+					const slots = spellSlots[`level${spellLevel}`] || 0;
+					if (slots > 0) {
+						// Allow knowing more spells than slots for flexibility
+						spellProgression[spellLevel] = Math.max(slots, Math.min(slots * 2, 8));
+					}
+				}
 			}
 
 			return spellProgression;
@@ -3207,6 +3213,54 @@ class CharacterEditorPage {
 
 			spellProgression[spellLevel.toString()] = allocation;
 			remainingSpells -= allocation;
+		}
+	}
+
+	distributeKnownSpellsForSelection(totalSpellsKnown, characterLevel, className, spellProgression) {
+		// More accurate distribution for spell selection based on D&D 5e principles
+		const casterProgression = this.getCasterType(className);
+		const spellSlots = this.calculateSpellSlots(characterLevel, casterProgression);
+		
+		// Get available spell levels
+		const availableLevels = [];
+		for (let level = 1; level <= 9; level++) {
+			if (spellSlots[`level${level}`] > 0) {
+				availableLevels.push(level);
+			}
+		}
+		
+		if (availableLevels.length === 0) {
+			return; // No spell levels available
+		}
+		
+		// Distribute spells with preference for lower levels
+		let remainingSpells = totalSpellsKnown;
+		
+		for (const level of availableLevels) {
+			if (remainingSpells <= 0) break;
+			
+			// Allocate spells based on level preference
+			let allocation;
+			if (level === 1) {
+				// Most spells should be level 1
+				allocation = Math.min(remainingSpells, Math.ceil(totalSpellsKnown * 0.6));
+			} else if (level === 2) {
+				// Moderate allocation for level 2
+				allocation = Math.min(remainingSpells, Math.ceil(totalSpellsKnown * 0.3));
+			} else {
+				// Smaller allocation for higher levels
+				allocation = Math.min(remainingSpells, Math.max(1, Math.floor(remainingSpells / (availableLevels.length - availableLevels.indexOf(level)))));
+			}
+			
+			if (allocation > 0) {
+				spellProgression[level] = allocation;
+				remainingSpells -= allocation;
+			}
+		}
+		
+		// If there are remaining spells, distribute them to level 1
+		if (remainingSpells > 0 && spellProgression[1]) {
+			spellProgression[1] += remainingSpells;
 		}
 	}
 
@@ -3429,7 +3483,7 @@ class CharacterEditorPage {
 			slots = halfCasterSlots[casterLevel - 1];
 		} else if (progression === "third") {
 			// Third-casters start at level 3 and progress much slower
-			const thirdLevel = Math.floor(casterLevel / 3);
+			let thirdLevel = Math.floor(casterLevel / 3);
 			if (thirdLevel <= 0) return {};
 			if (thirdLevel > 20) thirdLevel = 20;
 			slots = fullCasterSlots[thirdLevel - 1];
@@ -3451,7 +3505,7 @@ class CharacterEditorPage {
 		const spellSlots = {};
 		for (let i = 0; i < slots.length; i++) {
 			if (slots[i] > 0) {
-				spellSlots[`${i + 1}`] = slots[i];
+				spellSlots[`level${i + 1}`] = slots[i];
 			}
 		}
 
@@ -11057,8 +11111,10 @@ class CharacterEditorPage {
 		for (let level = 1; level <= 9; level++) {
 			const levelKey = `level${level}`;
 			if (userSpells[levelKey] && userSpells[levelKey].length > 0) {
-				// Calculate max spell slots for this level
-				const maxSlots = this.getSpellSlotsForLevel(primaryCaster, level);
+				// Calculate max spell slots using consistent method
+				const casterProgression = this.getCasterType(primaryCaster.name);
+				const allSlots = this.calculateSpellSlots(primaryCaster.level, casterProgression);
+				const maxSlots = allSlots[`level${level}`] || 0;
 				
 				spellStructure.levels[level] = {
 					maxSlots: maxSlots,
