@@ -7,7 +7,6 @@ let isEditMode = false;
 let currentSource = null;
 let hasSourceAccess = false;
 
-// API configuration is declared elsewhere (e.g., sources.js)
 
 // Source Password Management
 class CharacterSourcePasswordManager {
@@ -102,6 +101,23 @@ class CharacterEditorPage {
 		this.ace = null;
 		this._classDataCache = new Map(); // Cache for loaded class JSON data
 		this.initOnLoad();
+		
+		// Make simplified fix methods available globally for console use
+		window.fixMyCharacter = () => this.fixCurrentCharacter();
+		window.fixMyCharacterComplete = () => this.fixCurrentCharacterComplete();
+		window.applyFeatures = () => {
+			const characterData = JSON.parse(this.ace.getValue());
+			this.applyFeaturesToCharacter(characterData).then(() => {
+				this.ace.setValue(JSON.stringify(characterData, null, 2), 1);
+				this.renderCharacter();
+			});
+		};
+		window.debugSpells = () => {
+			const characterData = JSON.parse(this.ace.getValue());
+			console.log("🔍 Character Debug Info:");
+			console.log("- Classes:", characterData.class?.map(c => `${c.name} ${c.level} (${c.subclass?.name || 'No subclass'})`));
+			console.log("- Spells object:", characterData.spells);
+		};
 	}
 
 	async initOnLoad() {
@@ -111,33 +127,28 @@ class CharacterEditorPage {
 			BrewUtil2.pInit(),
 		]);
 
-		// Check URL parameters for edit mode and random generation
+		// Check URL parameters for edit mode and wizard
 		const urlParams = new URLSearchParams(window.location.search);
 		isEditMode = urlParams.get('edit') === 'true';
 
 		// Initialize ACE editor using 5etools utility
 		this.ace = EditorUtil.initEditor("jsoninput", {mode: "ace/mode/json"});
 
-		// Check for random character generation from URL parameters
-		const shouldGenerateRandom = urlParams.get('random') === 'true';
-
-		if (shouldGenerateRandom && !isEditMode) {
-			// Get generation parameters from URL
-			const level = urlParams.get('level') !== null ? parseInt(urlParams.get('level')) : 5;
-			const sourceName = urlParams.get('source') || '';
-			const characterName = urlParams.get('name') || '';
-			const baseClass = urlParams.get('baseClass') || '';
-			const race = urlParams.get('race') || '';
-
-			// Generate random character
-			console.log(`Generating random level ${level} character for source: ${sourceName} (baseClass: ${baseClass}, race: ${race})`);
-			await this.generateRandomCharacterAtLevel(level, characterName, sourceName, baseClass, race);
-		} else if (isEditMode) {
+		if (isEditMode) {
 			// Load character data if in edit mode
 			this.loadCharacterForEdit();
 		} else {
-			// Load default template
-			await this.loadTemplate();
+			// Check for wizard mode (level=0&source=<source>)
+			const level = urlParams.get('level');
+			const source = urlParams.get('source');
+			
+			if (level === '0' && source) {
+				// Start the character creation wizard
+				await this.createLevel0Character(source);
+			} else {
+				// No valid parameters - show empty editor or error message
+				document.getElementById('message').textContent = 'Invalid parameters. Use ?level=0&source=<source> for wizard or ?edit=true for editing.';
+			}
 		}
 
 		// Bind button events
@@ -151,183 +162,31 @@ class CharacterEditorPage {
 	}
 
 	async loadCharacterForEdit() {
-		// First try to get character ID from URL or localStorage
-		const urlParams = new URLSearchParams(window.location.search);
-		const characterId = urlParams.get('id');
-
-		if (characterId) {
-			// Load from API
-			await this.loadCharacterFromAPI(characterId);
-			this.ace.setValue(JSON.stringify(currentCharacterData, null, 2), 1);
-			document.getElementById('message').textContent = 'Loaded character for editing (from API)';
-		} else {
-			// Fallback to localStorage for backwards compatibility
-			const characterData = localStorage.getItem('editingCharacter');
-			if (characterData) {
-				try {
-					currentCharacterData = JSON.parse(characterData);
-					this.ace.setValue(JSON.stringify(currentCharacterData, null, 2), 1);
-					document.getElementById('message').textContent = 'Loaded character for editing (from localStorage)';
-				} catch (e) {
-					console.error('Error loading character data:', e);
-					document.getElementById('message').textContent = 'Error loading character data';
-				}
-			}
-		}
-	}
-
-	async loadCharacterFromAPI(characterId) {
-		try {
-			// Try CharacterManager first for consistency
-			const character = CharacterManager.getCharacterById(characterId);
-			if (character) {
-				currentCharacterData = character;
-				currentCharacterId = characterId;
+		// Load character from localStorage
+		const characterData = localStorage.getItem('editingCharacter');
+		if (characterData) {
+			try {
+				currentCharacterData = JSON.parse(characterData);
 				this.ace.setValue(JSON.stringify(currentCharacterData, null, 2), 1);
-				document.getElementById('message').textContent = `Loaded character: ${character.name}`;
-				return;
+				document.getElementById('message').textContent = 'Loaded character for editing';
+			} catch (e) {
+				console.error('Error loading character data:', e);
+				document.getElementById('message').textContent = 'Error loading character data';
 			}
-
-			// Fallback to direct API call if not in CharacterManager cache
-			const response = await fetch(`${API_BASE_URL}/characters/${characterId}`);
-			if (response.ok) {
-				const characterResponse = await response.json();
-				currentCharacterData = characterResponse.data;
-				currentCharacterId = characterResponse.id;
-				this.ace.setValue(JSON.stringify(currentCharacterData, null, 2), 1);
-				document.getElementById('message').textContent = `Loaded character: ${characterResponse.name}`;
-			} else {
-					const response = await fetch(`${API_BASE_URL}/characters/${characterId}`);
-					if (response.ok) {
-						const characterResponse = await response.json();
-						currentCharacterData = characterResponse.data;
-						currentCharacterId = characterResponse.id;
-						this.ace.setValue(JSON.stringify(currentCharacterData, null, 2), 1);
-						document.getElementById('message').textContent = `Loaded character: ${characterResponse.name}`;
-					} else {
-						throw new Error('Character not found');
-					}
-			}
-		} catch (error) {
-			console.error('Error loading character from API:', error);
-			document.getElementById('message').textContent = 'Error loading character from API';
 		}
-	}
-
-	async loadTemplate() {
-		// Get URL parameters
-		const urlParams = new URLSearchParams(window.location.search);
-		const requestedSource = urlParams.get('source') || localStorage.getItem('newCharacterSource');
-		// Handle level parameter carefully - 0 is a valid level but falsy
-		let requestedLevel;
-		const urlLevel = urlParams.get('level');
-		const storageLevel = localStorage.getItem('newCharacterLevel');
-
-		if (urlLevel !== null) {
-			requestedLevel = parseInt(urlLevel);
-		} else if (storageLevel !== null) {
-			requestedLevel = parseInt(storageLevel);
-		} else {
-			requestedLevel = Math.floor(Math.random() * 10) + 1;
-		}
-
-		// Clear the source from localStorage if it exists
-		if (localStorage.getItem('newCharacterSource')) {
-			localStorage.removeItem('newCharacterSource');
-		}
-		if (localStorage.getItem('newCharacterLevel')) {
-			localStorage.removeItem('newCharacterLevel');
-		}
-
-		// Special handling for level 0 - create basic character and trigger level up popup
-		if (requestedLevel === 0) {
-			await this.createLevel0Character(requestedSource);
-			return;
-		}
-
-		// Generate random character data
-		const randomName = this.generateRandomName();
-		const randomClasses = this.generateRandomClasses(requestedLevel);
-		const randomRace = this.generateRandomRace(randomClasses);
-		const randomAlignment = this.generateRandomAlignment();
-		const randomBackground = await this.generateRandomBackground(randomRace, randomAlignment);
-	const randomAbilityScores = await this.generateRandomAbilityScores(randomClasses, randomRace);
-		const randomEquipment = this.generateRandomEquipment(randomClasses, requestedLevel, randomAbilityScores, randomRace);
-		const randomActions = this.generateRandomActions(randomClasses, randomAbilityScores);
-		const randomSpells = this.generateRandomSpells(randomClasses, requestedLevel, randomAbilityScores);
-
-	// Calculate derived stats
-	const totalLevel = randomClasses.reduce((sum, cls) => sum + cls.level, 0);
-	const profBonus = this.getProficiencyBonus(totalLevel);
-	const conMod = Math.floor((randomAbilityScores.con - 10) / 2);
-	const randomHp = this.calculateRandomHp(randomClasses, conMod);
-
-	// Generate character depth first so we can use it in fluff (store as fluff, not as a top-level field)
-		const characterDepth = await this.generateCharacterDepth(randomBackground, randomRace, randomClasses, randomAlignment);
-		const depthFluff = await this.generateFluffEntries(randomName, totalLevel, randomClasses, randomRace, randomBackground, characterDepth, randomAlignment);
-
-		// Generate all features and traits (racial traits + class/subclass features)
-		const allFeatureEntries = await this.generateAllFeatureEntries(randomClasses, randomRace);
-
-		// Default character template with random content
-		let template = {
-			name: randomName,
-			source: requestedSource || "ADD_YOUR_NAME_HERE",
-			race: randomRace,
-			class: randomClasses,
-			background: {
-				name: randomBackground.name,
-				source: randomBackground.source
-			},
-			alignment: randomAlignment,
-			ac: await this.generateRandomAC(randomClasses, randomAbilityScores, randomRace),
-			hp: randomHp,
-			speed: {
-				walk: 30 // Default speed, will be overridden by race data
-			},
-			...randomAbilityScores,
-			passive: 10 + Math.floor((randomAbilityScores.wis - 10) / 2) + (this.hasSkillProficiency("perception", randomClasses) ? profBonus : 0),
-			save: await this.generateRandomSaves(randomAbilityScores, randomClasses, profBonus),
-			skill: await this.generateRandomSkills(randomAbilityScores, randomClasses, profBonus, randomRace, randomBackground),
-			proficiencyBonus: `+${profBonus}`,
-			deathSaves: {
-				successes: 0,
-				failures: 0
-			},
-			customTrackers: this.generateRandomTrackers(randomClasses),
-			action: randomActions,
-			...(randomSpells && { spells: randomSpells }),
-			currency: this.generateRandomCurrency(totalLevel),
-			entries: [...await this.generateRandomEntries(randomRace, randomClasses, randomEquipment, randomAbilityScores, randomName, randomBackground, randomAlignment)],
-			fluff: {
-				entries: depthFluff
-			}
-		};
-
-		// Apply race data to set actual character stats
-		template = await this.applyRaceDataToCharacter(randomRace, template);
-
-		// Apply class data to set spellcasting and other class features
-		template = await this.applyClassDataToCharacter(randomClasses, template, totalLevel);
-
-		this.ace.setValue(JSON.stringify(template, null, 2), 1);
 	}
 
 	async createLevel0Character(requestedSource) {
 		// For level 0 characters, we don't populate the editor immediately
 		// Instead, we store the basic info and let the wizard generate the full character
 
-		// Get URL parameters to check for specific race
-		const urlParams = new URLSearchParams(window.location.search);
-		const requestedRace = urlParams.get('race');
 		const characterName = this.generateRandomName();
 
 		// Store minimal info needed for the wizard without creating a full character
 		this.level0WizardData = {
 			name: characterName,
 			source: requestedSource || "ADD_YOUR_NAME_HERE",
-			// Default to no forced race (treat as random) rather than defaulting to Human
-			race: requestedRace || null,
+			race: null,
 			background: null,
 			alignment: null
 		};
@@ -336,8 +195,7 @@ class CharacterEditorPage {
 		const placeholderMessage = {
 			name: characterName,
 			source: "LEVEL_0_PLACEHOLDER",
-			note: "Complete the level-up wizard to generate your character...",
-			race: requestedRace || ''
+			note: "Complete the level-up wizard to generate your character..."
 		};
 
 		this.ace.setValue(JSON.stringify(placeholderMessage, null, 2), 1);
@@ -347,14 +205,13 @@ class CharacterEditorPage {
 		// Don't render character yet - wait for wizard completion
 		console.log('Level 0 placeholder created, waiting for wizard completion...');
 
-		// Prompt the user to pick background and alignment before starting the wizard
-		const { $modalInner, $modalFooter, doClose } = UiUtil.getShowModal({
-			title: 'Level 0 - Initial Choices',
-			hasFooter: true,
-			isWidth100: false,
-			backdrop: 'static', // prevent backdrop click dismissal for this important wizard
-			keyboard: false     // prevent Escape key dismissal
-		});
+	// Prompt the user to pick background and alignment before starting the wizard
+	const { $modalInner, $modalFooter, doClose } = UiUtil.getShowModal({
+		title: 'Level 0 - Initial Choices',
+		hasFooter: true,
+		isWidth100: false,
+		isPermanent: true
+	});
 
 		// Populate dynamically from data files
 		$modalInner.html(`
@@ -402,30 +259,68 @@ class CharacterEditorPage {
 				const $bg = $modalInner.find('#lvl0-background');
 				// Add races
 				races.forEach(r => {
-					$race.append(`<option value="${r.name}">${r.name} (${r.source || ''})</option>`);
+					// Include both name and source in the value, separated by a delimiter
+					const raceValue = `${r.name}|${r.source || 'PHB'}`;
+					$race.append(`<option value="${raceValue}">${r.name} (${r.source || 'PHB'})</option>`);
 				});
-				// If URL forced race exists, select it
+				// If URL forced race exists, select it; otherwise ensure Random is selected
 				if (this.level0WizardData?.race) {
-					$race.val(this.level0WizardData.race);
+					// Convert race object back to "name|source" format for dropdown
+					const raceValue = `${this.level0WizardData.race.name}|${this.level0WizardData.race.source}`;
+					$race.val(raceValue);
+				} else {
+					$race.val(''); // Explicitly select the "-- Random --" option
 				}
 				// Add backgrounds
 				backgrounds.forEach(bg => {
 					$bg.append(`<option value="${bg.name}">${bg.name} (${bg.source || ''})</option>`);
 				});
-				if (this.level0WizardData?.background) $bg.val(this.level0WizardData.background);
+				// If URL forced background exists, select it; otherwise ensure Random is selected
+				if (this.level0WizardData?.background) {
+					$bg.val(this.level0WizardData.background);
+				} else {
+					$bg.val(''); // Explicitly select the "-- Random --" option
+				}
 			} catch (e) {
 				console.warn('Could not load races/backgrounds for modal:', e);
 			}
 		})();
 
 		const $btnCancel = $(`<button class="ve-btn ve-btn-default">Cancel</button>`).click(() => doClose(false));
-		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary">Start Wizard</button>`).click(() => {
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary">Start Wizard</button>`).click(async () => {
 			const selectedRace = $modalInner.find('#lvl0-race').val();
 			const selectedBg = $modalInner.find('#lvl0-background').val();
 			const selectedAl = $modalInner.find('#lvl0-alignment').val();
-			this.level0WizardData.race = selectedRace || this.level0WizardData.race;
-			this.level0WizardData.background = selectedBg || null;
-			this.level0WizardData.alignment = selectedAl || null;
+			
+			// Convert race name to full race object
+			if (selectedRace && selectedRace !== '') {
+				// Parse the race value which now contains "name|source"
+				const [raceName, raceSource] = selectedRace.split('|');
+				console.log(`Selected race: ${raceName} from ${raceSource}`);
+				
+				this.level0WizardData.race = {
+					name: raceName,
+					source: raceSource
+				};
+			} else {
+				// User selected random - clear any previously set race
+				this.level0WizardData.race = null;
+			}
+			
+			// Convert background name to full background object
+			if (selectedBg) {
+				this.level0WizardData.background = await this._getBackgroundByName(selectedBg);
+			} else {
+				this.level0WizardData.background = null;
+			}
+			
+			// Convert alignment string to array format
+			if (selectedAl) {
+				this.level0WizardData.alignment = this.convertAlignmentStringToArray(selectedAl);
+			} else {
+				this.level0WizardData.alignment = null;
+			}
+			
 			doClose(true);
 			setTimeout(() => this.initiateLevelUpForLevel0(), 200);
 		});
@@ -436,7 +331,8 @@ class CharacterEditorPage {
 	async initiateLevelUpForLevel0() {
 		try {
 			// Create minimal character data for level up state using stored wizard data
-			const characterRace = this.generateForcedRace(this.level0WizardData.race);
+			// Note: race is already converted to proper object format in the modal handler
+			const characterRace = this.level0WizardData.race || await this.generateForcedRace(null);
 			// Respect user-selected alignment/background if provided
 			const chosenAlignment = this.level0WizardData.alignment || this.generateRandomAlignment();
 			let chosenBackground = null;
@@ -453,7 +349,10 @@ class CharacterEditorPage {
 				name: this.level0WizardData.name,
 				source: this.level0WizardData.source,
 				race: characterRace,
-				background: chosenBackground,
+				background: {
+					name: chosenBackground.name,
+					source: chosenBackground.source
+				},
 				class: [], // Empty - will be filled by user choice
 				// Minimal data needed for the wizard - actual character will be generated later
 			};
@@ -595,99 +494,175 @@ class CharacterEditorPage {
 		};
 	}
 
-	generateForcedRace(forcedRaceName) {
-		// Expanded race options with their source data - matches 5etools structure
-		const raceOptions = [
-			// Core PHB Races
-			{ name: "Human", source: "PHB" },
-			{ name: "Elf", source: "PHB" },
-			{ name: "Dwarf", source: "PHB" },
-			{ name: "Halfling", source: "PHB" },
-			{ name: "Dragonborn", source: "PHB" },
-			{ name: "Gnome", source: "PHB" },
-			{ name: "Half-Elf", source: "PHB" },
-			{ name: "Half-Orc", source: "PHB" },
-			{ name: "Tiefling", source: "PHB" },
+	async generateForcedRace(forcedRaceName) {
+		// Handle case where forcedRaceName is already an object
+		if (forcedRaceName && typeof forcedRaceName === 'object' && forcedRaceName.name) {
+			return {
+				name: forcedRaceName.name,
+				source: forcedRaceName.source || "PHB"
+			};
+		}
 
-			// Expanded Races from various sources
-			{ name: "Aarakocra", source: "MPMM" },
-			{ name: "Aasimar", source: "MPMM" },
-			{ name: "Bugbear", source: "MPMM" },
-			{ name: "Centaur", source: "MPMM" },
-			{ name: "Changeling", source: "MPMM" },
-			{ name: "Deep Gnome", source: "MPMM" },
-			{ name: "Duergar", source: "MPMM" },
-			{ name: "Eladrin", source: "MPMM" },
-			{ name: "Fairy", source: "MPMM" },
-			{ name: "Firbolg", source: "MPMM" },
-			{ name: "Genasi", source: "MPMM" },
-			{ name: "Githyanki", source: "MPMM" },
-			{ name: "Githzerai", source: "MPMM" },
-			{ name: "Goblin", source: "MPMM" },
-			{ name: "Goliath", source: "MPMM" },
-			{ name: "Harengon", source: "MPMM" },
-			{ name: "Hobgoblin", source: "MPMM" },
-			{ name: "Kenku", source: "MPMM" },
-			{ name: "Kobold", source: "MPMM" },
-			{ name: "Lizardfolk", source: "MPMM" },
-			{ name: "Minotaur", source: "MPMM" },
-			{ name: "Orc", source: "MPMM" },
-			{ name: "Satyr", source: "MPMM" },
-			{ name: "Sea Elf", source: "MPMM" },
-			{ name: "Shadar-Kai", source: "MPMM" },
-			{ name: "Shifter", source: "MPMM" },
-			{ name: "Tabaxi", source: "MPMM" },
-			{ name: "Tortle", source: "MPMM" },
-			{ name: "Triton", source: "MPMM" },
-			{ name: "Yuan-Ti", source: "MPMM" }
-		];
-
-		// Find the forced race option
-		// If no forced race provided, pick a random non-human race
+		// If no forced race provided, pick any random race from data
 		if (!forcedRaceName) {
-			return this.generateRandomNonHumanRace(raceOptions);
+			try {
+				const response = await fetch('data/races.json');
+				const data = await response.json();
+				const races = data.race || [];
+				
+				if (races.length > 0) {
+					const randomIndex = Math.floor(Math.random() * races.length);
+					return {
+						name: races[randomIndex].name,
+						source: races[randomIndex].source || "PHB"
+					};
+				}
+			} catch (error) {
+				console.warn('Could not load race data, using fallback');
+			}
+			
+			// Fallback to Human if data loading fails
+			return { name: "Human", source: "PHB" };
 		}
 
-		// Find the forced race option
-		const raceOption = raceOptions.find(option => option.name === forcedRaceName);
+		// Try to find the race in the loaded race data
+		try {
+			const response = await fetch('data/races.json');
+			const data = await response.json();
+			const races = data.race || [];
+			
+			// Find the forced race option by name (case-insensitive)
+			const raceOption = races.find(race => 
+				race.name.toLowerCase() === forcedRaceName.toLowerCase()
+			);
 
-		if (!raceOption) {
-			console.warn(`Unknown race: ${forcedRaceName}, falling back to random non-human`);
-			return this.generateRandomNonHumanRace(raceOptions);
+			if (raceOption) {
+				console.log(`Found selected race: ${raceOption.name} from ${raceOption.source}`);
+				return {
+					name: raceOption.name,
+					source: raceOption.source || "PHB"
+				};
+			}
+		} catch (error) {
+			console.warn('Could not load race data:', error);
 		}
 
-		// Return the race structure matching 5etools format
+		// If we get here, the race wasn't found in the data
+		console.warn(`Race '${forcedRaceName}' not found in race data, using as-is with PHB source`);
 		return {
-			name: raceOption.name,
-			source: raceOption.source
+			name: forcedRaceName,
+			source: "PHB"
 		};
 	}
 
-	// Pick a random race that is not Human
-	generateRandomNonHumanRace(raceOptions) {
-		// If a specific raceOptions array isn't provided, construct a sensible default list
-		const defaultRaces = [
-			"Elf", "Dwarf", "Halfling", "Dragonborn", "Gnome", "Half-Elf", "Half-Orc", "Tiefling",
-			"Aasimar", "Genasi", "Goliath", "Tabaxi", "Tortle", "Triton",
-			"Aarakocra", "Bugbear", "Centaur", "Changeling", "Deep Gnome", "Duergar", "Eladrin",
-			"Fairy", "Firbolg", "Githyanki", "Githzerai", "Goblin", "Harengon", "Hobgoblin",
-			"Kenku", "Kobold", "Lizardfolk", "Minotaur", "Orc", "Satyr", "Sea Elf", "Shadar-Kai",
-			"Shifter", "Yuan-Ti"
-		];
+	// Simple method to apply features from data when character is created
+	async applyFeaturesToCharacter(characterData) {
+		if (!characterData) return;
 
-		let candidates;
-		if (Array.isArray(raceOptions) && raceOptions.length) {
-			candidates = raceOptions.filter(r => String(r.name).toLowerCase() !== 'human');
-		} else {
-			candidates = defaultRaces.map(n => ({ name: n, source: 'MPMM' }));
+		// Apply racial features from data
+		if (characterData.race?.name) {
+			await this.applyRaceFeatures(characterData);
 		}
 
-		if (!candidates || candidates.length === 0) {
-			return { name: 'Human', source: 'PHB' };
+		// Apply background features from data
+		if (characterData.background?.name) {
+			await this.applyBackgroundFeatures(characterData);
 		}
+	}
 
-		const pick = candidates[Math.floor(Math.random() * candidates.length)];
-		return { name: pick.name, source: pick.source || 'MPMM' };
+	// Simple race feature application
+	async applyRaceFeatures(characterData) {
+		try {
+			const raceResponse = await fetch('/data/races.json');
+			const raceData = await raceResponse.json();
+			
+			const raceName = characterData.race.name.toLowerCase();
+			const raceEntry = raceData.race.find(r => r.name.toLowerCase() === raceName);
+			
+			if (!raceEntry) return;
+
+			// Initialize arrays if not present
+			if (!characterData.speed) characterData.speed = { walk: 30 };
+
+			// Apply speed from race data
+			if (raceEntry.speed) {
+				if (typeof raceEntry.speed === 'number') {
+					characterData.speed.walk = raceEntry.speed;
+				} else if (raceEntry.speed.walk) {
+					characterData.speed.walk = raceEntry.speed.walk;
+					if (raceEntry.speed.fly) {
+						characterData.speed.fly = raceEntry.speed.fly === true ? characterData.speed.walk : raceEntry.speed.fly;
+					}
+				}
+			}
+
+			// Apply racial spells from data
+			if (raceEntry.additionalSpells) {
+				this.applyRacialSpells(characterData, raceEntry.additionalSpells);
+			}
+
+		} catch (error) {
+			console.error('Error applying race features:', error);
+		}
+	}
+
+	// Simple background feature application
+	async applyBackgroundFeatures(characterData) {
+		try {
+			const bgResponse = await fetch('/data/backgrounds.json');
+			const bgData = await bgResponse.json();
+			
+			const bgName = characterData.background.name.toLowerCase();
+			const bgEntry = bgData.background.find(bg => bg.name.toLowerCase() === bgName);
+			
+			if (!bgEntry) return;
+
+			// Initialize arrays if not present
+			if (!characterData.skillProficiencies) characterData.skillProficiencies = [];
+			if (!characterData.expertise) characterData.expertise = [];
+			if (!characterData.toolProficiencies) characterData.toolProficiencies = [];
+
+			// Apply skill proficiencies from background data
+			if (bgEntry.skillProficiencies) {
+				for (const skillGroup of bgEntry.skillProficiencies) {
+					for (const [skillName, isProficient] of Object.entries(skillGroup)) {
+						if (isProficient === true) {
+							const hasSkill = characterData.skillProficiencies.some(sp => 
+								sp.skill?.toLowerCase() === skillName.toLowerCase()
+							);
+							if (!hasSkill) {
+								characterData.skillProficiencies.push({
+									skill: skillName,
+									proficient: true
+								});
+							}
+						}
+					}
+				}
+			}
+
+			// Apply tool proficiencies from background data
+			if (bgEntry.toolProficiencies) {
+				for (const toolGroup of bgEntry.toolProficiencies) {
+					for (const [toolName, value] of Object.entries(toolGroup)) {
+						if (value === true) {
+							const hasTool = characterData.toolProficiencies.some(tp => 
+								tp.tool?.toLowerCase() === toolName.toLowerCase()
+							);
+							if (!hasTool) {
+								characterData.toolProficiencies.push({
+									tool: toolName,
+									proficient: true
+								});
+							}
+						}
+					}
+				}
+			}
+
+		} catch (error) {
+			console.error('Error applying background features:', error);
+		}
 	}
 
 	calculateRaceClassSynergy(race, classes) {
@@ -900,10 +875,12 @@ class CharacterEditorPage {
 
 			// If this is the forced base class and classTemplate doesn't match, ensure source is consistent
 			const subclass = this.getSubclassForClass(className);
+			const hitDie = this.getClassHitDie(className) || 8;
 			classes.push({
 				name: className,
 				source: classTemplate.source,
 				level: levelsForThisClass,
+				hitDie: `d${hitDie}`,
 				subclass: subclass,
 				currentHitDice: levelsForThisClass // Hit dice should equal the level in that class
 			});
@@ -1522,7 +1499,7 @@ class CharacterEditorPage {
 	}
 
 	async applyRacialAbilityBonuses(stats, race) {
-		const bonuses = await this.getRacialAbilityBonuses(race);
+		const bonuses = await this.getRacialAbilityBonuses(race, stats);
 		const newStats = { ...stats };
 
 		Object.entries(bonuses).forEach(([ability, bonus]) => {
@@ -1532,7 +1509,7 @@ class CharacterEditorPage {
 		return newStats;
 	}
 
-	async getRacialAbilityBonuses(race) {
+	async getRacialAbilityBonuses(race, stats = {}) {
 		const bonuses = {};
 
 		if (!race || !race.name) {
@@ -1573,13 +1550,46 @@ class CharacterEditorPage {
 					const amount = choose.amount || 1;
 					const availableAbilities = choose.from || ['str', 'dex', 'con', 'int', 'wis', 'cha'];
 
-					// Randomly select abilities for bonuses
-					const chosen = [];
-					while (chosen.length < count && chosen.length < availableAbilities.length) {
-						const randomAbility = availableAbilities[Math.floor(Math.random() * availableAbilities.length)];
-						if (!chosen.includes(randomAbility)) {
-							chosen.push(randomAbility);
-							bonuses[randomAbility] = (bonuses[randomAbility] || 0) + amount;
+					// For race generation, prioritize highest stats for bonuses
+					const sortedAbilities = availableAbilities.slice().sort((a, b) => {
+						return (stats[b] || 8) - (stats[a] || 8);
+					});
+
+					// Apply bonuses to the highest available stats
+					for (let i = 0; i < Math.min(count, sortedAbilities.length); i++) {
+						const ability = sortedAbilities[i];
+						bonuses[ability] = (bonuses[ability] || 0) + amount;
+					}
+				}
+			}
+
+			// Handle subrace ability bonuses
+			if (race.subrace && raceInfo.subraces) {
+				const subrace = raceInfo.subraces.find(sr => sr.name === race.subrace);
+				if (subrace && subrace.ability) {
+					for (const abilityEntry of subrace.ability) {
+						const directBonuses = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+						directBonuses.forEach(ability => {
+							if (abilityEntry[ability]) {
+								bonuses[ability] = (bonuses[ability] || 0) + abilityEntry[ability];
+							}
+						});
+
+						// Handle subrace choose bonuses
+						if (abilityEntry.choose) {
+							const choose = abilityEntry.choose;
+							const count = choose.count || 1;
+							const amount = choose.amount || 1;
+							const availableAbilities = choose.from || ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+
+							const sortedAbilities = availableAbilities.slice().sort((a, b) => {
+								return (stats[b] || 8) - (stats[a] || 8);
+							});
+
+							for (let i = 0; i < Math.min(count, sortedAbilities.length); i++) {
+								const ability = sortedAbilities[i];
+								bonuses[ability] = (bonuses[ability] || 0) + amount;
+							}
 						}
 					}
 				}
@@ -1692,6 +1702,21 @@ class CharacterEditorPage {
 		return alignments[Math.floor(Math.random() * alignments.length)];
 	}
 
+	convertAlignmentStringToArray(alignmentString) {
+		const alignmentMap = {
+			"Lawful Good": ["L", "G"],
+			"Neutral Good": ["N", "G"],
+			"Chaotic Good": ["C", "G"],
+			"Lawful Neutral": ["L", "N"],
+			"True Neutral": ["N"],
+			"Chaotic Neutral": ["C", "N"],
+			"Lawful Evil": ["L", "E"],
+			"Neutral Evil": ["N", "E"],
+			"Chaotic Evil": ["C", "E"]
+		};
+		return alignmentMap[alignmentString] || ["N"];
+	}
+
 	// Class data loading methods for high-level character enhancement
 	async loadClassData(className) {
 		// Check cache first
@@ -1743,6 +1768,73 @@ class CharacterEditorPage {
 		} catch (e) {
 			console.error('Error loading feat data:', e);
 			return null;
+		}
+	}
+
+	// Enhanced choice system for class features that require selections
+	async showClassFeatureChoiceModal(feature, featureData) {
+		console.log('Showing class feature choice modal for:', featureData.feature.name);
+
+		// Determine the type of choice based on feature name and content
+		const featureName = featureData.feature.name.toLowerCase();
+
+		if (featureName.includes('fighting style')) {
+			await this.showFightingStyleChoiceModal(feature, featureData);
+		} else if (featureName.includes('metamagic')) {
+			await this.showMetamagicChoiceModal(feature, featureData);
+		} else if (featureName.includes('expertise')) {
+			await this.showExpertiseChoiceModal(feature, featureData);
+		} else if (featureName.includes('maneuver')) {
+			await this.showManeuverChoiceModal(feature, featureData);
+		} else if (featureName.includes('invocation')) {
+			await this.showEldritchInvocationChoiceModal(feature, featureData);
+		} else if (featureName.includes('pact boon')) {
+			await this.showPactBoonChoiceModal(feature, featureData);
+		} else if (featureName.includes('cantrip') || featureName.includes('spell')) {
+			await this.showFeatureSpellChoiceModal(feature, featureData);
+		} else {
+			// Generic choice modal for other features
+			await this.showGenericFeatureChoiceModal(feature, featureData);
+		}
+	}
+
+	// Enhanced racial choice system
+	async showRacialChoiceModal(feature, raceData) {
+		console.log('Showing racial choice modal for:', raceData);
+
+		const raceName = raceData.race?.name || raceData.name;
+
+		// Handle specific racial choices
+		if (raceName === 'Dragonborn') {
+			await this.showDragonbornAncestryChoice(feature, raceData);
+		} else if (raceName === 'Genasi') {
+			await this.showGenasiSubraceChoice(feature, raceData);
+		} else if (raceName === 'Tiefling') {
+			await this.showTieflingHeritageChoice(feature, raceData);
+		} else if (raceName === 'Aasimar') {
+			await this.showAasimarSubraceChoice(feature, raceData);
+		} else {
+			// Generic racial ability choice (like skill proficiencies, languages, etc.)
+			await this.showGenericRacialChoiceModal(feature, raceData);
+		}
+	}
+
+	// Enhanced background choice system
+	async showBackgroundChoiceModal(feature, backgroundData) {
+		console.log('Showing background choice modal for:', backgroundData);
+
+		const backgroundName = backgroundData.background?.name || backgroundData.name;
+
+		// Handle specific background choices
+		if (backgroundName === 'Hermit') {
+			await this.showHermitDiscoveryChoice(feature, backgroundData);
+		} else if (backgroundName === 'Folk Hero') {
+			await this.showFolkHeroDefiningEventChoice(feature, backgroundData);
+		} else if (backgroundName === 'Noble') {
+			await this.showNobleVariantChoice(feature, backgroundData);
+		} else {
+			// Generic background choice (skills, languages, tools)
+			await this.showGenericBackgroundChoiceModal(feature, backgroundData);
 		}
 	}
 
@@ -2031,12 +2123,33 @@ class CharacterEditorPage {
 			// Racial features are already handled in the existing "Features & Traits" section
 			// So we don't need to duplicate them here
 
-			// Apply ability score bonuses from race
+			// Apply ability score bonuses from race (handles both fixed and flexible bonuses)
 			if (raceInfo.ability && raceInfo.ability.length > 0) {
 				raceInfo.ability.forEach(abilitySet => {
+					// Handle fixed ability score bonuses (e.g., Elf +2 Dex)
 					Object.entries(abilitySet).forEach(([ability, bonus]) => {
 						if (typeof bonus === 'number' && characterTemplate[ability] !== undefined) {
 							characterTemplate[ability] += bonus;
+							console.log(`Applied racial bonus: ${ability} +${bonus} (${race.name})`);
+						} else if (ability === 'choose' && bonus && bonus.from) {
+							// Handle flexible racial bonuses (e.g., Half-Elf: choose +1 to two different abilities)
+							const availableAbilities = bonus.from || [];
+							const choiceCount = bonus.count || 1;
+							const bonusAmount = bonus.amount || 1;
+
+							console.log(`Flexible racial bonus available: choose ${choiceCount} from [${availableAbilities.join(', ')}], +${bonusAmount} each (${race.name})`);
+
+							// For automated character generation, select the highest priority abilities
+							const abilityPriority = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+							const selectedAbilities = availableAbilities
+								.filter(ab => characterTemplate[ab] !== undefined)
+								.sort((a, b) => abilityPriority.indexOf(a) - abilityPriority.indexOf(b))
+								.slice(0, choiceCount);
+
+							selectedAbilities.forEach(selectedAbility => {
+								characterTemplate[selectedAbility] += bonusAmount;
+								console.log(`Applied flexible racial bonus: ${selectedAbility} +${bonusAmount} (${race.name})`);
+							});
 						}
 					});
 				});
@@ -2198,10 +2311,10 @@ class CharacterEditorPage {
 				}
 
 				// Apply starting equipment for level 1 characters
-				if (classLevel === 1 && classInfo.startingEquipment) {
-					if (!characterTemplate.items) characterTemplate.items = [];
-					this.applyClassStartingEquipment(classInfo.startingEquipment, characterTemplate);
-				}
+				// if (classLevel === 1 && classInfo.startingEquipment) {
+				// 	if (!characterTemplate.items) characterTemplate.items = [];
+				// 	this.applyClassStartingEquipment(classInfo.startingEquipment, characterTemplate);
+				// }
 
 				// Class features are already handled by the existing feature generation system
 			}
@@ -2250,21 +2363,47 @@ class CharacterEditorPage {
 		const [itemName, source] = itemString.split('|');
 
 		if (itemName) {
-			if (!characterTemplate.items) characterTemplate.items = [];
+			// Ensure entries exist
+			if (!characterTemplate.entries) characterTemplate.entries = [];
 
-			// Check if item already exists
-			const existingItem = characterTemplate.items.find(item =>
-				item.name && item.name.toLowerCase() === itemName.toLowerCase()
+			// Find or create the Items section
+			let itemsSection = characterTemplate.entries.find(entry =>
+				entry.type === "section" && entry.name === "Items"
 			);
 
-			if (!existingItem) {
-				characterTemplate.items.push({
-					name: itemName,
-					source: source || 'PHB',
-					quantity: 1
-				});
+			if (!itemsSection) {
+				itemsSection = {
+					type: "section",
+					name: "Items",
+					entries: []
+				};
+				characterTemplate.entries.push(itemsSection);
+			}
+
+			// Format item as 5etools item reference
+			const formattedItem = `{@item ${itemName}|${source || 'PHB'}}`;
+
+			// Check if item already exists in the Items section
+			if (!itemsSection.entries.includes(formattedItem)) {
+				itemsSection.entries.push(formattedItem);
 			}
 		}
+	}
+
+	// Helper method to migrate items from top-level items array to Items section
+	migrateItemsToEntriesSection(characterTemplate) {
+		if (!characterTemplate.items || !Array.isArray(characterTemplate.items)) return;
+
+		// Convert each item in the top-level items array to the Items section
+		characterTemplate.items.forEach(item => {
+			if (item && item.name) {
+				const itemString = `${item.name}|${item.source || 'PHB'}`;
+				this.addItemToCharacter(itemString, characterTemplate);
+			}
+		});
+
+		// Remove the top-level items array after migration
+		delete characterTemplate.items;
 	}
 
 	addBasicStartingItems(characterTemplate) {
@@ -2302,15 +2441,16 @@ class CharacterEditorPage {
 
 			// Apply skill proficiencies from background
 			if (backgroundInfo.skillProficiencies) {
-				if (!characterTemplate.skill) characterTemplate.skill = {};
+				if (!characterTemplate.skillProficiencies) characterTemplate.skillProficiencies = [];
+				if (!characterTemplate.expertise) characterTemplate.expertise = [];
 
 				backgroundInfo.skillProficiencies.forEach(profSet => {
 					Object.entries(profSet).forEach(([skill, isProficient]) => {
 						if (isProficient === true) {
-							// Add proficiency to skill
-							const currentMod = Math.floor((characterTemplate[this.getAbilityForSkill(skill)] - 10) / 2);
-							const profBonus = parseInt(characterTemplate.proficiencyBonus.replace('+', ''));
-							characterTemplate.skill[skill] = currentMod + profBonus;
+							// Add proficiency to skill list if not already present
+							if (!characterTemplate.skillProficiencies.includes(skill)) {
+								characterTemplate.skillProficiencies.push(skill);
+							}
 						}
 					});
 				});
@@ -2342,8 +2482,6 @@ class CharacterEditorPage {
 
 			// Apply starting equipment from background
 			if (backgroundInfo.startingEquipment) {
-				if (!characterTemplate.items) characterTemplate.items = [];
-
 				backgroundInfo.startingEquipment.forEach(equipmentGroup => {
 					if (equipmentGroup._) {
 						// Handle the main equipment list
@@ -2354,26 +2492,11 @@ class CharacterEditorPage {
 								this.addItemToCharacter(item.item, characterTemplate);
 							} else if (item.special) {
 								// Handle special items like "vestments" or "sticks of incense"
-								characterTemplate.items.push({
-									name: item.special,
-									source: 'PHB',
-									quantity: item.quantity || 1
-								});
+								// Create a formatted item string for special items
+								this.addItemToCharacter(`${item.special}|PHB`, characterTemplate);
 							}
 						});
 					}
-				});
-			}
-
-			// Apply background features to entries
-			if (backgroundInfo.entries && backgroundInfo.entries.length > 0) {
-				if (!characterTemplate.entries) characterTemplate.entries = [];
-
-				// Add background feature section
-				characterTemplate.entries.push({
-					type: "section",
-					name: `${backgroundInfo.name} Background`,
-					entries: backgroundInfo.entries
 				});
 			}
 
@@ -2442,22 +2565,74 @@ class CharacterEditorPage {
 		return Object.values(spellData).filter(spell => spell.level === level);
 	}
 
-	async getSpellsForClass(className) {
-		// Load all spells for now - this will be enhanced with proper class spell lists later
+	async getSpellsForClass(className, subclass = null) {
+		// Load all spells
 		const spellData = await this.loadSpellData();
-
-		// Return all spells temporarily to fix the empty modal issue
-		// TODO: Implement proper class spell list filtering using 5etools data structure
 		const allSpells = Object.values(spellData);
 
 		// Basic filtering - ensure spells have required fields
-		return allSpells.filter(spell => {
+		let filteredSpells = allSpells.filter(spell => {
 			return spell.level !== undefined &&
 				   spell.level >= 0 &&
 				   spell.level <= 9 &&
 				   spell.name &&
 				   spell.school;
 		});
+
+		// Apply subclass restrictions for arcane subclasses
+		if (subclass && this.isSubclassCaster(className, subclass)) {
+			filteredSpells = this.filterSpellsForSubclass(filteredSpells, className, subclass);
+		} else {
+			// Filter by class spell list
+			filteredSpells = filteredSpells.filter(spell => {
+				if (!spell.classes || !spell.classes.fromClassList) return false;
+				return spell.classes.fromClassList.some(cls => 
+					cls.name === className ||
+					(className === 'Bard' && cls.name === 'Bard') ||
+					(className === 'Cleric' && cls.name === 'Cleric') ||
+					(className === 'Druid' && cls.name === 'Druid') ||
+					(className === 'Paladin' && cls.name === 'Paladin') ||
+					(className === 'Ranger' && cls.name === 'Ranger') ||
+					(className === 'Sorcerer' && cls.name === 'Sorcerer') ||
+					(className === 'Warlock' && cls.name === 'Warlock') ||
+					(className === 'Wizard' && cls.name === 'Wizard')
+				);
+			});
+		}
+
+		return filteredSpells;
+	}
+
+	filterSpellsForSubclass(spells, className, subclass) {
+		// Subclass casters typically use wizard spells with school restrictions
+		const wizardSpells = spells.filter(spell =>
+			spell.classes &&
+			spell.classes.fromClassList &&
+			spell.classes.fromClassList.some(cls => cls.name === 'Wizard')
+		);
+
+		if (className === 'Fighter' && subclass === 'Eldritch Knight') {
+			// Eldritch Knights focus on abjuration and evocation
+			// But can learn any school at levels 8, 14, and 20
+			return wizardSpells.filter(spell =>
+				spell.school === 'A' || // Abjuration
+				spell.school === 'V' || // Evocation
+				spell.level === 0       // All cantrips are allowed
+			);
+		}
+
+		if (className === 'Rogue' && subclass === 'Arcane Trickster') {
+			// Arcane Tricksters focus on enchantment and illusion
+			// But can learn any school at levels 8, 14, and 20
+			return wizardSpells.filter(spell =>
+				spell.school === 'E' || // Enchantment
+				spell.school === 'I' || // Illusion
+				spell.level === 0       // All cantrips are allowed
+			);
+		}
+
+		// Fallback to all wizard spells for other subclasses
+		return wizardSpells;
 	}
 
 	async addClassSpells(className, classLevel, characterTemplate) {
@@ -2474,8 +2649,8 @@ class CharacterEditorPage {
 		const availableSpells = await this.getSpellsForClass(className);
 		const spellsToAdd = await this.selectSpellsForClassLevel(className, classLevel, availableSpells);
 
-		// Add the selected spells to the character using correct 5etools format
-		for (const [spellLevel, spells] of Object.entries(spellsToAdd)) {
+		// Add the selected spells to the character using enhanced 5etools format
+		for (const [spellLevel, spellObjects] of Object.entries(spellsToAdd)) {
 			if (!characterTemplate.spells.levels[spellLevel]) {
 				characterTemplate.spells.levels[spellLevel] = {
 					maxSlots: spellLevel === '0' ? 0 : 0, // Will be set by class progression
@@ -2484,9 +2659,21 @@ class CharacterEditorPage {
 				};
 			}
 
-			spells.forEach(spellName => {
-				if (!characterTemplate.spells.levels[spellLevel].spells.includes(spellName)) {
-					characterTemplate.spells.levels[spellLevel].spells.push(spellName);
+			spellObjects.forEach(spellData => {
+				// Check if spell already exists by name to avoid duplicates
+				const spellName = typeof spellData === 'string' ? spellData : spellData.name;
+				const existingSpell = characterTemplate.spells.levels[spellLevel].spells.find(s =>
+					(typeof s === 'string' ? s : s.name) === spellName
+				);
+
+				if (!existingSpell) {
+					console.log(`✨ Adding spell: ${spellName} (Level ${spellLevel})`);
+					// Store spell with source for 5etools compatibility
+					const spellEntry = {
+						name: spellName,
+						source: (typeof spellData === 'object' && spellData.source) ? spellData.source : "PHB"
+					};
+					characterTemplate.spells.levels[spellLevel].spells.push(spellEntry);
 				}
 			});
 		}
@@ -2495,46 +2682,179 @@ class CharacterEditorPage {
 	async selectSpellsForClassLevel(className, classLevel, availableSpells) {
 		const selectedSpells = {};
 
-		// Basic spell selection logic - this could be enhanced with user choice later
+		// Enhanced spell selection logic with full spell data
 		const spellsByLevel = {};
 		availableSpells.forEach(spell => {
 			const level = spell.level.toString();
 			if (!spellsByLevel[level]) spellsByLevel[level] = [];
-			spellsByLevel[level].push(spell.name);
+			spellsByLevel[level].push(spell); // Store full spell object, not just name
 		});
 
-		// Add cantrips for all spellcasters
+		// Add cantrips for all spellcasters (with source for 5etools compatibility)
 		if (spellsByLevel['0'] && spellsByLevel['0'].length > 0) {
 			selectedSpells['0'] = [];
-			const cantripCount = Math.min(3, spellsByLevel['0'].length); // Add 3 cantrips max
+			const cantripCount = Math.min(3, spellsByLevel['0'].length);
 			for (let i = 0; i < cantripCount; i++) {
-				selectedSpells['0'].push(spellsByLevel['0'][i]);
+				const spell = spellsByLevel['0'][i];
+				selectedSpells['0'].push({
+					name: spell.name,
+					source: spell.source || "PHB"
+				});
 			}
 		}
 
-		// Add 1st level spells for level 1+ casters
+		// Add 1st level spells for level 1+ casters (with source for 5etools compatibility)
 		if (classLevel >= 1 && spellsByLevel['1'] && spellsByLevel['1'].length > 0) {
 			selectedSpells['1'] = [];
-			const spellCount = Math.min(4, spellsByLevel['1'].length); // Add 4 1st level spells max
+			const spellCount = Math.min(4, spellsByLevel['1'].length);
 			for (let i = 0; i < spellCount; i++) {
-				selectedSpells['1'].push(spellsByLevel['1'][i]);
+				const spell = spellsByLevel['1'][i];
+				selectedSpells['1'].push({
+					name: spell.name,
+					source: spell.source || "PHB"
+				});
 			}
 		}
 
-		// Add 2nd level spells for level 3+ casters
+		// Add 2nd level spells for level 3+ casters (with source for 5etools compatibility)
 		if (classLevel >= 3 && spellsByLevel['2'] && spellsByLevel['2'].length > 0) {
 			selectedSpells['2'] = [];
-			const spellCount = Math.min(2, spellsByLevel['2'].length); // Add 2 2nd level spells max
+			const spellCount = Math.min(2, spellsByLevel['2'].length);
 			for (let i = 0; i < spellCount; i++) {
-				selectedSpells['2'].push(spellsByLevel['2'][i]);
+				const spell = spellsByLevel['2'][i];
+				selectedSpells['2'].push({
+					name: spell.name,
+					source: spell.source || "PHB"
+				});
 			}
 		}
 
 		return selectedSpells;
 	}
 
-	async showSpellSelectionModal(className, classLevel, characterTemplate) {
-		const availableSpells = await this.getSpellsForClass(className);
+	async createStructuredSpellData(spellData) {
+		console.log('🔮 Creating structured spell data for:', spellData.name);
+
+		return {
+			name: spellData.name,
+			source: spellData.source || "PHB",
+			level: spellData.level,
+			school: spellData.school,
+			time: spellData.time,
+			range: spellData.range,
+			components: spellData.components,
+			duration: spellData.duration,
+			entries: spellData.entries,
+			damageInflict: spellData.damageInflict,
+			savingThrow: spellData.savingThrow,
+			scalingLevelDice: spellData.scalingLevelDice,
+			ritual: spellData.ritual,
+			concentration: spellData.concentration,
+			page: spellData.page,
+			spellAttack: spellData.spellAttack,
+			dataType: 'spell'
+		};
+	}
+
+	async createStructuredFeatureData(featureData, source = 'class', level = null) {
+		console.log('⚔️ Creating structured feature data for:', featureData.name);
+
+		const structuredFeature = {
+			name: featureData.name,
+			source: featureData.source || "PHB",
+			className: featureData.className,
+			classSource: featureData.classSource,
+			level: level || featureData.level,
+			entries: featureData.entries || [],
+			page: featureData.page,
+			featureType: source, // class, subclass, race, background, feat
+			dataType: 'feature'
+		};
+
+		// Add additional structured data if available
+		if (featureData.action) structuredFeature.action = featureData.action;
+		if (featureData.activation) structuredFeature.activation = featureData.activation;
+		if (featureData.recharge) structuredFeature.recharge = featureData.recharge;
+		if (featureData.uses) structuredFeature.uses = featureData.uses;
+		if (featureData.range) structuredFeature.range = featureData.range;
+		if (featureData.duration) structuredFeature.duration = featureData.duration;
+		if (featureData.components) structuredFeature.components = featureData.components;
+
+		return structuredFeature;
+	}
+
+	async createStructuredAttackData(attackData, characterLevel = 1, proficiencyBonus = 2) {
+		console.log('⚔️ Creating structured attack data for:', attackData.name);
+
+		const structuredAttack = {
+			name: attackData.name,
+			type: attackData.type || 'weapon', // weapon, spell, natural
+			attackType: attackData.attackType || 'melee', // melee, ranged, both
+			properties: attackData.properties || [],
+			damage: attackData.damage || '',
+			damageType: attackData.damageType || 'slashing',
+			range: attackData.range || 'melee',
+			toHit: attackData.toHit || '+0',
+			entries: attackData.entries || [],
+			source: attackData.source || "PHB",
+			dataType: 'attack'
+		};
+
+		// Calculate dynamic attack bonus if we have ability modifiers
+		if (attackData.ability && this.currentCharacter) {
+			const abilityScore = this.currentCharacter.abilities?.[attackData.ability] || 10;
+			const abilityMod = Math.floor((abilityScore - 10) / 2);
+			const attackBonus = proficiencyBonus + abilityMod;
+			structuredAttack.toHit = `+${attackBonus}`;
+
+			// Calculate damage with ability modifier if needed
+			if (attackData.addAbilityToDamage) {
+				const baseDamage = attackData.damage || '1d6';
+				structuredAttack.damage = `${baseDamage} + ${abilityMod}`;
+			}
+		}
+
+		return structuredAttack;
+	}
+
+	async loadSpellByName(spellName) {
+		try {
+			// Initialize spell data cache if needed
+			if (!this._spellDataCache) {
+				this._spellDataCache = {};
+			}
+
+			// Check cache first
+			if (this._spellDataCache[spellName]) {
+				return this._spellDataCache[spellName];
+			}
+
+			// Load all spell data if not already loaded
+			if (!this._allSpellData) {
+				console.log('🔮 Loading spell database for enhanced integration...');
+				this._allSpellData = await DataUtil.spell.pLoadAll();
+			}
+
+			// Find the spell by name (case-insensitive)
+			const spell = this._allSpellData.find(s =>
+				s.name.toLowerCase() === spellName.toLowerCase()
+			);
+
+			if (spell) {
+				this._spellDataCache[spellName] = spell;
+				return spell;
+			}
+
+			console.warn(`Spell not found in database: ${spellName}`);
+			return null;
+		} catch (error) {
+			console.error(`Error loading spell ${spellName}:`, error);
+			return null;
+		}
+	}
+
+	async showSpellSelectionModal(className, classLevel, characterTemplate, subclass = null) {
+		const availableSpells = await this.getSpellsForClass(className, subclass);
 		const spellsByLevel = {};
 
 		// Organize spells by level
@@ -2545,7 +2865,7 @@ class CharacterEditorPage {
 		});
 
 		// Calculate how many spells the character can know at this level
-		const maxSpells = await this.getMaxSpellsForClassLevel(className, classLevel);
+		const maxSpells = await this.getMaxSpellsForClassLevel(className, classLevel, subclass);
 
 		const modalContent = `
 			<div class="text-center mb-3">
@@ -2558,7 +2878,20 @@ class CharacterEditorPage {
 
 			<div class="row">
 				${Object.entries(spellsByLevel).map(([level, spells]) => {
-					if (parseInt(level) > Math.ceil(classLevel / 2)) return ''; // Don't show spells too high level
+					const spellLevelInt = parseInt(level);
+					
+					// More flexible spell level access based on class type
+					let maxSpellLevel;
+					if (['Wizard', 'Sorcerer', 'Bard', 'Cleric', 'Druid', 'Warlock'].includes(className)) {
+						// Full casters get spell levels based on character level
+						maxSpellLevel = Math.ceil(classLevel / 2);
+					} else {
+						// Half and third casters have different progressions
+						maxSpellLevel = Math.floor((classLevel - 1) / 4) + 1;
+					}
+					
+					// Always show cantrips, but limit other spell levels appropriately
+					if (spellLevelInt > 0 && spellLevelInt > maxSpellLevel) return '';
 
 					const levelName = level === '0' ? 'Cantrips' : `Level ${level}`;
 					const maxForLevel = maxSpells[level] || 0;
@@ -2576,8 +2909,10 @@ class CharacterEditorPage {
 										<div class="form-check">
 											<input class="form-check-input spell-checkbox"
 												type="checkbox"
+												value="${spell.name}"
 												data-spell-level="${level}"
 												data-spell-name="${spell.name}"
+												data-spell-source="${spell.source || 'PHB'}"
 												data-max-for-level="${maxForLevel}"
 												id="spell-${spell.name.replace(/\s+/g, '-')}">
 											<label class="form-check-label" for="spell-${spell.name.replace(/\s+/g, '-')}">
@@ -2604,6 +2939,12 @@ class CharacterEditorPage {
 
 		$modalInner.html(modalContent);
 
+		// Fix scrolling for spell selection modal
+		$modalInner.css({
+			'max-height': '70vh',
+			'overflow-y': 'auto'
+		});
+
 		// Add footer buttons
 		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary" id="confirm-spell-selection">Confirm Spell Selection</button>`)
 			.click(() => {
@@ -2619,14 +2960,22 @@ class CharacterEditorPage {
 
 		// Set up event handlers for spell selection
 		this.setupSpellSelectionHandlers($modalInner);
+
+		// Pre-select existing spells if this is a level up scenario
+		this.preselectExistingSpells($modalInner, characterTemplate);
 	}
 
-	async getMaxSpellsForClassLevel(className, level) {
+	async getMaxSpellsForClassLevel(className, level, subclass = null) {
 		// Load actual class data to get spell progression
 		try {
 			const classData = await this.loadClassData(className);
 			if (!classData) {
 				return this.getDefaultSpellProgression(level);
+			}
+
+			// Check if this is a subclass that provides spellcasting
+			if (subclass && this.isSubclassCaster(className, subclass)) {
+				return await this.getSubclassSpellProgression(className, subclass, level);
 			}
 
 			const spellProgression = {};
@@ -2662,6 +3011,103 @@ class CharacterEditorPage {
 		}
 	}
 
+	isSubclassCaster(className, subclass) {
+		const subclassCasters = {
+			'Fighter': ['Eldritch Knight'],
+			'Rogue': ['Arcane Trickster']
+		};
+		return subclassCasters[className]?.includes(subclass) || false;
+	}
+
+	async getSubclassSpellProgression(className, subclass, level) {
+		try {
+			const classData = await this.loadClassData(className);
+			if (!classData || !classData.subclassTableGroups) {
+				return this.getDefaultSpellProgression(level);
+			}
+
+			const spellProgression = {};
+
+			// Find the relevant subclass table groups
+			for (const tableGroup of classData.subclassTableGroups) {
+				const matchingSubclass = tableGroup.subclasses?.find(sc =>
+					sc.name === subclass || sc.shortName === subclass
+				);
+
+				if (!matchingSubclass) continue;
+
+				// Handle cantrips and spells known table
+				if (tableGroup.colLabels && tableGroup.rows) {
+					const cantripCol = tableGroup.colLabels.findIndex(label =>
+						label.toLowerCase().includes('cantrips known')
+					);
+					const spellsCol = tableGroup.colLabels.findIndex(label =>
+						label.toLowerCase().includes('spells known')
+					);
+
+					const rowIndex = Math.min(level - 1, tableGroup.rows.length - 1);
+					if (rowIndex >= 0 && tableGroup.rows[rowIndex]) {
+						const row = tableGroup.rows[rowIndex];
+
+						if (cantripCol >= 0 && cantripCol < row.length) {
+							spellProgression['0'] = row[cantripCol] || 0;
+						}
+
+						if (spellsCol >= 0 && spellsCol < row.length) {
+							const totalSpellsKnown = row[spellsCol] || 0;
+							// For subclass casters, they typically learn fewer spells across more levels
+							// Distribute based on available spell slots
+							const spellSlots = this.getSubclassSpellSlots(className, subclass, level);
+							this.distributeKnownSpells(totalSpellsKnown, spellSlots, spellProgression);
+						}
+					}
+				}
+
+				// Handle spell slots table if it exists
+				if (tableGroup.title?.includes('Spell Slots') && tableGroup.rowsSpellProgression) {
+					const rowIndex = Math.min(level - 1, tableGroup.rowsSpellProgression.length - 1);
+					if (rowIndex >= 0 && tableGroup.rowsSpellProgression[rowIndex]) {
+						const slotsRow = tableGroup.rowsSpellProgression[rowIndex];
+
+						// Map spell slots to spell levels
+						for (let i = 0; i < slotsRow.length && i < 4; i++) {
+							const spellLevel = (i + 1).toString();
+							const slots = slotsRow[i] || 0;
+							if (slots > 0) {
+								// Don't override spell counts, but ensure we have slots
+								if (!spellProgression[spellLevel]) {
+									spellProgression[spellLevel] = Math.min(slots, 3); // Conservative for subclass casters
+								}
+							}
+						}
+					}
+				}
+			}
+
+			return Object.keys(spellProgression).length > 0 ? spellProgression : this.getDefaultSpellProgression(level);
+		} catch (error) {
+			console.error('Error loading subclass spell progression:', error);
+			return this.getDefaultSpellProgression(level);
+		}
+	}
+
+	getSubclassSpellSlots(className, subclass, level) {
+		// Subclass casters (like Eldritch Knight, Arcane Trickster) start at level 3
+		if (level < 3) return {};
+
+		// They are 1/3 casters - their spell slot progression is slower
+		const effectiveLevel = Math.floor((level - 2) / 3);
+
+		const spellSlots = {};
+
+		if (effectiveLevel >= 1) spellSlots["1"] = Math.min(effectiveLevel + 1, 4);
+		if (effectiveLevel >= 3) spellSlots["2"] = Math.min(effectiveLevel - 2, 3);
+		if (effectiveLevel >= 5) spellSlots["3"] = Math.min(effectiveLevel - 4, 3);
+		if (effectiveLevel >= 7) spellSlots["4"] = Math.min(effectiveLevel - 6, 1);
+
+		return spellSlots;
+	}
+
 	getDefaultSpellProgression(level) {
 		// Fallback basic spell progression
 		return {
@@ -2669,6 +3115,77 @@ class CharacterEditorPage {
 			'1': Math.min(6, 2 + Math.floor(level / 2)), // 1st level spells
 			'2': level >= 3 ? Math.min(4, 1 + Math.floor((level - 3) / 2)) : 0, // 2nd level spells
 			'3': level >= 5 ? Math.min(3, 1 + Math.floor((level - 5) / 3)) : 0, // 3rd level spells
+		};
+	}
+
+	async getSpellLearningRestrictions(primaryClass, characterLevel, currentSpells) {
+		// Get data-driven spell learning restrictions based on class progression
+		try {
+			const classData = await this.loadClassData(primaryClass);
+			if (!classData || !classData.class || !classData.class[0]) {
+				return this.getDefaultSpellLearningRestrictions(characterLevel);
+			}
+
+			const classInfo = classData.class[0];
+			const restrictions = {
+				cantripsToLearn: 0,
+				spellsPerLevel: {}, // e.g., { '1': 2, '2': 1 }
+				maxSpellLevel: this.getMaxSpellLevelForCharacterLevel(characterLevel, primaryClass),
+				allowedSchools: null, // For restricted casters like Eldritch Knight
+				spellList: primaryClass.toLowerCase()
+			};
+
+			// Calculate cantrip learning
+			if (classInfo.cantripProgression && characterLevel <= classInfo.cantripProgression.length) {
+				const currentCantrips = classInfo.cantripProgression[characterLevel - 1] || 0;
+				const previousCantrips = characterLevel > 1 ? (classInfo.cantripProgression[characterLevel - 2] || 0) : 0;
+				restrictions.cantripsToLearn = Math.max(0, currentCantrips - previousCantrips);
+			}
+
+			// Calculate spell learning per level
+			if (classInfo.spellsKnownProgressionFixed) {
+				// For classes with fixed spells known (Sorcerer, Bard, Warlock, etc.)
+				const currentTotal = classInfo.spellsKnownProgressionFixed[characterLevel - 1] || 0;
+				const previousTotal = characterLevel > 1 ? (classInfo.spellsKnownProgressionFixed[characterLevel - 2] || 0) : 0;
+				const newSpellsToLearn = Math.max(0, currentTotal - previousTotal);
+
+				if (newSpellsToLearn > 0) {
+					// Distribute new spells across available spell levels
+					// Allow learning spells of any level up to max castable level
+					for (let spellLevel = 1; spellLevel <= restrictions.maxSpellLevel; spellLevel++) {
+						// Allow some flexibility in spell level choices
+						const currentAtLevel = currentSpells && currentSpells[spellLevel.toString()] ? currentSpells[spellLevel.toString()].length : 0;
+						restrictions.spellsPerLevel[spellLevel.toString()] = Math.min(newSpellsToLearn, 6 - currentAtLevel);
+					}
+				}
+			} else if (classInfo.preparedSpells || classInfo.spellcastingAbility) {
+				// For prepared casters (Cleric, Druid, Wizard, Paladin, Ranger)
+				if (characterLevel === 1) {
+					if (primaryClass.toLowerCase() === 'wizard') {
+						restrictions.spellsPerLevel['1'] = 6; // Wizards start with 6 1st level spells
+					} else {
+						restrictions.spellsPerLevel['1'] = 2; // Other prepared casters start with fewer
+					}
+				} else if (primaryClass.toLowerCase() === 'wizard') {
+					restrictions.spellsPerLevel['1'] = 2; // Wizards learn 2 spells per level
+				}
+			}
+
+			return restrictions;
+		} catch (error) {
+			console.error('Error getting spell learning restrictions:', error);
+			return this.getDefaultSpellLearningRestrictions(characterLevel);
+		}
+	}
+
+	getDefaultSpellLearningRestrictions(characterLevel) {
+		// Fallback restrictions
+		return {
+			cantripsToLearn: characterLevel === 1 ? 2 : 0,
+			spellsPerLevel: characterLevel === 1 ? { '1': 2 } : {},
+			maxSpellLevel: Math.ceil(characterLevel / 2),
+			allowedSchools: null,
+			spellList: 'wizard'
 		};
 	}
 
@@ -2735,14 +3252,39 @@ class CharacterEditorPage {
 		});
 	}
 
+	preselectExistingSpells($modal, character) {
+		// If character already has spells, pre-select them in the modal
+		if (!character.spells || !character.spells.levels) return;
+
+		Object.entries(character.spells.levels).forEach(([level, levelData]) => {
+			if (levelData.spells && Array.isArray(levelData.spells)) {
+				levelData.spells.forEach(spell => {
+					// Handle both string and object spell formats
+					const spellName = typeof spell === 'string' ? spell : spell.name;
+					if (spellName) {
+						// Find and check the corresponding checkbox
+						$modal.find(`.spell-checkbox[value="${spellName}"]`).prop('checked', true);
+					}
+				});
+			}
+		});
+	}
+
 	collectSelectedSpells() {
 		const selectedSpells = {};
 		$('.spell-checkbox:checked').each(function() {
 			const $checkbox = $(this);
 			const spellLevel = $checkbox.data('spell-level');
-			const spellName = $checkbox.data('spell-name');
+			const spellName = $checkbox.val(); // Get spell name from value attribute
+			
+			// Ensure we have a spell name
+			if (!spellName) {
+				console.warn('Spell checkbox missing name:', $checkbox);
+				return;
+			}
 
 			if (!selectedSpells[spellLevel]) selectedSpells[spellLevel] = [];
+			// Store as consistent string format only
 			selectedSpells[spellLevel].push(spellName);
 		});
 		return selectedSpells;
@@ -2781,34 +3323,46 @@ class CharacterEditorPage {
 
 			// Check if character has spellcasting classes
 			if (!character.class || character.class.length === 0) {
-				alert('No classes found. Please add a spellcasting class first.');
+				console.log('No classes found for spell selection.');
 				return;
 			}
 
-			// Find the primary spellcasting class (first class with spellcasting ability)
+			// Find the primary spellcasting class (first class with spellcasting ability or subclass caster)
 			let spellcastingClass = null;
 			let classLevel = 0;
+			let subclassName = null;
 
 			for (const classEntry of character.class) {
 				const classData = await this.loadClassData(classEntry.name);
+
+				// Check for traditional spellcasting classes
 				if (classData && classData.spellcastingAbility) {
 					spellcastingClass = classEntry.name;
 					classLevel = classEntry.level;
+					subclassName = classEntry.subclass?.name || null;
+					break;
+				}
+
+				// Check for subclass casters (Eldritch Knight, Arcane Trickster)
+				if (classEntry.subclass?.name && this.isSubclassCaster(classEntry.name, classEntry.subclass.name)) {
+					spellcastingClass = classEntry.name;
+					classLevel = classEntry.level;
+					subclassName = classEntry.subclass.name;
 					break;
 				}
 			}
 
 			if (!spellcastingClass) {
-				alert('No spellcasting classes found. Only spellcasting classes can select spells.');
+				console.log('No spellcasting classes found. Only spellcasting classes can select spells.');
 				return;
 			}
 
 			// Show spell selection modal
-			await this.showSpellSelectionModal(spellcastingClass, classLevel, character);
+			await this.showSpellSelectionModal(spellcastingClass, classLevel, character, subclassName);
 
 		} catch (error) {
 			console.error('Error opening spell selection modal:', error);
-			alert('Error opening spell selection. Please check that your character data is valid.');
+			throw error; // Let calling code handle this gracefully
 		}
 	}
 
@@ -2839,13 +3393,65 @@ class CharacterEditorPage {
 			[4, 3, 3, 3, 3, 2, 2, 1, 1]  // Level 20
 		];
 
-		if (casterLevel > 20) casterLevel = 20;
-		const slots = fullCasterSlots[casterLevel - 1];
+		// Handle different progression types
+		let slots;
+		if (progression === "full") {
+			if (casterLevel > 20) casterLevel = 20;
+			slots = fullCasterSlots[casterLevel - 1];
+		} else if (progression === "half") {
+			// Half-casters (Paladin/Ranger) start at level 2
+			if (casterLevel < 2) return {};
+
+			const halfCasterSlots = [
+				[0, 0, 0, 0, 0, 0, 0, 0, 0], // Level 1 (no slots)
+				[2, 0, 0, 0, 0, 0, 0, 0, 0], // Level 2
+				[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 3
+				[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 4
+				[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 5
+				[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 6
+				[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 7
+				[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 8
+				[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 9
+				[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 10
+				[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 11
+				[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 12
+				[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 13
+				[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 14
+				[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 15
+				[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 16
+				[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 17
+				[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 18
+				[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 19
+				[4, 3, 3, 3, 2, 0, 0, 0, 0]  // Level 20
+			];
+
+			if (casterLevel > 20) casterLevel = 20;
+			slots = halfCasterSlots[casterLevel - 1];
+		} else if (progression === "third") {
+			// Third-casters start at level 3 and progress much slower
+			const thirdLevel = Math.floor(casterLevel / 3);
+			if (thirdLevel <= 0) return {};
+			if (thirdLevel > 20) thirdLevel = 20;
+			slots = fullCasterSlots[thirdLevel - 1];
+		} else if (progression === "pact") {
+			// Warlocks have special pact magic progression
+			if (casterLevel >= 17) slots = [0, 0, 0, 0, 4, 0, 0, 0, 0];      // 4 level-5 slots
+			else if (casterLevel >= 15) slots = [0, 0, 0, 0, 3, 0, 0, 0, 0]; // 3 level-5 slots
+			else if (casterLevel >= 11) slots = [0, 0, 0, 0, 3, 0, 0, 0, 0]; // 3 level-5 slots
+			else if (casterLevel >= 9) slots = [0, 0, 0, 0, 2, 0, 0, 0, 0];  // 2 level-5 slots
+			else if (casterLevel >= 7) slots = [0, 0, 0, 2, 0, 0, 0, 0, 0];  // 2 level-4 slots
+			else if (casterLevel >= 5) slots = [0, 0, 2, 0, 0, 0, 0, 0, 0];  // 2 level-3 slots
+			else if (casterLevel >= 3) slots = [0, 2, 0, 0, 0, 0, 0, 0, 0];  // 2 level-2 slots
+			else if (casterLevel >= 1) slots = [1, 0, 0, 0, 0, 0, 0, 0, 0];  // 1 level-1 slot
+			else return {};
+		} else {
+			return {};
+		}
 
 		const spellSlots = {};
 		for (let i = 0; i < slots.length; i++) {
 			if (slots[i] > 0) {
-				spellSlots[`level${i + 1}`] = slots[i];
+				spellSlots[`${i + 1}`] = slots[i];
 			}
 		}
 
@@ -2855,9 +3461,9 @@ class CharacterEditorPage {
 	populateSpellSlotsIntoLevels(spellSlots, characterTemplate) {
 		if (!characterTemplate.spells.levels) characterTemplate.spells.levels = {};
 
-		// Convert spellSlots format { level1: 2, level2: 1 } to levels structure
+		// Convert spellSlots format { "1": 2, "2": 1 } to levels structure
 		Object.entries(spellSlots).forEach(([levelKey, maxSlots]) => {
-			const spellLevel = levelKey.replace('level', '');
+			const spellLevel = levelKey;
 
 			if (!characterTemplate.spells.levels[spellLevel]) {
 				characterTemplate.spells.levels[spellLevel] = {
@@ -2874,13 +3480,15 @@ class CharacterEditorPage {
 
 	applyAbilityScoreImprovements(classes, characterTemplate) {
 		// In D&D 5e, classes get ability score improvements at certain levels
-		const asiLevels = [4, 8, 12, 16, 19]; // Standard ASI levels
+		// Fighter and Rogue get bonus ASIs, so we need class-specific calculations
 
 		// Calculate total ASI points available based on class levels
 		let totalASIPoints = 0;
 
 		classes.forEach(classEntry => {
+			const className = classEntry.name || classEntry.className || '';
 			const classLevel = classEntry.level || 1;
+			const asiLevels = this.getASILevelsForClass(className);
 
 			// Count how many ASI levels this class has reached
 			const availableASIs = asiLevels.filter(level => classLevel >= level).length;
@@ -2953,7 +3561,7 @@ class CharacterEditorPage {
 			const traits = [];
 
 			// Add main racial traits (excluding basic stats that are applied to character directly)
-			const excludedTraitNames = ['Age', 'Size', 'Speed', 'Languages', 'Ability Score Increase'];
+			const excludedTraitNames = ['Age', 'Size', 'Speed', 'Languages', 'Ability Score Increase', 'Alignment'];
 
 			if (raceInfo.entries) {
 				raceInfo.entries.forEach(entry => {
@@ -3351,6 +3959,162 @@ class CharacterEditorPage {
 		return racialArmor[raceName] || null;
 	}
 
+	// New dynamic AC calculation system
+	calculateAC(character) {
+		const dexMod = Math.floor((character.dex - 10) / 2);
+		const conMod = Math.floor((character.con - 10) / 2);
+		const wisMod = Math.floor((character.wis - 10) / 2);
+		
+		const acOptions = [];
+		
+		// 1. Unarmored AC (always available)
+		acOptions.push({
+			ac: 10 + dexMod,
+			from: ['Unarmored'],
+			type: 'unarmored'
+		});
+		
+		// 2. Natural Armor (racial)
+		if (character.race?.name) {
+			const naturalArmor = this.getRacialNaturalArmor(character.race.name, dexMod);
+			if (naturalArmor) {
+				acOptions.push({
+					ac: naturalArmor.ac,
+					from: [naturalArmor.type],
+					type: 'natural'
+				});
+			}
+		}
+		
+		// 3. Unarmored Defense (class features)
+		if (character.class) {
+			const monkClass = character.class.find(cls => cls.name === "Monk");
+			const barbarianClass = character.class.find(cls => cls.name === "Barbarian");
+			
+			if (monkClass) {
+				acOptions.push({
+					ac: 10 + dexMod + wisMod,
+					from: ['Unarmored Defense (Monk)'],
+					type: 'unarmoredDefense'
+				});
+			}
+			
+			if (barbarianClass) {
+				acOptions.push({
+					ac: 10 + dexMod + conMod,
+					from: ['Unarmored Defense (Barbarian)'],
+					type: 'unarmoredDefense'
+				});
+			}
+		}
+		
+		// 4. Armor AC (from equipped armor)
+		if (character.armor) {
+			const armorAC = this.calculateArmorAC(character.armor, dexMod);
+			if (armorAC) {
+				acOptions.push(armorAC);
+			}
+		}
+		
+		// 5. Choose the best AC option
+		let bestAC = acOptions.reduce((best, current) => 
+			current.ac > best.ac ? current : best
+		);
+		
+		// 6. Add shield bonus if equipped
+		if (character.shield) {
+			bestAC = {
+				...bestAC,
+				ac: bestAC.ac + 2,
+				from: [...bestAC.from, 'Shield']
+			};
+		}
+		
+		// 7. Add other AC bonuses (magic items, spells, etc.)
+		if (character.acBonuses) {
+			let totalBonus = 0;
+			const bonusSources = [];
+			
+			character.acBonuses.forEach(bonus => {
+				if (typeof bonus === 'number') {
+					totalBonus += bonus;
+					bonusSources.push('Magic');
+				} else if (bonus.value && bonus.source) {
+					totalBonus += bonus.value;
+					bonusSources.push(bonus.source);
+				}
+			});
+			
+			if (totalBonus > 0) {
+				bestAC = {
+					...bestAC,
+					ac: bestAC.ac + totalBonus,
+					from: [...bestAC.from, ...bonusSources]
+				};
+			}
+		}
+		
+		return [bestAC];
+	}
+	
+	calculateArmorAC(armor, dexMod) {
+		if (!armor || !armor.type) return null;
+		
+		const armorData = this.getArmorData(armor.name || armor.type);
+		if (!armorData) return null;
+		
+		let ac = armorData.base;
+		const from = [armor.name || armor.type];
+		
+		// Apply Dex modifier based on armor type
+		switch (armorData.category) {
+			case 'light':
+				ac += dexMod; // Full Dex bonus
+				break;
+			case 'medium':
+				ac += Math.min(dexMod, 2); // Max +2 Dex bonus
+				break;
+			case 'heavy':
+				// No Dex bonus
+				break;
+		}
+		
+		// Add stealth disadvantage note if applicable
+		if (armorData.stealthDisadvantage) {
+			from[0] += ' (Stealth Disadv.)';
+		}
+		
+		return {
+			ac: ac,
+			from: from,
+			type: 'armor'
+		};
+	}
+	
+	getArmorData(armorName) {
+		const armorTable = {
+			// Light Armor
+			'Padded': { base: 11, category: 'light', stealthDisadvantage: true },
+			'Leather': { base: 11, category: 'light', stealthDisadvantage: false },
+			'Studded Leather': { base: 12, category: 'light', stealthDisadvantage: false },
+			
+			// Medium Armor
+			'Hide': { base: 12, category: 'medium', stealthDisadvantage: false },
+			'Chain Shirt': { base: 13, category: 'medium', stealthDisadvantage: false },
+			'Scale Mail': { base: 14, category: 'medium', stealthDisadvantage: true },
+			'Breastplate': { base: 14, category: 'medium', stealthDisadvantage: false },
+			'Half Plate': { base: 15, category: 'medium', stealthDisadvantage: true },
+			
+			// Heavy Armor
+			'Ring Mail': { base: 14, category: 'heavy', stealthDisadvantage: true },
+			'Chain Mail': { base: 16, category: 'heavy', stealthDisadvantage: true },
+			'Splint': { base: 17, category: 'heavy', stealthDisadvantage: true },
+			'Plate': { base: 18, category: 'heavy', stealthDisadvantage: true }
+		};
+		
+		return armorTable[armorName] || null;
+	}
+
 	async hasArmorProficiency(classes, armorType) {
 		// Check each class for armor proficiency
 		for (const cls of classes) {
@@ -3379,11 +4143,10 @@ class CharacterEditorPage {
 	}
 
 	async generateRandomSaves(abilityScores, classes, profBonus) {
-		const saves = {};
-		const allSaves = ["str", "dex", "con", "int", "wis", "cha"];
+		// Instead of calculating final bonuses, just store which saves are proficient
+		const proficientSaves = [];
 
 		// In D&D 5e, you only get saving throw proficiencies from your FIRST class when multiclassing
-		const proficientSaves = new Set();
 		if (classes.length > 0) {
 			const primaryClass = classes[0];
 			try {
@@ -3391,7 +4154,9 @@ class CharacterEditorPage {
 				if (classData && classData.class && classData.class[0] && classData.class[0].proficiency) {
 					// Add saving throw proficiencies from class data
 					classData.class[0].proficiency.forEach(save => {
-						proficientSaves.add(save);
+						if (!proficientSaves.includes(save)) {
+							proficientSaves.push(save);
+						}
 					});
 				}
 			} catch (e) {
@@ -3399,14 +4164,7 @@ class CharacterEditorPage {
 			}
 		}
 
-		// Only include saves where the character has proficiency
-		proficientSaves.forEach(save => {
-			const modifier = Math.floor((abilityScores[save] - 10) / 2);
-			const total = modifier + profBonus;
-			saves[save] = total >= 0 ? `+${total}` : `${total}`;
-		});
-
-		return saves;
+		return proficientSaves;
 	}
 
 	// Standard D&D 5e proficiency bonus by total character level
@@ -3414,18 +4172,43 @@ class CharacterEditorPage {
 		return Math.ceil(totalLevel / 4) + 1;
 	}
 
-	async generateRandomSkills(abilityScores, classes, profBonus, race, background) {
-		const skills = {};
-		const skillAbilityMap = {
-			"acrobatics": "dex", "animal_handling": "wis", "arcana": "int",
-			"athletics": "str", "deception": "cha", "history": "int",
-			"insight": "wis", "intimidation": "cha", "investigation": "int",
-			"medicine": "wis", "nature": "int", "perception": "wis",
-			"performance": "cha", "persuasion": "cha", "religion": "int",
-			"sleight_of_hand": "dex", "stealth": "dex", "survival": "wis"
-		};
+	/**
+	 * Get the levels at which a class gains Ability Score Improvements
+	 * Fighter gets bonus ASI at levels 6 and 14
+	 * Rogue gets bonus ASI at level 10
+	 * All other classes follow the standard progression
+	 */
+	getASILevelsForClass(className) {
+		const classNameLower = (className || '').toLowerCase();
 
-		const proficientSkills = new Set();
+		if (classNameLower === 'fighter') {
+			return [4, 6, 8, 12, 14, 16, 19]; // Fighter bonus ASI at 6, 14
+		} else if (classNameLower === 'rogue') {
+			return [4, 8, 10, 12, 16, 19]; // Rogue bonus ASI at 10
+		} else {
+			return [4, 8, 12, 16, 19]; // Standard ASI progression
+		}
+	}
+
+	/**
+	 * Check if a given level is an ASI level for any of the character's classes
+	 */
+	isASILevel(level, classes) {
+		if (!classes || !Array.isArray(classes)) return false;
+
+		return classes.some(classEntry => {
+			const className = classEntry.name || classEntry.className || '';
+			const classLevel = classEntry.level || 1;
+			const asiLevels = this.getASILevelsForClass(className);
+
+			// Check if this class has reached this ASI level
+			return classLevel >= level && asiLevels.includes(level);
+		});
+	}
+
+	async generateRandomSkills(abilityScores, classes, profBonus, race, background) {
+		// Instead of calculating final bonuses, just store which skills are proficient
+		const proficientSkills = [];
 
 		// In D&D 5e, you only get skill proficiencies from your FIRST class when multiclassing
 		if (classes.length > 0) {
@@ -3436,18 +4219,30 @@ class CharacterEditorPage {
 			const numChoices = classSkills.numChoices || 2;
 
 			// Add automatic proficiencies from first class only
-			automaticSkills.forEach(skill => proficientSkills.add(skill));
+			automaticSkills.forEach(skill => {
+				if (!proficientSkills.includes(skill)) {
+					proficientSkills.push(skill);
+				}
+			});
 
 			// Add random choices from first class only
 			if (availableSkills.length > 0) {
 				const selectedFromClass = this.selectWeightedSkills(availableSkills, numChoices, [primaryClass], race);
-				selectedFromClass.forEach(skill => proficientSkills.add(skill));
+				selectedFromClass.forEach(skill => {
+					if (!proficientSkills.includes(skill)) {
+						proficientSkills.push(skill);
+					}
+				});
 			}
 		}
 
 		// Add racial skill proficiencies (limited)
 		const racialSkills = this.getRacialSkillProficiencies(race);
-		racialSkills.forEach(skill => proficientSkills.add(skill));
+		racialSkills.forEach(skill => {
+			if (!proficientSkills.includes(skill)) {
+				proficientSkills.push(skill);
+			}
+		});
 
 		// Add background skill proficiencies (should be exactly 2 for most backgrounds)
 		if (background && typeof DataLoader !== 'undefined') {
@@ -3459,31 +4254,37 @@ class CharacterEditorPage {
 				if (found && found.skill) {
 					// `found.skill` may be an array of skill names or objects
 					const skillsFromData = Array.isArray(found.skill) ? found.skill.map(s => typeof s === 'string' ? s : s.name).filter(Boolean) : [];
-					skillsFromData.forEach(s => proficientSkills.add(s));
+					skillsFromData.forEach(s => {
+						if (!proficientSkills.includes(s)) {
+							proficientSkills.push(s);
+						}
+					});
 				} else {
 					const backgroundSkills = this.generateBackgroundSkills(background);
-					backgroundSkills.forEach(skill => proficientSkills.add(skill));
+					backgroundSkills.forEach(skill => {
+						if (!proficientSkills.includes(skill)) {
+							proficientSkills.push(skill);
+						}
+					});
 				}
 			} catch (e) {
 				const backgroundSkills = this.generateBackgroundSkills(background);
-				backgroundSkills.forEach(skill => proficientSkills.add(skill));
+				backgroundSkills.forEach(skill => {
+					if (!proficientSkills.includes(skill)) {
+						proficientSkills.push(skill);
+					}
+				});
 			}
 		} else if (background) {
 			const backgroundSkills = this.generateBackgroundSkills(background);
-			backgroundSkills.forEach(skill => proficientSkills.add(skill));
+			backgroundSkills.forEach(skill => {
+				if (!proficientSkills.includes(skill)) {
+					proficientSkills.push(skill);
+				}
+			});
 		}
 
-		// Only include skills where the character has proficiency
-	proficientSkills.forEach(skill => {
-			if (skillAbilityMap[skill]) {
-				const ability = skillAbilityMap[skill];
-				const abilityMod = Math.floor((abilityScores[ability] - 10) / 2);
-				const total = abilityMod + profBonus;
-				skills[skill] = total >= 0 ? `+${total}` : `${total}`;
-			}
-		});
-
-		return skills;
+		return proficientSkills;
 	}
 
 	async getClassSkillProficiencies(className) {
@@ -3789,14 +4590,14 @@ class CharacterEditorPage {
 		return toolSets[Math.floor(Math.random() * toolSets.length)];
 	}
 
-	generateLanguageProficiencies(classes, race, background) {
+	async generateLanguageProficiencies(classes, race, background) {
 		const languages = new Set();
 
 		// Common is always known
 		languages.add("Common");
 
 		// Racial languages
-		const racialLanguages = this.getRacialLanguages(race);
+		const racialLanguages = await this.getRacialLanguages(race);
 		racialLanguages.forEach(lang => languages.add(lang));
 
 		// Class languages
@@ -3804,29 +4605,58 @@ class CharacterEditorPage {
 		classLanguages.forEach(lang => languages.add(lang));
 
 		// Background languages (1-2 additional)
-		const backgroundLanguages = this.generateBackgroundLanguages(background);
+		const backgroundLanguages = await this.generateBackgroundLanguages(background);
 		backgroundLanguages.forEach(lang => languages.add(lang));
 
 		return Array.from(languages);
 	}
 
-	getRacialLanguages(race) {
+	async getRacialLanguages(race) {
 		if (!race) return [];
+
+		// Load language data for data-driven language selection
+		const languageData = await this.loadLanguageData();
+		const availableLanguages = languageData.filter(lang => 
+			lang.type === 'standard' && lang.name !== 'Common'
+		).map(lang => lang.name);
 
 		const racialLanguages = {
 			"Dwarf": ["Dwarvish"],
 			"Elf": ["Elvish"],
 			"Halfling": ["Halfling"],
-			"Human": Math.random() < 0.8 ? [this.getRandomLanguage()] : [],
-			"Variant Human": [this.getRandomLanguage()],
+			"Human": Math.random() < 0.8 ? [this.selectRandomLanguage(availableLanguages)] : [],
+			"Variant Human": [this.selectRandomLanguage(availableLanguages)],
 			"Dragonborn": ["Draconic"],
 			"Gnome": ["Gnomish"],
 			"Half-Elf": ["Elvish"],
 			"Half-Orc": ["Orc"],
-			"Tiefling": ["Infernal"]
+			"Tiefling": ["Infernal"],
+			"Aarakocra": ["Aarakocra"],
+			"Aasimar": ["Celestial"],
+			"Tabaxi": ["Tabaxi"],
+			"Goliath": ["Giant"],
+			"Genasi": ["Primordial"]
 		};
 
 		return racialLanguages[race.name] || [];
+	}
+
+	// Helper method to load language data from file
+	async loadLanguageData() {
+		try {
+			const response = await fetch('data/languages.json');
+			const data = await response.json();
+			return data.language || [];
+		} catch (error) {
+			console.warn('Could not load language data:', error);
+			return [];
+		}
+	}
+
+	// Helper method to select a random language from available options
+	selectRandomLanguage(availableLanguages) {
+		if (availableLanguages.length === 0) return 'Elvish'; // Fallback
+		return availableLanguages[Math.floor(Math.random() * availableLanguages.length)];
 	}
 
 	getClassLanguages(classes) {
@@ -3850,8 +4680,17 @@ class CharacterEditorPage {
 		return languages;
 	}
 
-	generateBackgroundLanguages(background) {
-		const languageOptions = ["Elvish", "Dwarvish", "Giant", "Gnomish", "Goblin", "Halfling", "Orc"];
+	async generateBackgroundLanguages(background) {
+		// Load language data for data-driven selection
+		const languageData = await this.loadLanguageData();
+		const standardLanguages = languageData.filter(lang => 
+			lang.type === 'standard' && lang.name !== 'Common'
+		).map(lang => lang.name);
+		
+		// Use data-driven language options or fallback to hardcoded list
+		const languageOptions = standardLanguages.length > 0 ? standardLanguages : 
+			["Elvish", "Dwarvish", "Giant", "Gnomish", "Goblin", "Halfling", "Orc"];
+		
 		const numLanguages = Math.random() < 0.6 ? 1 : 2;
 		const selected = [];
 
@@ -3865,11 +4704,18 @@ class CharacterEditorPage {
 		return selected;
 	}
 
-	getRandomLanguage() {
-		const languages = [
-			"Elvish", "Dwarvish", "Giant", "Gnomish", "Goblin", "Halfling", "Orc",
-			"Abyssal", "Celestial", "Draconic", "Deep Speech", "Infernal", "Primordial", "Sylvan"
-		];
+	async getRandomLanguage() {
+		// Load language data for data-driven selection
+		const languageData = await this.loadLanguageData();
+		const allLanguages = languageData
+			.filter(lang => lang.name !== 'Common')
+			.map(lang => lang.name);
+		
+		// Use data-driven language options or fallback to hardcoded list
+		const languages = allLanguages.length > 0 ? allLanguages : 
+			["Elvish", "Dwarvish", "Giant", "Gnomish", "Goblin", "Halfling", "Orc",
+			 "Abyssal", "Celestial", "Draconic", "Deep Speech", "Infernal", "Primordial", "Sylvan"];
+		
 		return languages[Math.floor(Math.random() * languages.length)];
 	}
 
@@ -4288,6 +5134,7 @@ class CharacterEditorPage {
 			} else if (casterType === "third") {
 				spellSlotLevel += Math.floor(cls.level / 3);
 			}
+			// Pact casters (Warlock) don't contribute to multiclass spell slots
 			casterLevels[cls.name] = cls.level;
 		});
 
@@ -4313,13 +5160,15 @@ class CharacterEditorPage {
 	}
 
 	getCasterType(className) {
-		const fullCasters = ["Wizard", "Sorcerer", "Warlock", "Bard", "Cleric", "Druid"];
+		const fullCasters = ["Wizard", "Sorcerer", "Bard", "Cleric", "Druid"];
 		const halfCasters = ["Paladin", "Ranger"];
 		const thirdCasters = ["Eldritch Knight", "Arcane Trickster"];
+		const pactCasters = ["Warlock"];
 
 		if (fullCasters.includes(className)) return "full";
 		if (halfCasters.includes(className)) return "half";
 		if (thirdCasters.includes(className)) return "third";
+		if (pactCasters.includes(className)) return "pact";
 		return "none";
 	}
 
@@ -4335,7 +5184,7 @@ class CharacterEditorPage {
 			Math.max(1, abilityMod + casterClass.level) : null;
 
 		// Cantrips
-		const cantripCount = this.getCantripCount(casterClass.name, casterClass.level);
+		const cantripCount = this.getCantripCount(casterClass.name, casterClass.level, casterClass.subclass?.name);
 		levels["0"] = {
 			spells: this.getRandomCantrips(casterClass, cantripCount)
 		};
@@ -4376,6 +5225,37 @@ class CharacterEditorPage {
 			return spellLevel === slotLevel ? numSlots : 0;
 		}
 
+		// Half-caster progression for Paladin and Ranger
+		if (casterClass.name === "Paladin" || casterClass.name === "Ranger") {
+			const halfCasterSlots = [
+				[0, 0, 0, 0, 0, 0, 0, 0, 0], // Level 1
+				[2, 0, 0, 0, 0, 0, 0, 0, 0], // Level 2
+				[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 3
+				[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 4
+				[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 5
+				[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 6
+				[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 7
+				[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 8
+				[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 9
+				[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 10
+				[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 11
+				[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 12
+				[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 13
+				[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 14
+				[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 15
+				[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 16
+				[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 17
+				[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 18
+				[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 19
+				[4, 3, 3, 3, 2, 0, 0, 0, 0]  // Level 20
+			];
+
+			const classLevel = Math.min(casterClass.level, 20);
+			if (classLevel < 2 || spellLevel > 5) return 0; // Rangers/Paladins start at level 2 and max at 5th level spells
+
+			return halfCasterSlots[classLevel - 1][spellLevel - 1] || 0;
+		}
+
 		// Regular full caster progression
 		const fullCasterSlots = [
 			[2, 0, 0, 0, 0, 0, 0, 0, 0], // Level 1
@@ -4387,16 +5267,26 @@ class CharacterEditorPage {
 			[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 7
 			[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 8
 			[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 9
-			[4, 3, 3, 3, 2, 0, 0, 0, 0]  // Level 10
+			[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 10
+			[4, 3, 3, 3, 2, 1, 0, 0, 0], // Level 11
+			[4, 3, 3, 3, 2, 1, 0, 0, 0], // Level 12
+			[4, 3, 3, 3, 2, 1, 1, 0, 0], // Level 13
+			[4, 3, 3, 3, 2, 1, 1, 0, 0], // Level 14
+			[4, 3, 3, 3, 2, 1, 1, 1, 0], // Level 15
+			[4, 3, 3, 3, 2, 1, 1, 1, 0], // Level 16
+			[4, 3, 3, 3, 2, 1, 1, 1, 1], // Level 17
+			[4, 3, 3, 3, 3, 1, 1, 1, 1], // Level 18
+			[4, 3, 3, 3, 3, 2, 1, 1, 1], // Level 19
+			[4, 3, 3, 3, 3, 2, 2, 1, 1]  // Level 20
 		];
 
-		const classLevel = Math.min(casterClass.level, 10);
+		const classLevel = Math.min(casterClass.level, 20);
 		if (classLevel === 0 || spellLevel > 9) return 0;
 
 		return fullCasterSlots[classLevel - 1][spellLevel - 1] || 0;
 	}
 
-	getCantripCount(className, classLevel) {
+	getCantripCount(className, classLevel, subclassName = null) {
 		const cantripProgression = {
 			"Wizard": [3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
 			"Sorcerer": [4, 4, 4, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
@@ -4408,11 +5298,36 @@ class CharacterEditorPage {
 			"Ranger": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 		};
 
+		// Check for subclass-specific cantrip grants
+		let bonusCantrips = 0;
+		if (className === "Ranger" && subclassName && classLevel >= 3) {
+			// Some Ranger subclasses get cantrips at 3rd level
+			if (subclassName === "Fey Wanderer") {
+				bonusCantrips = 1; // Gets 1 Druid cantrip
+			} else if (subclassName === "Swarmkeeper") {
+				bonusCantrips = 1; // Gets 1 Druid cantrip
+			}
+		} else if (className === "Fighter" && subclassName === "Eldritch Knight" && classLevel >= 3) {
+			// Eldritch Knights get cantrips starting at 3rd level
+			const ekProgression = [0, 0, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4];
+			bonusCantrips = ekProgression[Math.min(classLevel - 1, 19)];
+		} else if (className === "Rogue" && subclassName === "Arcane Trickster" && classLevel >= 3) {
+			// Arcane Tricksters get cantrips starting at 3rd level
+			const atProgression = [0, 0, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+			bonusCantrips = atProgression[Math.min(classLevel - 1, 19)];
+		}
+
 		const progression = cantripProgression[className];
-		return progression ? progression[Math.min(classLevel - 1, 19)] : 0;
+		const baseCantrips = progression ? progression[Math.min(classLevel - 1, 19)] : 0;
+		return baseCantrips + bonusCantrips;
 	}
 
 	getRandomCantrips(casterClass, cantripCount) {
+		// Rangers and Paladins don't get cantrips unless specified by subclass features
+		if (cantripCount === 0) {
+			return [];
+		}
+
 		const classCantrips = {
 			"Wizard": [
 				"Acid Splash", "Blade Ward", "Chill Touch", "Dancing Lights", "Fire Bolt",
@@ -4425,26 +5340,39 @@ class CharacterEditorPage {
 				"Poison Spray", "Prestidigitation", "Ray of Frost", "Shocking Grasp", "True Strike"
 			],
 			"Warlock": [
-				"Blade Ward", "Chill Touch", "Create Bonfire|XGE", "Eldritch Blast", "Friends",
+				"Blade Ward", "Chill Touch", "Create Bonfire", "Eldritch Blast", "Friends",
 				"Frostbite", "Magic Stone", "Mage Hand", "Minor Illusion", "Poison Spray",
 				"Prestidigitation", "Toll the Dead", "True Strike"
 			],
 			"Bard": [
 				"Blade Ward", "Dancing Lights", "Friends", "Light", "Mage Hand", "Mending",
-				"Message", "Minor Illusion", "Prestidigitation", "Thunderclap|XGE", "True Strike", "Vicious Mockery"
+				"Message", "Minor Illusion", "Prestidigitation", "Thunderclap", "True Strike", "Vicious Mockery"
 			],
 			"Cleric": [
 				"Guidance", "Light", "Mending", "Resistance", "Sacred Flame", "Spare the Dying",
-				"Thaumaturgy", "Toll the Dead", "Word of Radiance|XGE"
+				"Thaumaturgy", "Toll the Dead", "Word of Radiance"
 			],
 			"Druid": [
-				"Create Bonfire|XGE", "Druidcraft", "Frostbite|XGE", "Guidance", "Magic Stone",
+				"Create Bonfire", "Druidcraft", "Frostbite", "Guidance", "Magic Stone",
 				"Mending", "Poison Spray", "Produce Flame", "Resistance", "Shillelagh",
 				"Thorn Whip", "Thunderclap"
 			]
 		};
 
-		const availableCantrips = classCantrips[casterClass.name] || [];
+		// Handle subclass-specific cantrip lists
+		let availableCantrips = classCantrips[casterClass.name] || [];
+		if (casterClass.name === "Ranger" && casterClass.subclass?.name) {
+			// Rangers with certain subclasses choose from Druid cantrips
+			if (["Fey Wanderer", "Swarmkeeper"].includes(casterClass.subclass.name)) {
+				availableCantrips = classCantrips["Druid"] || [];
+			}
+		} else if (casterClass.name === "Fighter" && casterClass.subclass?.name === "Eldritch Knight") {
+			// Eldritch Knights choose from Wizard cantrips
+			availableCantrips = classCantrips["Wizard"] || [];
+		} else if (casterClass.name === "Rogue" && casterClass.subclass?.name === "Arcane Trickster") {
+			// Arcane Tricksters choose from Wizard cantrips
+			availableCantrips = classCantrips["Wizard"] || [];
+		}
 		const selectedCantrips = [];
 
 		// Always include signature cantrips for certain classes
@@ -4635,7 +5563,7 @@ class CharacterEditorPage {
 			},
 			"Warlock": {
 				0: ["Chill Touch", "Eldritch Blast", "Mage Hand", "Minor Illusion", "Poison Spray", "Prestidigitation", "True Strike"],
-				1: ["Arms of Hadar", "Charm Person", "Comprehend Languages", "Expeditious Retreat", "Hellish Rebuke", "Hex", "Illusory Script", "Protection from Evil and Good", "Unseen Servant"],
+				1: ["Armor of Agathys", "Arms of Hadar", "Charm Person", "Comprehend Languages", "Expeditious Retreat", "Hellish Rebuke", "Hex", "Illusory Script", "Protection from Evil and Good", "Unseen Servant"],
 				2: ["Cloud of Daggers", "Crown of Madness", "Darkness", "Enthrall", "Hold Person", "Invisibility", "Mirror Image", "Misty Step", "Ray of Enfeeblement", "Shatter", "Spider Climb", "Suggestion"],
 				3: ["Counterspell", "Dispel Magic", "Fear", "Fireball", "Fly", "Gaseous Form", "Hunger of Hadar", "Hypnotic Pattern", "Magic Circle", "Major Image", "Remove Curse", "Tongues", "Vampiric Touch"],
 				4: ["Banishment", "Blight", "Confusion", "Dimension Door", "Hallucinatory Terrain"],
@@ -4749,7 +5677,7 @@ class CharacterEditorPage {
 
 		// For cantrips (level 0), use cantrip progression
 		if (level === 0) {
-			return this.getCantripCount(casterClass.name, classLevel);
+			return this.getCantripCount(casterClass.name, classLevel, casterClass.subclass?.name);
 		}
 
 		// For spell levels, use different logic based on caster type
@@ -5133,10 +6061,12 @@ class CharacterEditorPage {
 						});
 					}
 					if (cls.level >= 4) {
+						const asiLevels = this.getASILevelsForClass(cls.name);
+						const levelsList = asiLevels.join(', ').replace(/, ([^,]*)$/, ', and $1');
 						features.push({
 							type: "entries",
 							name: "Ability Score Improvement",
-							entries: [`You have improved your abilities or gained a feat. This feature is gained at levels 4, 6, 8, 12, 14, 16, and 19.`]
+							entries: [`You have improved your abilities or gained a feat. This feature is gained at levels ${levelsList}.`]
 						});
 					}
 					if (cls.level >= 5) {
@@ -5885,11 +6815,17 @@ class CharacterEditorPage {
 		const turning = pick('TurningPoint', 1)[0] || '';
 		const hook = pick('Hook', 1)[0] || '';
 		const relation = pick('Relationship', 1)[0] || '';
-		const place = pick('Place', 1)[0] || '';
+		const backstoryParts = [];
+		let place = '';
+		if (tempBackground.name && /baldur'?s gate/i.test(tempBackground.name)) {
+			place = "Baldur's Gate";
+			backstoryParts.push(`${finalName} is from the big city and has always known life as a ${tempBackground.name.toLowerCase()}.`);
+		} else {
+			place = pick('Place', 1)[0] || '';
+			backstoryParts.push(`${finalName} was shaped life as a ${tempBackground.name.toLowerCase()} ${place ? ' in ' + place : ''}.`);
+		}
 		const contact = pick('Contact', 1)[0] || '';
 		const bgVignette = this.getBackgroundStory(tempBackground.name);
-		const backstoryParts = [];
-		backstoryParts.push(`${finalName} was shaped life as a ${tempBackground.name.toLowerCase()} ${place ? ' in ' + place : ''}.`);
 		if (origin) backstoryParts.push(origin);
 		if (turning) backstoryParts.push(turning);
 		if (bgVignette) backstoryParts.push(bgVignette);
@@ -7143,8 +8079,8 @@ class CharacterEditorPage {
 			// Validate and sanitize parameters
 			const finalLevel = Math.max(1, Math.min(20, parseInt(String(requestedLevel)) || 5));
 			const finalName = (characterName && characterName.trim()) || this.generateRandomName();
-			// Determine final source: prefer explicit parameter, otherwise detect from URL/localStorage/cached sources
-			const finalSource = (sourceName && sourceName !== 'RANDOM_GENERATED') ? sourceName : (this.getCurrentSourceName({}) || 'MyCharacters');
+			// Determine final source: use explicit parameter or fallback
+			const finalSource = (sourceName && sourceName !== 'RANDOM_GENERATED') ? sourceName : 'MyCharacters';
 
 			// If the caller didn't explicitly provide a source, persist the detected source for subsequent flows
 			if (!sourceName || sourceName === 'RANDOM_GENERATED') {
@@ -7159,7 +8095,7 @@ class CharacterEditorPage {
 
 			// Use existing generation logic but with provided parameters
 			const randomClasses = this.generateRandomClasses(finalLevel, baseClass);
-			const randomRace = race ? this.generateForcedRace(race) : this.generateRandomRace(randomClasses);
+			const randomRace = race ? await this.generateForcedRace(race) : this.generateRandomRace(randomClasses);
 			const randomAlignment = forcedAlignment || this.generateRandomAlignment();
 
 			// If forcedBackground is a string, coerce to an object so downstream code can use .name/.source
@@ -7177,7 +8113,8 @@ class CharacterEditorPage {
 			const randomAbilityScores = await this.generateRandomAbilityScores(randomClasses, randomRace);
 			const randomEquipment = this.generateRandomEquipment(randomClasses, finalLevel, randomAbilityScores, randomRace);
 			const randomActions = this.generateRandomActions(randomClasses, randomAbilityScores);
-			const randomSpells = this.generateRandomSpells(randomClasses, finalLevel, randomAbilityScores);
+			// Skip random spell generation - we'll add user-selected spells later
+			const randomSpells = null;
 
 			// Calculate derived stats
 			const totalLevel = randomClasses.reduce((sum, cls) => sum + cls.level, 0);
@@ -7187,10 +8124,6 @@ class CharacterEditorPage {
 
 			// Create character template
 			const characterDepth = await this.generateCharacterDepth(randomBackground, randomRace, randomClasses, randomAlignment);
-			const depthFluff = await this.generateFluffEntries(finalName, totalLevel, randomClasses, randomRace, randomBackground, characterDepth, randomAlignment);
-
-			// Generate additional fluff entries for the template
-			const additionalFluff = await this.generateFluffEntries(finalName, totalLevel, randomClasses, randomRace, randomBackground, await this.generateCharacterDepth(randomBackground, randomRace, randomClasses), null);
 
 			let template = {
 				name: finalName,
@@ -7204,13 +8137,14 @@ class CharacterEditorPage {
 			alignment: randomAlignment,
 			ac: await this.generateRandomAC(randomClasses, randomAbilityScores, randomRace),
 			hp: randomHp,
+			size: randomRace.size || "M",
 			speed: {
 				walk: 30 // Default speed, will be overridden by race data
 			},
 			...randomAbilityScores,
 			passive: 10 + Math.floor((randomAbilityScores.wis - 10) / 2) + (this.hasSkillProficiency("perception", randomClasses) ? profBonus : 0),
-			save: await this.generateRandomSaves(randomAbilityScores, randomClasses, profBonus),
-			skill: await this.generateRandomSkills(randomAbilityScores, randomClasses, profBonus, randomRace, randomBackground),
+			saveProficiencies: await this.generateRandomSaves(randomAbilityScores, randomClasses, profBonus),
+			skillProficiencies: await this.generateRandomSkills(randomAbilityScores, randomClasses, profBonus, randomRace, randomBackground),
 			proficiencyBonus: `+${profBonus}`,
 			deathSaves: {
 				successes: 0,
@@ -7224,10 +8158,7 @@ class CharacterEditorPage {
 			// characterDepth intentionally not stored as a top-level field; include depth info in fluff
 			fluff: {
 				entries: [
-					`${finalName} is a ${totalLevel === 1 ? 'beginning' : totalLevel < 5 ? 'novice' : totalLevel < 10 ? 'experienced' : 'veteran'} adventurer.`,
-					`Their journey has led them to master ${randomClasses.length === 1 ? 'the ways of the ' + randomClasses[0].name.toLowerCase() : 'multiple disciplines'}.`,
-					this.getBackgroundStory(randomBackground.name),
-					...additionalFluff
+					'write notes here'
 				]
 			},
 		};
@@ -7463,7 +8394,26 @@ class CharacterEditorPage {
 	renderCharacter() {
 		try {
 			const jsonText = this.ace.getValue();
-			const characterData = JSON.parse(jsonText);
+			let characterData;
+			try {
+				characterData = JSON.parse(jsonText);
+			} catch (parseError) {
+				console.error('JSON Parse Error:', parseError);
+				console.error('JSON Text that failed to parse:', jsonText);
+				throw parseError;
+			}
+
+			// Migrate items from top-level items array to Items section if needed
+			let migrationPerformed = false;
+			if (characterData.items && Array.isArray(characterData.items) && characterData.items.length > 0) {
+				this.migrateItemsToEntriesSection(characterData);
+				migrationPerformed = true;
+			}
+
+			// Update the editor content if migration was performed
+			if (migrationPerformed) {
+				this.ace.setValue(JSON.stringify(characterData, null, 2), 1);
+			}
 
 			// Process the character data first to add computed fields
 			this._processCharacterData(characterData);
@@ -7666,10 +8616,9 @@ class CharacterEditorPage {
 				return;
 			}
 
-			// Auto-set source if missing or default
-			const currentSource = this.getCurrentSourceName(characterData);
+			// Use source from character data directly
 			if (!characterData.source || characterData.source === 'MyCharacters' || characterData.source === 'ADD_YOUR_NAME_HERE') {
-				characterData.source = currentSource;
+				characterData.source = 'MyCharacters';
 				// Update the JSON in the editor to reflect the change
 				this.ace.setValue(JSON.stringify(characterData, null, 2));
 			}
@@ -7701,7 +8650,7 @@ class CharacterEditorPage {
 				// Ask if user wants to view the character on the characters page
 				setTimeout(() => {
 					if (confirm('Character saved successfully! Would you like to view it on the characters page?')) {
-						const src = characterData.source || this.getCurrentSourceName(characterData) || 'mycharacters';
+						const src = characterData.source || 'mycharacters';
 						const characterAnchor = this.generateCharacterAnchor(characterData.name, src);
 						window.location.href = `characters.html${characterAnchor}`;
 					}
@@ -7822,7 +8771,7 @@ class CharacterEditorPage {
 		try {
 			// Generate a unique ID for new character using name + source
 			const characterId = CharacterManager._generateCompositeId(characterData.name, characterData.source);
-			const apiUrl = '/api/characters';
+			const apiUrl = `${API_BASE_URL}/characters`;
 
 			// Prepare character data for database
 			const characterPayload = {
@@ -7963,8 +8912,8 @@ class CharacterEditorPage {
 			return;
 		}
 
-		// Get password from localStorage cache (same as save functionality)
-		const currentSource = this.getCurrentSourceName(currentCharacterData);
+		// Use source from character data directly or fallback
+		const currentSource = currentCharacterData?.source || 'MyCharacters';
 		const sanitizedSource = this.sanitizeSourceName(currentSource);
 		const password = CharacterSourcePasswordManager.getCachedPassword(sanitizedSource);
 
@@ -8034,9 +8983,6 @@ class CharacterEditorPage {
 			// Update button visibility
 			this.updateButtonVisibility();
 
-			// Load template to reset editor
-			await this.loadTemplate();
-
 			// Show success message
 			document.getElementById('message').textContent = `Character "${characterName}" deleted successfully`;
 			document.getElementById('message').style.color = 'green';
@@ -8060,25 +9006,19 @@ class CharacterEditorPage {
 		return CharacterManager._generateCompositeId(name, source);
 	}
 
-	getCurrentSourceName(characterData) {
-		// Get source name from character data
-		const sourceFromData = characterData?.source;
-		if (sourceFromData && sourceFromData !== 'MyCharacters' && sourceFromData !== 'ADD_YOUR_NAME_HERE') {
-			return sourceFromData;
-		}
 
-		// Check if user came from sources page with a pre-set source
+
+	getWizardSourceName() {
+		// Get the source from URL params for wizard flows
 		const urlParams = new URLSearchParams(window.location.search);
 		const sourceFromUrl = urlParams.get('source');
 		if (sourceFromUrl) {
 			return sourceFromUrl;
 		}
 
-		// Check if there's a cached source from localStorage
+		// Check localStorage for cached source
 		const newCharacterSource = localStorage.getItem('newCharacterSource');
 		if (newCharacterSource) {
-			// Clear it after using it once
-			localStorage.removeItem('newCharacterSource');
 			return newCharacterSource;
 		}
 
@@ -8128,7 +9068,7 @@ class CharacterEditorPage {
 			// Ignore parsing errors for status display
 		}
 
-		const detectedSource = this.getCurrentSourceName(characterData);
+		const detectedSource = characterData?.source || 'MyCharacters';
 			const cachedSources = Object.keys(CharacterSourcePasswordManager.getCachedPasswords());
 
 		if (!currentSource) {
@@ -8217,7 +9157,7 @@ class CharacterEditorPage {
 
 			console.log(`Starting level up: ${currentLevel} -> ${newLevel}`);
 
-			// Initialize simple level up state
+			// Initialize simple level uitemsp state
 			this.levelUpState = {
 				originalCharacter: JSON.parse(JSON.stringify(characterData)), // Original backup
 				characterData: JSON.parse(JSON.stringify(characterData)), // Working copy
@@ -8275,12 +9215,11 @@ class CharacterEditorPage {
 			</div>
 		`;
 
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Level Up Character",
-			hasFooter: true,
-			backdrop: 'static', // prevent backdrop click dismissal during level up
-			keyboard: false     // prevent Escape key dismissal
-		});
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Level Up Character",
+		hasFooter: true,
+		isPermanent: true
+	});
 
 		$modalInner.html(modalContent);
 
@@ -8322,6 +9261,14 @@ class CharacterEditorPage {
 		const newLevel = oldLevel + 1;
 		classEntry.level = newLevel;
 
+		// Increase current hit dice (gain 1 unused hit die)
+		if (classEntry.currentHitDice !== undefined) {
+			classEntry.currentHitDice += 1;
+		} else {
+			// If currentHitDice wasn't set, set it to the new level (all available)
+			classEntry.currentHitDice = newLevel;
+		}
+
 		console.log(`${classEntry.name}: Level ${oldLevel} → ${newLevel}`);
 
 		// Record the change
@@ -8339,13 +9286,47 @@ class CharacterEditorPage {
 
 		this.addHitPoints(hpGain);
 
-		// Check for spell selection first (for spellcasting classes)
-		const isSpellcaster = this.isSpellcastingClass(classEntry.name);
-		console.log(`Checking if ${classEntry.name} is a spellcaster:`, isSpellcaster);
+		// Check for spell selection using data-driven detection
+		console.log(`🔍 LEVEL UP FLOW - Checking spell capability for ${classEntry.name} at level ${newLevel}`);
+
+		// Create character object for spell detection (include ALL classes for multiclassing)
+		const characterForSpellCheck = {
+			class: character.class || [classEntry], // Use full class array for multiclass detection
+			race: character.race,
+			// Include any existing spells to help with detection
+			spells: character.spells,
+			spell: character.spell
+		};
+
+		const spellResult = await this.canCharacterSelectSpells(characterForSpellCheck, newLevel);
+		const isSpellcaster = spellResult.canSelect;
+		console.log(`🎯 LEVEL UP FLOW - spell detection result:`, spellResult);
+		if (isSpellcaster) {
+			console.log(`📝 LEVEL UP FLOW - Reasons: ${spellResult.reasons.join(", ")}`);
+		}
 
 		if (isSpellcaster) {
 			// For spellcasters, show spell selection before other features
 			console.log(`✅ Adding spell selection for ${classEntry.name} level ${newLevel}`);
+
+			// Initialize spells structure if it doesn't exist (for first-time spellcasters/multiclass)
+			if (!character.spells) {
+				console.log(`🔧 Initializing spells structure for new spellcaster`);
+				character.spells = {
+					levels: {},
+					spellcastingAbility: null,
+					dc: 8,
+					attackBonus: "+0"
+				};
+				// Calculate correct spell DC immediately for new spellcasters
+				const totalLevel = CharacterEditorPage.getCharacterLevel(character);
+				const profBonus = this.getProficiencyBonus(totalLevel);
+				await this.updateSpellcastingStats(character, profBonus);
+
+				// Update the editor with the new spell structure
+				this.ace.setValue(JSON.stringify(character, null, 2));
+			}
+
 			this.levelUpState.pendingFeatures = [{
 				type: 'spells',
 				feature: {
@@ -8368,8 +9349,8 @@ class CharacterEditorPage {
 			return;
 		}
 
-		// Check for ASI at levels 4, 8, 12, 16, 19
-		if ([4, 8, 12, 16, 19].includes(newLevel)) {
+		// Check for class-specific ASI levels (Fighter gets bonus at 6,14; Rogue at 10)
+		if (this.isASILevel(newLevel, [classEntry])) {
 			this.showASIChoice();
 			return;
 		}
@@ -8455,11 +9436,12 @@ class CharacterEditorPage {
 			`;
 		}
 
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Multiclass Selection",
-			hasFooter: true,
-			isWidth100: true
-		});
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Multiclass Selection",
+		hasFooter: true,
+		isWidth100: true,
+		isPermanent: true
+	});
 
 		$modalInner.html(modalContent);
 
@@ -8662,23 +9644,53 @@ class CharacterEditorPage {
 	}
 
 	canMulticlassInto(character, className) {
-		const requirements = this.getMulticlassRequirements()[className];
-		if (!requirements) return { canMulticlass: false, reason: 'Unknown class' };
+		// In D&D 5e, you need minimum ability scores for BOTH current classes AND new class
+		const allRequirements = this.getMulticlassRequirements();
+		const targetRequirements = allRequirements[className];
+		if (!targetRequirements) return { canMulticlass: false, reason: 'Unknown class' };
 
 		// Get character abilities
 		const getScore = (ability) => character.abilities?.[ability] || character[ability] || 10;
 
-		// Check if character meets requirements
+		// First, check if character meets requirements for their current classes
+		if (character.class && character.class.length > 0) {
+			for (const classEntry of character.class) {
+				const currentClassReqs = allRequirements[classEntry.name];
+				if (currentClassReqs) {
+					const currentCheck = this.checkClassRequirements(getScore, currentClassReqs, classEntry.name);
+					if (!currentCheck.meets) {
+						return {
+							canMulticlass: false,
+							reason: `Cannot multiclass: current class ${classEntry.name} ${currentCheck.reason}`
+						};
+					}
+				}
+			}
+		}
+
+		// Then check if character meets requirements for the new class
+		const targetCheck = this.checkClassRequirements(getScore, targetRequirements, className);
+		if (!targetCheck.meets) {
+			return {
+				canMulticlass: false,
+				reason: targetCheck.reason
+			};
+		}
+
+		return { canMulticlass: true };
+	}
+
+	checkClassRequirements(getScore, requirements, className) {
 		if (requirements.operation === 'OR') {
 			// Special case for Fighter: STR 13 OR DEX 13
 			const meetsStr = getScore('str') >= requirements.str;
 			const meetsDex = getScore('dex') >= requirements.dex;
 			if (meetsStr || meetsDex) {
-				return { canMulticlass: true };
+				return { meets: true };
 			} else {
 				return {
-					canMulticlass: false,
-					reason: `Requires STR 13 OR DEX 13 (you have STR ${getScore('str')}, DEX ${getScore('dex')})`
+					meets: false,
+					reason: `requires STR 13 OR DEX 13 (you have STR ${getScore('str')}, DEX ${getScore('dex')})`
 				};
 			}
 		} else {
@@ -8691,11 +9703,11 @@ class CharacterEditorPage {
 			}
 
 			if (unmetRequirements.length === 0) {
-				return { canMulticlass: true };
+				return { meets: true };
 			} else {
 				return {
-					canMulticlass: false,
-					reason: `Requires ${unmetRequirements.join(' and ')}`
+					meets: false,
+					reason: `requires ${unmetRequirements.join(' and ')}`
 				};
 			}
 		}
@@ -8781,10 +9793,22 @@ class CharacterEditorPage {
 			character.hitPoints.max = (character.hitPoints.max || 0) + hpGain;
 			character.hitPoints.current = character.hitPoints.max;
 		} else if (character.hp) {
-			character.hp.max = (character.hp.max || 0) + hpGain;
-			character.hp.current = character.hp.max;
+			// Ensure hp is an object, not a number
+			if (typeof character.hp === 'number') {
+				const currentHp = character.hp;
+				character.hp = { 
+					max: currentHp + hpGain, 
+					current: currentHp + hpGain,
+					average: currentHp + hpGain,
+					formula: `${currentHp}+${hpGain}`,
+					temp: 0
+				};
+			} else {
+				character.hp.max = (character.hp.max || 0) + hpGain;
+				character.hp.current = character.hp.max;
+			}
 		} else {
-			character.hp = { max: hpGain, current: hpGain };
+			character.hp = { max: hpGain, current: hpGain, average: hpGain, formula: String(hpGain), temp: 0 };
 		}
 
 		this.levelUpState.changes.hitPoints += hpGain;
@@ -8944,10 +9968,11 @@ class CharacterEditorPage {
 			</div>
 		`;
 
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Ability Score Improvement",
-			hasFooter: true
-		});
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Ability Score Improvement",
+		hasFooter: true,
+		isPermanent: true
+	});
 
 		$modalInner.html(modalContent);
 
@@ -9010,12 +10035,21 @@ class CharacterEditorPage {
 		console.log('Applied ASI:', changes);
 	}
 
-	showLevelUpComplete() {
+	async showLevelUpComplete() {
 		const changes = this.levelUpState.changes;
+		const character = this.levelUpState.characterData;
+
+		// Run comprehensive D&D 5e rule validation
+		console.log('🔍 Running D&D 5e rule validation after level up...');
+		const validationResults = await this.validateCharacterRules(character, 'strict');
+
+		// Show validation status in the summary
+		const validationSection = this.createValidationSummaryHTML(validationResults);
 
 		let summaryHTML = `
-			<h5>Level Up Complete!</h5>
 			<p class="text-success">Successfully leveled up from ${this.levelUpState.currentLevel} to ${this.levelUpState.newLevel}!</p>
+
+			${validationSection}
 
 			<div class="mb-4">
 				<h6>Changes Made:</h6>
@@ -9061,10 +10095,11 @@ class CharacterEditorPage {
 			</div>
 		`;
 
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Level Up Complete!",
-			hasFooter: true
-		});
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Level Up Complete!",
+		hasFooter: true,
+		isPermanent: true
+	});
 
 		$modalInner.html(summaryHTML);
 
@@ -9163,17 +10198,14 @@ class CharacterEditorPage {
 				</div>
 			`;
 
-			// Create 5etools native modal
-			const isLevel0 = this.levelUpState.currentLevel === 0;
-			const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-				title: isLevel0 ? "Choose Your First Class" : "Level Up Character - Choose Class",
-				hasFooter: true,
-				isWidth100: true,
-				...(isLevel0 && {
-					backdrop: 'static', // Prevent dismissal for level 0
-					keyboard: false     // Prevent escape key dismissal for level 0
-				})
-			});
+		// Create 5etools native modal
+		const isLevel0 = this.levelUpState.currentLevel === 0;
+		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+			title: isLevel0 ? "Choose Your First Class" : "Level Up Character - Choose Class",
+			hasFooter: true,
+			isWidth100: true,
+			isPermanent: true
+		});
 
 			// Store modal close function
 			this.levelUpModalClose = doClose;
@@ -9203,9 +10235,15 @@ class CharacterEditorPage {
 			// Handle multiclass addition
 			$modalInner.find('#add-multiclass-btn').click(() => {
 				const selectedValue = $modalInner.find('#multiclass-dropdown').val();
+				console.log('=== MULTICLASS DROPDOWN SELECTION DEBUG ===');
+				console.log('Selected dropdown value:', selectedValue);
+
 				if (!selectedValue) return;
 
 				const [className, subclassName] = selectedValue.split('|');
+				console.log('Parsed className:', className);
+				console.log('Parsed subclassName:', subclassName);
+
 				doClose(true);
 				this.selectNewClassForMulticlass(className, allClasses, subclassName);
 			});
@@ -9327,8 +10365,14 @@ class CharacterEditorPage {
 
 		// If subclass was already selected from dropdown, use it directly
 		if (subclassName) {
+			console.log('=== MULTICLASS SUBCLASS SELECTION DEBUG ===');
+			console.log('Selected subclass name:', subclassName);
+			console.log('Class data availableSubclasses:', classData.availableSubclasses);
+
 			// Find the full subclass object from the class data
 			const subclassObj = classData.availableSubclasses?.find(sc => sc.name === subclassName);
+			console.log('Found subclass object:', subclassObj);
+
 			await this.addNewClassToCharacter(className, subclassObj || { name: subclassName }, classData);
 			return;
 		}
@@ -9418,10 +10462,13 @@ class CharacterEditorPage {
 								</div>
 							</div>
 
-							<div id="validation-message" class="text-muted mb-2">Assign your ability scores</div>
+							<div id="validation-message" class="text-muted mb-3">Assign your ability scores</div>
 
-							<small class="text-muted d-block mb-3">How point-buy cost works: base scores start at 8; raising a score costs points (9=1,10=2,11=3,12=4,13=5,14=7,15=9). Total budget: 27 points. The editor will auto-optimize these for your chosen class.</small>
 
+
+							<button type="button" class="ve-btn ve-btn-success btn-sm btn-block" id="optimize-for-class">
+								Auto-Optimize for ${className}
+							</button>
 						</div>
 					</div>
 
@@ -9437,15 +10484,14 @@ class CharacterEditorPage {
 			</div>
 		`;
 
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Assign Ability Scores",
-			hasFooter: true,
-			isWidth100: true,
-			isUncappedHeight: true,
-			isHeaderBorder: true,
-			backdrop: 'static', // Prevent dismissal by clicking outside
-			keyboard: false     // Prevent dismissal by escape key
-		});
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Assign Ability Scores",
+		hasFooter: true,
+		isWidth100: true,
+		isUncappedHeight: true,
+		isHeaderBorder: true,
+		isPermanent: true
+	});
 
 		$modalInner.html(modalContent);
 
@@ -9470,13 +10516,6 @@ class CharacterEditorPage {
 
 		// Initialize point buy calculation
 		this.updatePointBuyCalculation();
-
-		// Auto-run optimization on modal open so user doesn't need to click
-		try {
-			this.autoOptimizeAbilityScores($modalInner);
-		} catch (e) {
-			console.warn('Auto-optimize failed on modal open:', e);
-		}
 	}
 
 	getAbilityRecommendationsForClass(className) {
@@ -9547,7 +10586,9 @@ class CharacterEditorPage {
 		});
 
 		// Handle auto-optimize button
-		// Note: Auto-optimize button removed. The modal now auto-runs optimization on open.
+		$modal.find('#optimize-for-class').click(function() {
+			self.autoOptimizeAbilityScores($modal);
+		});
 	}
 
 	updatePointBuyCalculation() {
@@ -9641,119 +10682,28 @@ class CharacterEditorPage {
 	}
 
 	autoOptimizeAbilityScores($modal) {
-		console.log('Auto-optimizing ability scores for class...');
+		console.log('Auto-optimizing ability scores for class using standard array...');
 
-		// Reset all scores to 8
+		// Standard array values: 15, 14, 13, 12, 10, 8
+		const standardScores = [15, 14, 13, 12, 10, 8];
 		const abilities = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
-		abilities.forEach(ability => {
-			$modal.find(`#${ability}-score`).val(8);
-		});
 
 		// Get class priorities from the levelUpState
 		const className = this.levelUpState?.characterData?.class?.[0]?.name || 'Fighter';
 		const numericPriorities = this.getClassAbilityPriorities([{ name: className }]);
 
-		// Order abilities by priority: primary, secondary, others
+		// Sort abilities by priority (highest priority first)
 		const orderedAbilities = Object.entries(numericPriorities)
 			.sort(([, a], [, b]) => b - a)
 			.map(([ability]) => ability);
 
-		const primary = orderedAbilities.slice(0, 1);
-		const secondary = orderedAbilities.slice(1, 2);
-
-		const allocationPlan = [
-			...primary.map(ability => ({ ability, priority: 1 })),
-			...secondary.map(ability => ({ ability, priority: 2 })),
-			...abilities.filter(ability => !primary.includes(ability) && !secondary.includes(ability)).map(ability => ({ ability, priority: 3 }))
-		];
-
-		const BUDGET = 27;
-
-		// Try a small backtracking search to find an allocation that uses exactly the budget
-		const self = this;
-		let bestAllocation = null;
-		let bestScore = -Infinity;
-
-		// Weighting by priority to prefer primary/secondary increases
-		const priorityWeight = p => (p === 1 ? 100 : p === 2 ? 50 : 10);
-
-		function dfs(idx, accCost, currScores) {
-			if (accCost > BUDGET) return;
-			if (idx === allocationPlan.length) {
-				if (accCost === BUDGET) {
-					// Compute weighted score to pick the best allocation among exact-budget solutions
-					let weighted = 0;
-					allocationPlan.forEach(({ ability, priority }) => {
-						weighted += (currScores[ability] || 8) * priorityWeight(priority);
-					});
-					if (weighted > bestScore) {
-						bestScore = weighted;
-						bestAllocation = Object.assign({}, currScores);
-					}
-				}
-				return;
-			}
-
-			const { ability } = allocationPlan[idx];
-			// Try higher scores first (prefer stronger primary/secondary)
-			for (let score = 15; score >= 8; --score) {
-				const cost = self.getPointBuyCost(8, score);
-				const newCost = accCost + cost;
-				if (newCost > BUDGET) continue;
-				currScores[ability] = score;
-				dfs(idx + 1, newCost, currScores);
-			}
-			// cleanup not strictly necessary because currScores gets overwritten, but keep tidy
-			delete currScores[ability];
-		}
-
-		dfs(0, 0, {});
-
-		if (bestAllocation) {
-			// Apply the exact allocation found
-			abilities.forEach(ability => {
-				const val = bestAllocation[ability] || 8;
-				$modal.find(`#${ability}-score`).val(val);
-			});
-		} else {
-			// Fallback to greedy allocation if no exact-budget allocation found
-			let remainingPoints = BUDGET;
-			const costTo15 = this.getPointBuyCost(8, 15);
-			const costTo13 = this.getPointBuyCost(8, 13);
-
-			allocationPlan.forEach(({ ability, priority }) => {
-				const $input = $modal.find(`#${ability}-score`);
-				let targetScore = 8;
-
-				if (priority === 1 && remainingPoints >= costTo15) {
-					targetScore = 15;
-					remainingPoints -= costTo15;
-				} else if (priority === 2 && remainingPoints >= costTo13) {
-					targetScore = 13;
-					remainingPoints -= costTo13;
-				}
-
-				$input.val(targetScore);
-			});
-
-			// Second pass: spend remaining points greedily
-			while (remainingPoints > 0) {
-				let pointsSpent = false;
-				for (let { ability } of allocationPlan) {
-					const $input = $modal.find(`#${ability}-score`);
-					const currentScore = parseInt($input.val(), 10) || 8;
-					if (currentScore >= 15) continue;
-					const costToIncrease = this.getPointBuyCost(8, currentScore + 1) - this.getPointBuyCost(8, currentScore);
-					if (remainingPoints >= costToIncrease) {
-						$input.val(currentScore + 1);
-						remainingPoints -= costToIncrease;
-						pointsSpent = true;
-						break;
-					}
-				}
-				if (!pointsSpent) break;
-			}
-		}
+		// Assign standard array scores to abilities based on priority
+		// Highest priority gets 15, next gets 14, etc.
+		abilities.forEach(ability => {
+			const priorityIndex = orderedAbilities.indexOf(ability);
+			const score = standardScores[priorityIndex];
+			$modal.find(`#${ability}-score`).val(score);
+		});
 
 		// Update the calculation and trigger input events
 		abilities.forEach(ability => {
@@ -9782,184 +10732,394 @@ class CharacterEditorPage {
 
 		// For level 0 characters, generate the complete character immediately
 		if (this.levelUpState.currentLevel === 0) {
-			// Extract user choices
-			const userChoices = {
-				characterName: this.levelUpState.characterData.name,
-				characterRace: this.level0WizardData?.race || this.levelUpState.characterData.race,
-				selectedClass: this.levelUpState.characterData.class?.[0]?.name,
-				abilityScores: scores
-			};
-
-			console.log('Generating complete level 1 character with choices:', userChoices);
-
-			// Generate complete character using existing working function
-			let completeCharacter = await this.generateRandomCharacterAtLevel(
-				1, // Level 1
-				userChoices.characterName || 'Adventurer',
-				'USER_CREATED',
-				userChoices.selectedClass || 'Fighter',
-				userChoices.characterRace || this.generateRandomNonHumanRace(),
-				this.level0WizardData?.background || null,
-				this.level0WizardData?.alignment || null
-			);
-
-			console.log('Generated complete character:', completeCharacter);
-
-			// Override the randomly generated ability scores with user's choices
-			if (userChoices.abilityScores) {
-				if (completeCharacter) {
-					console.log('Applying user ability scores to complete character');
-					Object.assign(completeCharacter, userChoices.abilityScores);
-
-					// Recalculate derived stats with user's ability scores
-					const dexMod = Math.floor((userChoices.abilityScores.dex - 10) / 2);
-					const wisMod = Math.floor((userChoices.abilityScores.wis - 10) / 2);
-					const conMod = Math.floor((userChoices.abilityScores.con - 10) / 2);
-
-					// Determine numeric AC (handle existing array or number)
-					let numericAc = 10 + dexMod;
-					if (Array.isArray(completeCharacter.ac)) {
-						const existingMax = Math.max(...completeCharacter.ac.map(e => (e && e.ac) || 0));
-						numericAc = Math.max(existingMax, numericAc);
-					} else if (typeof completeCharacter.ac === 'number') {
-						numericAc = Math.max(completeCharacter.ac, numericAc);
-					}
-					// Normalize to array format expected by renderer
-					completeCharacter.ac = [{ ac: numericAc, from: ['Calculated'] }];
-
-					const profBonus = this.getProficiencyBonus(1);
-					const perceptionBonus = this.hasSkillProficiency("perception", completeCharacter.class) ? profBonus : 0;
-					completeCharacter.passive = 10 + wisMod + perceptionBonus;
-
-					if (completeCharacter.class?.[0]) {
-						const hitDie = this.getClassHitDie(completeCharacter.class[0].name) || 8;
-						const hpVal = Math.max(1, hitDie + conMod);
-						completeCharacter.hp = { average: hpVal, formula: `${hitDie}+${conMod}`, current: hpVal, max: hpVal, temp: 0 };
-					}
-				} else {
-					// Generation failed; create a minimal character object and apply scores
-					console.error('generateRandomCharacterAtLevel returned null/undefined. Creating fallback character object.');
-					const dex = userChoices.abilityScores.dex || 10;
-					const wis = userChoices.abilityScores.wis || 10;
-					const con = userChoices.abilityScores.con || 10;
-					const dexMod = Math.floor((dex - 10) / 2);
-					const wisMod = Math.floor((wis - 10) / 2);
-					const conMod = Math.floor((con - 10) / 2);
-
-					const fallbackHp = Math.max(1, (this.getClassHitDie(userChoices.selectedClass) || 8) + conMod);
-					completeCharacter = Object.assign({
-						name: userChoices.characterName || 'Adventurer',
-						class: [{ name: userChoices.selectedClass || 'Fighter', level: 1 }],
-						race: userChoices.characterRace || this.generateRandomNonHumanRace(),
-						ac: [{ ac: 10 + dexMod, from: ['Calculated'] }],
-						passive: 10 + wisMod,
-						hp: { average: fallbackHp, formula: `${fallbackHp}`, current: fallbackHp, max: fallbackHp, temp: 0 }
-					}, userChoices.abilityScores);
-				}
+			
+			// Use the comprehensive character generation but with user's specific choices
+			const finalName = this.levelUpState.characterData.name;
+			const forcedRace = this.level0WizardData?.race || null;
+			const forcedAlignment = this.level0WizardData?.alignment || null;
+			const forcedBackground = this.level0WizardData?.background || null;
+			const selectedClass = this.levelUpState.characterData.class?.[0] || null;
+			
+			console.log('=== USER SELECTION DEBUGGING ===');
+			console.log('Race from level0WizardData:', forcedRace);
+			console.log('Race type:', typeof forcedRace);
+			if (forcedRace) {
+				console.log('Race keys:', Object.keys(forcedRace));
+				console.log('Race name:', forcedRace.name);
+				console.log('Race source:', forcedRace.source);
+			}
+			console.log('Class from levelUpState:', selectedClass);
+			if (selectedClass && selectedClass.subclass) {
+				console.log('User selected subclass:', selectedClass.subclass);
+			} else {
+				console.log('WARNING: No subclass found in user selection!');
+			}
+			console.log('=================================')
+			
+			console.log('Generating level 1 character with user choices:', {
+				name: finalName,
+				race: forcedRace,
+				alignment: forcedAlignment, 
+				background: forcedBackground,
+				class: selectedClass,
+				scores: scores
+			});
+			
+			// Build complete character using user's exact selections but with full generation system
+			const completeCharacter = await this.generateComprehensiveCharacterFromSelections({
+				name: finalName,
+				level: 1,
+				race: forcedRace,
+				classes: selectedClass ? [selectedClass] : [],
+				background: forcedBackground,
+				alignment: forcedAlignment,
+				abilities: scores
+			});
+			
+			if (!completeCharacter) {
+				console.error('Failed to build character from user selections');
+				return;
 			}
 
 			// Check if this is a spellcasting class and we need spell selection
 			console.log('=== LEVEL 0→1 CHARACTER CREATION SPELL CHECK ===');
-			console.log('Complete character:', completeCharacter);
-			const className = completeCharacter.class?.[0]?.name;
-			console.log('Character class name:', className);
-			console.log('Character class object:', completeCharacter.class?.[0]);
-			let isSpellcaster = this.isSpellcastingClass(className);
-			console.log('Is spellcaster:', isSpellcaster);
-			console.log('Spellcasting classes list:', ['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Warlock', 'Wizard', 'Paladin', 'Ranger']);
-
-			// AGGRESSIVE FALLBACK: If not detected as spellcaster, try more checks
-			if (!isSpellcaster) {
-				console.log('=== AGGRESSIVE FALLBACK DETECTION FOR LEVEL 0→1 ===');
-				const classNameLower = (className || '').toLowerCase();
-				const spellTerms = ['bard', 'cleric', 'druid', 'sorcerer', 'warlock', 'wizard', 'paladin', 'ranger', 'artificer'];
-				const isLikelySpellcaster = spellTerms.some(term => classNameLower.includes(term));
-
-				console.log('Aggressive check - class name lower:', classNameLower);
-				console.log('Aggressive check - is likely spellcaster:', isLikelySpellcaster);
-
-				if (isLikelySpellcaster) {
-					console.log('🚨 FORCING spell selection via aggressive fallback for level 0→1');
-					isSpellcaster = true;
-				}
-			}
-
-			if (isSpellcaster) {
-				// For spellcasting classes, let the user choose their level 1 spells
-				console.log('Level 1 spellcasting character detected, showing spell selection');
-
-				// Update the ACE editor with the character first
+			if (selectedClass && this.isSpellcastingClass(selectedClass.name)) {
+				console.log(`${selectedClass.name} is a spellcasting class, checking if spell selection is needed`);
+				
+				// Store the completed character first
 				this.ace.setValue(JSON.stringify(completeCharacter, null, 2), 1);
 				this.renderCharacter();
-
-				// Set up level up state for spell selection only
-				this.levelUpState = {
-					characterData: completeCharacter,
-					targetLevel: 1,
-					currentLevel: 0,
-					newLevel: 1,
-					pendingFeatures: [{
-						type: 'spells',
-						feature: {
-							name: 'Level 1 Spell Selection',
-							entries: [`Choose your starting spells for your ${completeCharacter.class[0].name} spell list.`],
-							requiresChoice: true,
-							choiceType: 'spells'
-						},
-						className: completeCharacter.class[0].name,
-						classLevel: 1
-					}],
-					currentFeatureIndex: 0,
-					choices: []
-				};
-
-				// Show spell selection modal
-				this.showNextFeatureChoice();
-				return;
+				
+				// Try to open spell selection, but don't show alerts if it fails
+				try {
+					await this.openSpellSelectionModal(selectedClass);
+				} catch (error) {
+					console.log('Spell selection not available or not needed, completing character creation');
+					// Complete character creation without spell selection
+					this.level0WizardData = null;
+					this.wizardState = null;
+					if (this.$modal) {
+						this.$modal.modal('hide');
+					}
+				}
+			} else {
+				console.log('Non-spellcasting class or no class selected, finalizing character');
+				
+				// Complete the character creation
+				this.ace.setValue(JSON.stringify(completeCharacter, null, 2), 1);
+				this.renderCharacter();
+				
+				// Clear wizard state
+				this.level0WizardData = null;
+				this.wizardState = null;
+				
+				// Close the modal
+				if (this.$modal) {
+					this.$modal.modal('hide');
+				}
 			}
-
-			// For non-spellcasting classes, spells are already included from generateRandomCharacterAtLevel
-
-			// Update the ACE editor with the complete character
-			console.log('Setting complete character in editor');
-			this.ace.setValue(JSON.stringify(completeCharacter, null, 2), 1);
-
-			// Re-render character
-			this.renderCharacter();
-
-			// Update button visibility now that editor content changed
-			this.updateButtonVisibility();
-
-			// Show success message
-			document.getElementById('message').textContent = 'Level 1 character created successfully!';
-			document.getElementById('message').style.color = 'green';
-
-			// Clear level up state since we're done
-			this.levelUpState = null;
-
-			// Recalculate button visibility after clearing level up state
-			this.updateButtonVisibility();
-
-			console.log('=== LEVEL 0 CHARACTER CREATION COMPLETE ===');
-			return;
+		} else {
+			// For existing characters leveling up, use the dedicated method
+			await this.handleExistingCharacterAbilityScores(scores);
 		}
+	}
 
-		// For regular level ups (non-level 0), continue with the normal flow
-	Object.assign(this.levelUpState.characterData, scores);
-	// Normalize AC into array shape
-	const computedAc = 10 + Math.floor((scores.dex - 10) / 2);
-	this.levelUpState.characterData.ac = [{ ac: computedAc, from: ['Calculated'] }];
-	this.levelUpState.characterData.passive = 10 + Math.floor((scores.wis - 10) / 2);
+	// Load race data from JSON file
+	async loadRaceData(raceName, source = "PHB") {
+		try {
+			const response = await fetch('data/races.json');
+			const data = await response.json();
+			const races = data.race || [];
+			
+			// Find the race by name and source
+			const raceData = races.find(race => 
+				race.name === raceName && 
+				(race.source === source || (!race.source && source === "PHB"))
+			);
+			
+			if (raceData) {
+				console.log(`Loaded race data for ${raceName}:`, raceData);
+				return raceData;
+			} else {
+				console.warn(`Race ${raceName} from source ${source} not found in race data`);
+				return null;
+			}
+		} catch (error) {
+			console.error('Error loading race data:', error);
+			return null;
+		}
+	}
 
-		this.levelUpState.choices.push({
-			type: 'abilityScores',
-			scores: scores,
-			feature: {
-				name: 'Ability Score Assignment',
-				entries: ['Assigned ability scores for character creation.']
+	// Generate a comprehensive character from user selections using existing generation system
+	async generateComprehensiveCharacterFromSelections(selections) {
+		console.log('Generating comprehensive character from user selections:', selections);
+		
+		try {
+			const finalLevel = selections.level || 1;
+			
+			// Prepare user's selections for the generation system
+			const forcedRace = selections.race;
+			const forcedClass = selections.classes?.[0]?.name;
+			const forcedAlignment = selections.alignment;
+			const forcedBackground = selections.background;
+			
+			console.log('=== RACE DEBUGGING ===');
+			console.log('Original race selection:', forcedRace);
+			
+			// Ensure we have proper race data structure
+			let raceForGeneration = null;
+			if (forcedRace) {
+				if (typeof forcedRace === 'string') {
+					// If it's just a string, find the full race data
+					const raceData = await this.loadRaceData(forcedRace);
+					if (raceData) {
+						raceForGeneration = {
+							name: raceData.name,
+							source: raceData.source
+						};
+					}
+				} else if (forcedRace.name) {
+					// If it's already an object with name
+					raceForGeneration = {
+						name: forcedRace.name,
+						source: forcedRace.source || "PHB"
+					};
+				}
+			}
+			
+			console.log('Race prepared for generation:', raceForGeneration);
+			
+			// Use the existing comprehensive generation but with forced user choices
+			console.log('Calling generateRandomCharacterAtLevel with user choices preserved...');
+			const baseCharacter = await this.generateRandomCharacterAtLevel(
+				finalLevel,
+				selections.name,
+				this.getWizardSourceName(),
+				forcedClass,
+				raceForGeneration, // Pass the full race object, not just name
+				forcedBackground,
+				forcedAlignment
+			);
+			
+			if (!baseCharacter) {
+				console.error('Failed to generate base character');
+				return null;
+			}
+			
+			console.log('=== BASE CHARACTER RACE CHECK ===');
+			console.log('Generated character race:', baseCharacter.race);
+			
+			// If race is still empty, manually set it from our selection
+			if ((!baseCharacter.race || !baseCharacter.race.name) && raceForGeneration) {
+				console.log('Race missing from generated character, manually setting it...');
+				const raceData = await this.loadRaceData(raceForGeneration.name, raceForGeneration.source);
+				if (raceData) {
+					// Set race as object (not array) to match expected structure
+					baseCharacter.race = {
+						name: raceData.name,
+						source: raceData.source,
+						displayText: raceData.name
+					};
+					
+					// Apply race stats
+					baseCharacter.size = raceData.size || "M";
+					if (raceData.speed) {
+						baseCharacter.speed = raceData.speed;
+					}
+					
+					console.log('Manually set race in character:', baseCharacter.race);
+				}
+			}
+			
+			// Override the random ability scores with user's chosen scores
+			if (selections.abilities) {
+				console.log('Applying user ability scores:', selections.abilities);
+				Object.keys(selections.abilities).forEach(ability => {
+					if (baseCharacter[ability] !== undefined) {
+						baseCharacter[ability] = selections.abilities[ability];
+					}
+				});
+				
+				// Apply racial ability score bonuses to user's base scores
+				if (baseCharacter.race && raceForGeneration) {
+					const raceData = await this.loadRaceData(raceForGeneration.name, raceForGeneration.source);
+					if (raceData?.ability) {
+						raceData.ability.forEach(abilityData => {
+							Object.keys(abilityData).forEach(ability => {
+								if (baseCharacter[ability] && typeof abilityData[ability] === 'number') {
+									baseCharacter[ability] += abilityData[ability];
+									console.log(`Applied racial bonus: +${abilityData[ability]} ${ability} = ${baseCharacter[ability]}`);
+								}
+							});
+						});
+					}
+				}
+				
+				// Recalculate derived stats with new ability scores
+				const dexMod = Math.floor((baseCharacter.dex - 10) / 2);
+				const wisMod = Math.floor((baseCharacter.wis - 10) / 2);
+				const conMod = Math.floor((baseCharacter.con - 10) / 2);
+				const profBonus = this.getProficiencyBonus(finalLevel);
+				
+				// Update AC if it exists
+				if (baseCharacter.ac && Array.isArray(baseCharacter.ac)) {
+					baseCharacter.ac[0].ac = 10 + dexMod;
+				}
+				
+				// Update passive perception
+				const perceptionBonus = this.hasSkillProficiency("perception", baseCharacter.class) ? profBonus : 0;
+				baseCharacter.passive = 10 + wisMod + perceptionBonus;
+				
+				// Update HP with new CON modifier
+				if (baseCharacter.hp && baseCharacter.class?.[0]) {
+					const hitDie = this.getClassHitDie(baseCharacter.class[0].name) || 8;
+					const hpVal = Math.max(1, hitDie + conMod);
+					baseCharacter.hp.average = hpVal;
+					baseCharacter.hp.current = hpVal;
+					baseCharacter.hp.max = hpVal;
+				}
+			}
+			
+			// Ensure user's subclass selection is preserved
+			if (selections.classes?.[0]?.subclass && baseCharacter.class?.[0]) {
+				console.log('Preserving user subclass selection:', selections.classes[0].subclass);
+				baseCharacter.class[0].subclass = selections.classes[0].subclass;
+			}
+			
+			// Add user-selected spells if the character is a spellcaster
+			if (selections.spells && baseCharacter.class?.length > 0) {
+				console.log('Adding user-selected spells:', selections.spells);
+				
+				// Check if character is a spellcaster
+				const casterClasses = baseCharacter.class.filter(cls =>
+					["Wizard", "Sorcerer", "Warlock", "Bard", "Cleric", "Druid", "Paladin", "Ranger"].includes(cls.name)
+				);
+				
+				if (casterClasses.length > 0) {
+					// Build spell structure from user selections only
+					baseCharacter.spells = this.buildSpellStructureFromSelections(selections.spells, casterClasses, baseCharacter);
+				}
+			}
+			
+			console.log('Generated comprehensive character with user choices preserved:', baseCharacter);
+			return baseCharacter;
+			
+		} catch (error) {
+			console.error('Error generating comprehensive character from selections:', error);
+			return null;
+		}
+	}
+
+	/**
+	 * Build spell structure from user selections only (no random spells)
+	 */
+	buildSpellStructureFromSelections(userSpells, casterClasses, character) {
+		console.log('Building spell structure from user selections:', userSpells);
+		
+		const primaryCaster = casterClasses[0];
+		const spellcastingInfo = this.getSpellcastingInfo(primaryCaster.name);
+		
+		if (!spellcastingInfo) {
+			console.warn('No spellcasting info found for class:', primaryCaster.name);
+			return null;
+		}
+		
+		// Calculate spell DC and attack bonus
+		const abilityScore = character[spellcastingInfo.abilityKey] || 10;
+		const spellMod = Math.floor((abilityScore - 10) / 2);
+		const totalLevel = casterClasses.reduce((sum, cls) => sum + cls.level, 0);
+		const profBonus = this.getProficiencyBonus(totalLevel);
+		const spellDC = 8 + profBonus + spellMod;
+		const spellAttack = profBonus + spellMod;
+		
+		// Initialize spell structure
+		const spellStructure = {
+			dc: spellDC,
+			attackBonus: spellAttack >= 0 ? `+${spellAttack}` : `${spellAttack}`,
+			ability: spellcastingInfo.ability,
+			levels: {},
+			spellcastingAbility: spellcastingInfo.abilityKey,
+			casterProgression: this.getCasterType(primaryCaster.name)
+		};
+		
+		// Add cantrips (level 0)
+		if (userSpells.cantrips && userSpells.cantrips.length > 0) {
+			spellStructure.levels["0"] = {
+				spells: userSpells.cantrips.map(spell => 
+					typeof spell === 'string' ? spell : spell.name || spell
+				) // Ensure consistent string format
+			};
+			spellStructure.cantripsKnown = userSpells.cantrips.length;
+		}
+		
+		// Add leveled spells
+		let totalSpellsKnown = 0;
+		for (let level = 1; level <= 9; level++) {
+			const levelKey = `level${level}`;
+			if (userSpells[levelKey] && userSpells[levelKey].length > 0) {
+				// Calculate max spell slots for this level
+				const maxSlots = this.getSpellSlotsForLevel(primaryCaster, level);
+				
+				spellStructure.levels[level] = {
+					maxSlots: maxSlots,
+					slotsUsed: 0, // Start with fresh spell slots
+					spells: userSpells[levelKey].map(spell => 
+						typeof spell === 'string' ? spell : spell.name || spell
+					) // Ensure consistent string format
+				};
+				
+				totalSpellsKnown += userSpells[levelKey].length;
+			}
+		}
+		
+		// Set spells known count
+		spellStructure.spellsKnown = totalSpellsKnown;
+		
+		console.log('Built spell structure from user selections:', spellStructure);
+		return spellStructure;
+	}
+
+	// Additional helper methods for character creation
+	hasSkillProficiency(skillName, classes) {
+		// Basic skill proficiency check - this would need to be expanded based on class data
+		const skillProficiencies = {
+			"Cleric": ["history", "medicine"],
+			"Wizard": ["arcana", "history"], 
+			"Rogue": ["stealth", "sleight of hand", "perception"],
+			// Add more as needed
+		};
+		
+		if (!classes || !Array.isArray(classes) || classes.length === 0) return false;
+		
+		const className = classes[0].name;
+		const classSkills = skillProficiencies[className] || [];
+		return classSkills.includes(skillName.toLowerCase());
+	}
+
+	// Existing method continues...
+
+	// Method to handle existing character level up ability score increases
+	async handleExistingCharacterAbilityScores(scores) {
+		console.log('Applying ability score improvements to existing character');
+		
+		// Apply the ability score increases
+		Object.keys(scores).forEach(ability => {
+			const increase = scores[ability];
+			if (increase > 0 && this.levelUpState.characterData[ability]) {
+				this.levelUpState.characterData[ability] += increase;
+				console.log(`Increased ${ability} by ${increase} to ${this.levelUpState.characterData[ability]}`);
 			}
 		});
+		
+		// Update derived stats
+		this.recalculateDerivedStats();
+		
+		// Complete the level up
+		await this.finalizeLevelUp();
+	}
 
+	// Continue level up to next feature
+	proceedToNextFeature() {
 		this.levelUpState.currentFeatureIndex++;
 		setTimeout(() => {
 			this.showNextFeatureChoice();
@@ -10052,15 +11212,22 @@ class CharacterEditorPage {
 			name: className,
 			source: classData.source || 'PHB',
 			level: 1,
-			hitDie: classData.hitDie || 'd8'
+			hitDie: classData.hitDie || 'd8',
+			currentHitDice: 1 // New class starts with 1 unused hit die
 		};
 
 		if (subclass) {
+			console.log('=== ADDING SUBCLASS TO NEW CLASS ENTRY ===');
+			console.log('Subclass parameter:', subclass);
 			newClassEntry.subclass = {
 				name: subclass.name,
 				shortName: subclass.shortName || subclass.name,
 				source: subclass.source || 'PHB'
 			};
+			console.log('New class entry with subclass:', newClassEntry);
+		} else {
+			console.log('=== NO SUBCLASS PROVIDED ===');
+			console.log('Subclass parameter was null/undefined');
 		}
 
 		this.levelUpState.characterData.class.push(newClassEntry);
@@ -10107,6 +11274,32 @@ class CharacterEditorPage {
 				className: className,
 				isMulticlass: false
 			});
+
+			// Add skill selection as the second feature for first class
+			allFeatures.push({
+				type: 'skillSelection',
+				feature: {
+					name: 'Skill Proficiencies',
+					entries: [`Choose your skill proficiencies from the ${className} class list.`]
+				},
+				className: className,
+				isMulticlass: false
+			});
+		} else if (isMulticlassing) {
+			// For multiclassing, check if this class grants any limited proficiencies
+			const multiclassProfs = this.getMulticlassProficiencies(className, classInfo);
+			if (multiclassProfs.skills.length > 0) {
+				allFeatures.push({
+					type: 'multiclassSkillSelection',
+					feature: {
+						name: 'Multiclass Skill Proficiencies',
+						entries: [`Choose limited skill proficiencies available when multiclassing into ${className}.`]
+					},
+					className: className,
+					isMulticlass: true,
+					multiclassOptions: multiclassProfs
+				});
+			}
 		}
 
 		// Add the class features
@@ -10260,17 +11453,20 @@ class CharacterEditorPage {
 		const nextLevel = (classEntry.level || 1) + 1;
 		const className = classEntry.name;
 
+		// Check if next level is an ASI level for this class
+		const isASI = this.isASILevel(nextLevel, [classEntry]);
+
 		// Common feature milestones across classes
 		const commonMilestones = {
 			2: "Class feature",
 			3: "Subclass choice/feature",
-			4: "Ability Score Improvement",
-			5: "Major class feature",
-			8: "Ability Score Improvement",
-			12: "Ability Score Improvement",
-			16: "Ability Score Improvement",
-			19: "Ability Score Improvement"
+			5: "Major class feature"
 		};
+
+		// Add ASI dynamically if applicable
+		if (isASI) {
+			commonMilestones[nextLevel] = "Ability Score Improvement";
+		}
 
 		// Class-specific notable levels
 		const classMilestones = {
@@ -10394,7 +11590,15 @@ class CharacterEditorPage {
 		console.log('isSpellcastingClass result:', this.isSpellcastingClass(classInfo.name));
 		console.log('New level:', newLevel);
 
-		if (classInfo.spellcastingAbility || this.isSpellcastingClass(classInfo.name)) {
+		// Enhanced spellcasting detection - prioritize known class names over data properties
+		const isKnownSpellcaster = this.isSpellcastingClass(classInfo.name);
+		const hasSpellcastingAbility = !!classInfo.spellcastingAbility;
+
+		console.log(`Spellcasting detection for ${classInfo.name}:`);
+		console.log(`- isKnownSpellcaster: ${isKnownSpellcaster}`);
+		console.log(`- hasSpellcastingAbility: ${hasSpellcastingAbility}`);
+
+		if (isKnownSpellcaster || hasSpellcastingAbility) {
 			console.log(`✅ Adding spell selection feature for ${classInfo.name} at level ${newLevel}`);
 			// This is a spellcasting class, add spell selection feature
 			features.push({
@@ -10424,6 +11628,11 @@ class CharacterEditorPage {
 			const spellTerms = ['bard', 'cleric', 'druid', 'sorcerer', 'warlock', 'wizard', 'paladin', 'ranger', 'artificer'];
 			const isLikelySpellcaster = spellTerms.some(term => classNameLower.includes(term));
 
+			console.log(`🚨 FALLBACK DETECTION FOR: "${className}"`);
+			console.log(`🚨 Class name lower: "${classNameLower}"`);
+			console.log(`🚨 Spell terms: ${spellTerms.join(", ")}`);
+			console.log(`🚨 Is likely spellcaster: ${isLikelySpellcaster}`);
+
 			// Also check if the character already has spells (indicating they're a spellcaster)
 			const character = this.levelUpState?.characterData;
 			const hasExistingSpells = character?.spells || character?.spell;
@@ -10432,7 +11641,7 @@ class CharacterEditorPage {
 			console.log('Is likely spellcaster:', isLikelySpellcaster);
 			console.log('Has existing spells:', !!hasExistingSpells);
 
-			if (isLikelySpellcaster || hasExistingSpells || newLevel > 1) {
+			if (isLikelySpellcaster || hasExistingSpells) {
 				console.log('🚨 FORCING spell selection via fallback detection');
 				features.push({
 					type: 'spells',
@@ -10490,12 +11699,24 @@ class CharacterEditorPage {
 		} else if (feature.name === 'Fighting Style' || feature.name.includes('Fighting Style')) {
 			enhancedFeature.requiresChoice = true;
 			enhancedFeature.choiceType = 'fightingStyle';
+		} else if (feature.name === 'Metamagic' || feature.name.includes('Metamagic')) {
+			enhancedFeature.requiresChoice = true;
+			enhancedFeature.choiceType = 'metamagic';
+		} else if (feature.name === 'Draconic Ancestry' || feature.name.includes('Draconic Ancestry')) {
+			enhancedFeature.requiresChoice = true;
+			enhancedFeature.choiceType = 'dragonbornAncestry';
 		} else if (feature.name === 'Expertise' || feature.name.includes('Expertise')) {
 			enhancedFeature.requiresChoice = true;
 			enhancedFeature.choiceType = 'expertise';
 		} else if (feature.name === 'Maneuvers' || feature.name.includes('Maneuver')) {
 			enhancedFeature.requiresChoice = true;
 			enhancedFeature.choiceType = 'maneuvers';
+		} else if (feature.name.includes('Invocation') || feature.name === 'Eldritch Invocations') {
+			enhancedFeature.requiresChoice = true;
+			enhancedFeature.choiceType = 'invocation';
+		} else if (feature.name === 'Pact Boon' || feature.name.includes('Pact Boon')) {
+			enhancedFeature.requiresChoice = true;
+			enhancedFeature.choiceType = 'pactBoon';
 		} else if (feature.entries && Array.isArray(feature.entries)) {
 			// Check entries for choice indicators
 			const entriesText = feature.entries.join(' ').toLowerCase();
@@ -10507,10 +11728,20 @@ class CharacterEditorPage {
 				// More specific detection based on content
 				if (entriesText.includes('fighting style')) {
 					enhancedFeature.choiceType = 'fightingStyle';
+				} else if (entriesText.includes('metamagic')) {
+					enhancedFeature.choiceType = 'metamagic';
+				} else if (entriesText.includes('draconic ancestry') || entriesText.includes('dragon ancestry')) {
+					enhancedFeature.choiceType = 'dragonbornAncestry';
 				} else if (entriesText.includes('spell') && (entriesText.includes('learn') || entriesText.includes('know'))) {
 					enhancedFeature.choiceType = 'spells';
-				} else if (entriesText.includes('expertise') || entriesText.includes('proficiency bonus')) {
+				} else if (entriesText.includes('expertise') || (entriesText.includes('proficiency bonus') && entriesText.includes('double'))) {
 					enhancedFeature.choiceType = 'expertise';
+				} else if (entriesText.includes('invocation')) {
+					enhancedFeature.choiceType = 'invocation';
+				} else if (entriesText.includes('pact boon')) {
+					enhancedFeature.choiceType = 'pactBoon';
+				} else if (entriesText.includes('cantrip') && entriesText.includes('learn')) {
+					enhancedFeature.choiceType = 'spells';
 				}
 			}
 		}
@@ -10681,6 +11912,18 @@ class CharacterEditorPage {
 		return null;
 	}
 
+	getRacialSpells(race) {
+		const raceName = race?.name || race;
+		const racialSpells = {
+			'Githyanki': ['mage hand'],
+			'Tiefling': ['thaumaturgy'],
+			'High Elf': [], // They get a free cantrip choice
+			'Drow': ['dancing lights'],
+			'Forest Gnome': ['minor illusion']
+		};
+		return racialSpells[raceName] || [];
+	}
+
 	async processLevelUpFeatures(features) {
 		this.levelUpState.pendingFeatures = features;
 		this.levelUpState.currentFeatureIndex = 0;
@@ -10707,6 +11950,12 @@ class CharacterEditorPage {
 		if (feature.type === 'abilityScores') {
 			// Handle ability score assignment for level 0 characters
 			await this.showAbilityScoreAssignmentModal(feature.className);
+		} else if (feature.type === 'skillSelection') {
+			// Handle class skill selection for first class
+			await this.showClassSkillSelectionForLevelUp(feature.className);
+		} else if (feature.type === 'multiclassSkillSelection') {
+			// Handle multiclass skill selection
+			await this.showMulticlassSkillSelectionForLevelUp(feature.className, feature.multiclassOptions);
 		} else if (feature.type === 'optional') {
 			await this.showOptionalFeatureChoice(feature);
 		} else if (feature.feature.requiresChoice) {
@@ -10726,21 +11975,37 @@ class CharacterEditorPage {
 
 	async showFeatureChoiceModal(featureData) {
 		const feature = featureData.feature;
+		const featureName = feature.name?.toLowerCase() || '';
 
 		// Check if this is an ASI level that can take feats instead
 		if (feature.choiceType === 'abilityScoreImprovement') {
 			this.showFeatOrAsiChoiceModal(feature);
-		} else if (feature.choiceType === 'fightingStyle') {
-			this.showFightingStyleChoiceModal(feature, featureData);
-		} else if (feature.choiceType === 'expertise') {
+		} else if (feature.choiceType === 'fightingStyle' || featureName.includes('fighting style')) {
+			await this.showFightingStyleChoiceModal(feature, featureData);
+		} else if (feature.choiceType === 'metamagic' || featureName.includes('metamagic')) {
+			await this.showMetamagicChoiceModal(feature, featureData);
+		} else if (feature.choiceType === 'dragonbornAncestry' || featureName.includes('draconic ancestry')) {
+			await this.showDragonbornAncestryChoice(feature, featureData);
+		} else if (feature.choiceType === 'expertise' || featureName.includes('expertise')) {
 			this.showExpertiseChoiceModal(feature, featureData);
-		} else if (feature.choiceType === 'spells') {
+		} else if (feature.choiceType === 'spells' || featureName.includes('spells known') || featureName.includes('learn spells')) {
 			this.showSpellChoiceModal(feature, featureData);
-		} else if (feature.choiceType === 'maneuvers') {
+		} else if (feature.choiceType === 'maneuvers' || featureName.includes('maneuver')) {
 			this.showManeuverChoiceModal(feature, featureData);
+		} else if (feature.choiceType === 'invocation' || featureName.includes('invocation')) {
+			this.showEldritchInvocationChoiceModal(feature, featureData);
+		} else if (feature.choiceType === 'pactBoon' || featureName.includes('pact boon')) {
+			this.showPactBoonChoiceModal(feature, featureData);
+		} else if (featureName.includes('cantrip') && featureName.includes('learn')) {
+			this.showFeatureSpellChoiceModal(feature, featureData);
 		} else {
-			// Handle other types of feature choices
-			this.showGenericFeatureChoiceModal(featureData);
+			// Use the enhanced class feature choice system for features that require choices
+			if (feature.requiresChoice || featureData.requiresChoice) {
+				await this.showClassFeatureChoiceModal(feature, featureData);
+			} else {
+				// Generic fallback for unrecognized choice types
+				this.showGenericFeatureChoiceModal(feature, featureData);
+			}
 		}
 	}
 
@@ -10967,6 +12232,71 @@ class CharacterEditorPage {
 		});
 	}
 
+	characterMeetsFeatPrerequisites(feat, character) {
+		// If feat has no prerequisites, character can take it
+		if (!feat.prerequisite || feat.prerequisite.length === 0) {
+			return true;
+		}
+
+		// Get character abilities - check both nested and direct properties
+		const abilities = character.abilities || {
+			str: character.str || 10,
+			dex: character.dex || 10,
+			con: character.con || 10,
+			int: character.int || 10,
+			wis: character.wis || 10,
+			cha: character.cha || 10
+		};
+
+		// Calculate character level
+		const characterLevel = character.class ?
+			character.class.reduce((total, cls) => total + (cls.level || 1), 0) : 1;
+
+		// Get character feats (if any)
+		const characterFeats = character.feats || [];
+
+		// Check each prerequisite - all must be met
+		for (const prereq of feat.prerequisite) {
+			// Check ability score prerequisites
+			if (prereq.ability) {
+				for (const abilityReq of prereq.ability) {
+					for (const [ability, requiredScore] of Object.entries(abilityReq)) {
+						if (abilities[ability] < requiredScore) {
+							return false;
+						}
+					}
+				}
+			}
+
+			// Check level prerequisites
+			if (prereq.level && characterLevel < prereq.level) {
+				return false;
+			}
+
+			// Check feat prerequisites
+			if (prereq.feat) {
+				for (const requiredFeat of prereq.feat) {
+					// Extract feat name (handle format "feat name|source|variant")
+					const featName = requiredFeat.split('|')[0].toLowerCase();
+					const hasRequiredFeat = characterFeats.some(feat =>
+						feat.name && feat.name.toLowerCase() === featName
+					);
+					if (!hasRequiredFeat) {
+						return false;
+					}
+				}
+			}
+
+			// Check "other" prerequisites - we'll allow these for now with a warning
+			if (prereq.other) {
+				console.warn(`Feat ${feat.name} has special prerequisite: ${prereq.other}`);
+				// For now, assume player will manually verify special prerequisites
+			}
+		}
+
+		return true;
+	}
+
 	async loadAndDisplayFeats($modalInner, character) {
 		const featData = await this.loadFeatData();
 		if (!featData || !featData.feat) {
@@ -10975,7 +12305,8 @@ class CharacterEditorPage {
 		}
 
 		const feats = featData.feat;
-		let filteredFeats = [...feats];
+		// Filter feats to only show those the character meets prerequisites for
+		let filteredFeats = feats.filter(feat => this.characterMeetsFeatPrerequisites(feat, character));
 
 		// Populate the select with all feats initially
 		this.populateFeatSelect($modalInner, filteredFeats, character);
@@ -10985,10 +12316,11 @@ class CharacterEditorPage {
 			const searchTerm = e.target.value.toLowerCase();
 			if (searchTerm) {
 				filteredFeats = feats.filter(feat =>
-					feat.name.toLowerCase().includes(searchTerm)
+					feat.name.toLowerCase().includes(searchTerm) &&
+					this.characterMeetsFeatPrerequisites(feat, character)
 				);
 			} else {
-				filteredFeats = [...feats];
+				filteredFeats = feats.filter(feat => this.characterMeetsFeatPrerequisites(feat, character));
 			}
 			this.populateFeatSelect($modalInner, filteredFeats, character);
 		});
@@ -11143,36 +12475,53 @@ class CharacterEditorPage {
 		this.showFeatOrAsiChoiceModal(feature);
 	}
 
-	showFightingStyleChoiceModal(feature, featureData) {
+	async showFightingStyleChoiceModal(feature, featureData) {
+		// Determine available fighting styles based on class
+		const character = this.levelUpState.characterData;
+		const currentClass = character.class?.[this.levelUpState.selectedClassIndex]?.name || 'Fighter';
+
 		// Common fighting styles for Fighter, Paladin, Ranger
-		const fightingStyles = [
-			{ name: "Archery", description: "+2 bonus to ranged weapon attack rolls" },
-			{ name: "Defense", description: "+1 bonus to AC while wearing armor" },
-			{ name: "Dueling", description: "+2 damage when wielding a one-handed weapon with no other weapons" },
-			{ name: "Great Weapon Fighting", description: "Reroll 1s and 2s on damage dice with two-handed weapons" },
-			{ name: "Protection", description: "Use reaction and shield to impose disadvantage on attacks against nearby allies" },
-			{ name: "Two-Weapon Fighting", description: "Add ability modifier to damage of second attack when fighting with two weapons" },
-			{ name: "Blessed Warrior", description: "Learn two cantrips from the cleric spell list (Paladin only)" },
-			{ name: "Blind Fighting", description: "See in darkness within 10 feet" },
-			{ name: "Interception", description: "Reduce damage to nearby allies" },
-			{ name: "Superior Technique", description: "Learn one maneuver and gain a superiority die" },
-			{ name: "Thrown Weapon Fighting", description: "Draw and add +2 damage to thrown weapon attacks" },
-			{ name: "Unarmed Fighting", description: "Deal 1d4 + STR damage with unarmed strikes" }
+		const allFightingStyles = [
+			{ name: "Archery", description: "+2 bonus to ranged weapon attack rolls", classes: ["Fighter", "Paladin", "Ranger"] },
+			{ name: "Defense", description: "+1 bonus to AC while wearing armor", classes: ["Fighter", "Paladin", "Ranger"] },
+			{ name: "Dueling", description: "+2 damage when wielding a one-handed weapon with no other weapons", classes: ["Fighter", "Paladin", "Ranger"] },
+			{ name: "Great Weapon Fighting", description: "Reroll 1s and 2s on damage dice with two-handed weapons", classes: ["Fighter", "Paladin", "Ranger"] },
+			{ name: "Protection", description: "Use reaction and shield to impose disadvantage on attacks against nearby allies", classes: ["Fighter", "Paladin"] },
+			{ name: "Two-Weapon Fighting", description: "Add ability modifier to damage of second attack when fighting with two weapons", classes: ["Fighter", "Ranger"] },
+			{ name: "Blessed Warrior", description: "Learn two cantrips from the cleric spell list", classes: ["Paladin"] },
+			{ name: "Blind Fighting", description: "See in darkness within 10 feet", classes: ["Fighter", "Paladin", "Ranger"] },
+			{ name: "Interception", description: "Reduce damage to nearby allies", classes: ["Fighter", "Paladin"] },
+			{ name: "Superior Technique", description: "Learn one maneuver and gain a superiority die", classes: ["Fighter"] },
+			{ name: "Thrown Weapon Fighting", description: "Draw and add +2 damage to thrown weapon attacks", classes: ["Fighter", "Ranger"] },
+			{ name: "Unarmed Fighting", description: "Deal 1d4 + STR damage with unarmed strikes", classes: ["Fighter"] },
+			{ name: "Druidcraft", description: "Natural magic and wild fighting techniques", classes: ["Ranger"] },
+			{ name: "Hunter's Mark", description: "Enhanced tracking and hunting abilities", classes: ["Ranger"] }
 		];
+
+		// Filter fighting styles available to the current class
+		const availableStyles = allFightingStyles.filter(style =>
+			style.classes.includes(currentClass)
+		);
+
+		// Check for already selected fighting styles to avoid duplicates
+		const existingStyles = character.entries?.filter(entry =>
+			entry.name?.includes('Fighting Style')
+		).map(entry => entry.name) || [];
 
 		const modalContent = `
 			<p class="mb-3"><strong>Current Level:</strong> ${this.levelUpState.currentLevel}</p>
 			<p class="mb-3"><strong>New Level:</strong> ${this.levelUpState.newLevel}</p>
-			<h6>Choose Fighting Style</h6>
-			<p class="text-muted mb-3">Select a fighting style that matches your combat preferences.</p>
+			<h6>Choose Fighting Style (${currentClass})</h6>
+			<p class="text-muted mb-3">Select a fighting style that matches your combat preferences. You cannot change this later.</p>
 
 			<div class="form-group">
 				<label for="fighting-style-select"><strong>Available Fighting Styles:</strong></label>
 				<select class="form-control" id="fighting-style-select">
 					<option value="">-- Select a Fighting Style --</option>
-					${fightingStyles.map(style => `
-						<option value="${style.name}">${style.name}</option>
-					`).join('')}
+					${availableStyles.map(style => {
+						const isAlreadySelected = existingStyles.some(existing => existing.includes(style.name));
+						return `<option value="${style.name}" ${isAlreadySelected ? 'disabled' : ''}>${style.name}${isAlreadySelected ? ' (Already Selected)' : ''}</option>`;
+					}).join('')}
 				</select>
 			</div>
 
@@ -11182,11 +12531,12 @@ class CharacterEditorPage {
 			</div>
 		`;
 
-		// Create 5etools native modal
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Level Up Character - Fighting Style",
-			hasFooter: true
-		});
+	// Create 5etools native modal
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Level Up Character - Fighting Style",
+		hasFooter: true,
+		isPermanent: true
+	});
 
 		// Store modal close function
 		this.levelUpModalClose = doClose;
@@ -11239,10 +12589,432 @@ class CharacterEditorPage {
 		});
 	}
 
+	// Metamagic choice for Sorcerers
+	async showMetamagicChoiceModal(feature, featureData) {
+		const character = this.levelUpState.characterData;
+
+		const metamagicOptions = [
+			{ name: "Careful Spell", description: "Protect allies from your area effect spells", cost: "1 sorcery point" },
+			{ name: "Distant Spell", description: "Double a spell's range", cost: "1 sorcery point" },
+			{ name: "Empowered Spell", description: "Reroll damage dice", cost: "1 sorcery point" },
+			{ name: "Extended Spell", description: "Double a spell's duration", cost: "1 sorcery point" },
+			{ name: "Heightened Spell", description: "Force disadvantage on a saving throw", cost: "3 sorcery points" },
+			{ name: "Quickened Spell", description: "Cast a spell as a bonus action", cost: "2 sorcery points" },
+			{ name: "Subtle Spell", description: "Cast without verbal or somatic components", cost: "1 sorcery point" },
+			{ name: "Twinned Spell", description: "Target two creatures with a single-target spell", cost: "varies" }
+		];
+
+		// Check for already known metamagic options
+		const existingMetamagic = character.entries?.filter(entry =>
+			entry.name?.includes('Metamagic')
+		).map(entry => entry.name) || [];
+
+		// Determine how many options to choose (typically 2 at level 3, +1 more at levels 10, 17)
+		const sorcererLevel = character.class?.find(cls => cls.name === 'Sorcerer')?.level || 1;
+		const choiceCount = sorcererLevel >= 17 ? 1 : sorcererLevel >= 10 ? 1 : 2;
+
+		const modalContent = `
+			<p class="mb-3"><strong>Current Level:</strong> ${this.levelUpState.currentLevel}</p>
+			<p class="mb-3"><strong>New Level:</strong> ${this.levelUpState.newLevel}</p>
+			<h6>Choose Metamagic Options</h6>
+			<p class="text-muted mb-3">Select ${choiceCount} metamagic option${choiceCount > 1 ? 's' : ''} to enhance your spellcasting.</p>
+
+			<div class="row">
+				${metamagicOptions.map(option => {
+					const isAlreadyKnown = existingMetamagic.some(existing => existing.includes(option.name));
+					return `
+						<div class="col-md-6 mb-3">
+							<div class="card ${isAlreadyKnown ? 'border-secondary' : ''}">
+								<div class="card-body">
+									<div class="form-check">
+										<input class="form-check-input metamagic-checkbox"
+											type="checkbox"
+											value="${option.name}"
+											id="metamagic-${option.name.replace(/\s+/g, '-')}"
+											${isAlreadyKnown ? 'disabled' : ''}
+											data-max-choices="${choiceCount}">
+										<label class="form-check-label" for="metamagic-${option.name.replace(/\s+/g, '-')}">
+											<strong>${option.name}</strong>
+											${isAlreadyKnown ? '<span class="text-muted">(Known)</span>' : ''}
+											<br><small class="text-muted">Cost: ${option.cost}</small>
+											<br><span class="text-secondary">${option.description}</span>
+										</label>
+									</div>
+								</div>
+							</div>
+						</div>
+					`;
+				}).join('')}
+			</div>
+		`;
+
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Metamagic Selection",
+		hasFooter: true,
+		isWidth100: true,
+		isPermanent: true
+	});
+
+		this.levelUpModalClose = doClose;
+		$modalInner.html(modalContent);
+
+		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`)
+			.click(() => doClose(false));
+
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary" disabled>Confirm Selection</button>`)
+			.click(() => {
+				const selectedOptions = [];
+				$modalInner.find('.metamagic-checkbox:checked').each(function() {
+					const optionName = $(this).val();
+					const optionData = metamagicOptions.find(opt => opt.name === optionName);
+					selectedOptions.push(optionData);
+				});
+
+				this.levelUpState.choices.push({
+					type: 'metamagic',
+					feature: feature,
+					selections: selectedOptions,
+					count: choiceCount
+				});
+
+				this.levelUpState.currentFeatureIndex++;
+				doClose(true);
+				this.showNextFeatureChoice();
+			});
+
+		$modalFooter.append($btnCancel, $btnConfirm);
+
+		// Handle checkbox validation
+		$modalInner.find('.metamagic-checkbox').change(function() {
+			const maxChoices = parseInt($(this).data('max-choices'));
+			const checkedCount = $modalInner.find('.metamagic-checkbox:checked').length;
+			const $confirmBtn = $modalFooter.find('.ve-btn-primary');
+
+			// Disable other checkboxes if max reached
+			if (checkedCount >= maxChoices) {
+				$modalInner.find('.metamagic-checkbox:not(:checked)').prop('disabled', true);
+			} else {
+				$modalInner.find('.metamagic-checkbox:not(:disabled)').prop('disabled', false);
+			}
+
+			$confirmBtn.prop('disabled', checkedCount !== maxChoices);
+		});
+	}
+
+	// Dragonborn ancestry choice
+	async showDragonbornAncestryChoice(feature, raceData) {
+		const dragonAncestries = [
+			{ name: "Black", damageType: "Acid", breathWeapon: "5 by 30 ft. line (Dex. save)", resistance: "Acid" },
+			{ name: "Blue", damageType: "Lightning", breathWeapon: "5 by 30 ft. line (Dex. save)", resistance: "Lightning" },
+			{ name: "Brass", damageType: "Fire", breathWeapon: "5 by 30 ft. line (Dex. save)", resistance: "Fire" },
+			{ name: "Bronze", damageType: "Lightning", breathWeapon: "5 by 30 ft. line (Dex. save)", resistance: "Lightning" },
+			{ name: "Copper", damageType: "Acid", breathWeapon: "5 by 30 ft. line (Dex. save)", resistance: "Acid" },
+			{ name: "Gold", damageType: "Fire", breathWeapon: "15 ft. cone (Dex. save)", resistance: "Fire" },
+			{ name: "Green", damageType: "Poison", breathWeapon: "15 ft. cone (Con. save)", resistance: "Poison" },
+			{ name: "Red", damageType: "Fire", breathWeapon: "15 ft. cone (Dex. save)", resistance: "Fire" },
+			{ name: "Silver", damageType: "Cold", breathWeapon: "15 ft. cone (Con. save)", resistance: "Cold" },
+			{ name: "White", damageType: "Cold", breathWeapon: "15 ft. cone (Con. save)", resistance: "Cold" }
+		];
+
+		const modalContent = `
+			<h6>Choose Draconic Ancestry</h6>
+			<p class="text-muted mb-3">Select your draconic heritage, which determines your breath weapon and damage resistance.</p>
+
+			<div class="row">
+				${dragonAncestries.map(ancestry => `
+					<div class="col-md-6 mb-2">
+						<div class="card">
+							<div class="card-body p-2">
+								<div class="form-check">
+									<input class="form-check-input ancestry-radio"
+										type="radio"
+										name="dragonAncestry"
+										value="${ancestry.name}"
+										id="ancestry-${ancestry.name.toLowerCase()}">
+									<label class="form-check-label" for="ancestry-${ancestry.name.toLowerCase()}">
+										<strong>${ancestry.name} Dragon</strong>
+										<br><small class="text-muted">
+											${ancestry.damageType} damage • ${ancestry.breathWeapon}
+											<br>Resistance: ${ancestry.resistance}
+										</small>
+									</label>
+								</div>
+							</div>
+						</div>
+					</div>
+				`).join('')}
+			</div>
+		`;
+
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Dragonborn Ancestry",
+		hasFooter: true,
+		isWidth100: true,
+		isPermanent: true
+	});
+
+		this.levelUpModalClose = doClose;
+		$modalInner.html(modalContent);
+
+		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`)
+			.click(() => doClose(false));
+
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary" disabled>Confirm Selection</button>`)
+			.click(() => {
+				const selectedAncestry = $modalInner.find('input[name="dragonAncestry"]:checked').val();
+				const ancestryData = dragonAncestries.find(a => a.name === selectedAncestry);
+
+				this.levelUpState.choices.push({
+					type: 'dragonbornAncestry',
+					feature: feature,
+					ancestry: ancestryData
+				});
+
+				this.levelUpState.currentFeatureIndex++;
+				doClose(true);
+				this.showNextFeatureChoice();
+			});
+
+		$modalFooter.append($btnCancel, $btnConfirm);
+
+		// Handle selection validation
+		$modalInner.find('.ancestry-radio').change(() => {
+			const hasSelection = $modalInner.find('input[name="dragonAncestry"]:checked').length > 0;
+			$modalFooter.find('.ve-btn-primary').prop('disabled', !hasSelection);
+		});
+	}
+
 	showExpertiseChoiceModal(feature, featureData) {
-		// This would show skills available for expertise
+		// Show skills available for expertise selection
+		let character;
+		try {
+			character = JSON.parse(this.ace.getValue());
+		} catch (e) {
+			console.error('Could not parse character data', e);
+			return;
+		}
+
+		// Get skills the character is proficient in (expertise requires proficiency first)
+		const availableSkills = character.skillProficiencies || [];
+		
+		// Remove skills already with expertise
+		const skillsForExpertise = availableSkills.filter(skill => 
+			!character.expertise.includes(skill)
+		);
+
+		if (skillsForExpertise.length === 0) {
+			// No skills available for expertise
+			const {$modalInner, doClose} = UiUtil.getShowModal({
+				title: "Expertise Selection",
+				isMinHeight0: true,
+			});
+
+			$modalInner.html(`
+				<div class="text-warning">
+					<p>No skills are available for expertise. You must be proficient in a skill before gaining expertise in it.</p>
+				</div>
+			`);
+			return;
+		}
+
+		// Determine how many skills to choose
+		let choiceCount = 2; // Default for Rogue/Bard expertise
+		if (feature.entries) {
+			const entriesText = JSON.stringify(feature.entries);
+			if (entriesText.includes('two of your skill proficiencies')) {
+				choiceCount = 2;
+			} else if (entriesText.includes('one of your skill proficiencies')) {
+				choiceCount = 1;
+			}
+		}
+
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Choose Skills for Expertise",
+		isMinHeight0: true,
+		isPermanent: true
+	});
+
+		$modalInner.html(`
+			<div>
+				<p class="mb-3">Choose <strong>${choiceCount}</strong> skill${choiceCount > 1 ? 's' : ''} to gain expertise in (double proficiency bonus):</p>
+				<div class="row" id="expertiseSkillsContainer">
+					${skillsForExpertise.map(skill => `
+						<div class="col-md-6 mb-2">
+							<div class="form-check">
+								<input class="form-check-input" type="checkbox" id="expertise_${skill}" value="${skill}">
+								<label class="form-check-label" for="expertise_${skill}">
+									${skill}
+								</label>
+							</div>
+						</div>
+					`).join('')}
+				</div>
+				<div id="expertiseSelectionError" class="text-danger mt-2 d-none">
+					Please select exactly ${choiceCount} skill${choiceCount > 1 ? 's' : ''}.
+				</div>
+			</div>
+		`);
+
+		// Add footer buttons
+		const $btnCancel = $('<button class="btn btn-default mr-2">Cancel</button>').click(() => doClose());
+		const $btnConfirm = $('<button class="btn btn-primary">Confirm Selection</button>').click(() => {
+			const selectedSkills = [];
+			$modalInner.find('#expertiseSkillsContainer input[type="checkbox"]:checked').each((i, cb) => {
+				selectedSkills.push($(cb).val());
+			});
+
+			const errorDiv = $modalInner.find('#expertiseSelectionError')[0];
+			if (selectedSkills.length !== choiceCount) {
+				$(errorDiv).removeClass('d-none');
+				return;
+			}
+
+			// Add selected skills to expertise array
+			if (!character.expertise) character.expertise = [];
+			selectedSkills.forEach(skill => {
+				if (!character.expertise.includes(skill)) {
+					character.expertise.push(skill);
+				}
+			});
+
+			// Update the character data in the editor
+			this.ace.setValue(JSON.stringify(character, null, 2));
+
+			console.log(`Added expertise in: ${selectedSkills.join(', ')}`);
+			doClose();
+		});
+
+		$modalFooter.append($btnCancel).append($btnConfirm);
+	}
+
+	showSkillChoiceModal(choiceData, title, onConfirm) {
+		// Show a modal for choosing skills from a list
+		const count = choiceData.count || 1;
+		const availableSkills = choiceData.from || [];
+
+		if (availableSkills.length === 0) {
+			console.warn('No skills available for choice');
+			return;
+		}
+
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: `${title} Choice`,
+		isMinHeight0: true,
+		isPermanent: true
+	});
+
+		$modalInner.html(`
+			<div>
+				<p class="mb-3">Choose <strong>${count}</strong> skill${count > 1 ? 's' : ''}:</p>
+				<div class="row" id="skillChoiceContainer">
+					${availableSkills.map(skill => `
+						<div class="col-md-6 mb-2">
+							<div class="form-check">
+								<input class="form-check-input" type="checkbox" id="choice_${skill}" value="${skill}">
+								<label class="form-check-label" for="choice_${skill}">
+									${skill}
+								</label>
+							</div>
+						</div>
+					`).join('')}
+				</div>
+				<div id="skillChoiceError" class="text-danger mt-2 d-none">
+					Please select exactly ${count} skill${count > 1 ? 's' : ''}.
+				</div>
+			</div>
+		`);
+
+		// Add footer buttons
+		const $btnCancel = $('<button class="btn btn-default mr-2">Cancel</button>').click(() => doClose());
+		const $btnConfirm = $('<button class="btn btn-primary">Confirm Selection</button>').click(() => {
+			const selectedSkills = [];
+			$modalInner.find('#skillChoiceContainer input[type="checkbox"]:checked').each((i, cb) => {
+				selectedSkills.push($(cb).val());
+			});
+
+			const errorDiv = $modalInner.find('#skillChoiceError')[0];
+			if (selectedSkills.length !== count) {
+				$(errorDiv).removeClass('d-none');
+				return;
+			}
+
+			// Call the callback with selected skills
+			if (onConfirm) {
+				onConfirm(selectedSkills);
+			}
+
+			console.log(`Selected ${title}: ${selectedSkills.join(', ')}`);
+			doClose();
+		});
+
+		$modalFooter.append($btnCancel).append($btnConfirm);
+	}
+
+	showManeuverChoiceModal(feature, featureData) {
+		// This would show available Battle Master maneuvers
 		// For now, just show a generic choice modal
 		this.showGenericFeatureChoiceModal(featureData);
+	}
+
+	showEldritchInvocationChoiceModal(feature, featureData) {
+		// This would show available Warlock invocations
+		// For now, just show a generic choice modal
+		this.showGenericFeatureChoiceModal(featureData);
+	}
+
+	showPactBoonChoiceModal(feature, featureData) {
+		// This would show Warlock pact boon choices
+		// For now, just show a generic choice modal
+		this.showGenericFeatureChoiceModal(featureData);
+	}
+
+	showFeatureSpellChoiceModal(feature, featureData) {
+		// This would show spell choices for features that grant spells
+		// For now, just show a generic choice modal
+		this.showGenericFeatureChoiceModal(featureData);
+	}
+
+	showGenericFeatureChoiceModal(feature, featureData) {
+		// Generic modal for features that have choices but aren't specifically implemented yet
+		const modalContent = `
+			<p class="mb-3"><strong>Current Level:</strong> ${this.levelUpState.currentLevel}</p>
+			<p class="mb-3"><strong>New Level:</strong> ${this.levelUpState.newLevel}</p>
+			<h6>Feature Choice Required</h6>
+			<p class="text-muted mb-3">This feature requires choices that are not yet fully implemented in the UI.</p>
+			<div class="alert alert-info">
+				<strong>Feature:</strong> ${featureData.feature.name}<br>
+				<strong>Action Required:</strong> Please manually add your choices to the character after creation.
+			</div>
+		`;
+
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Feature Choice - Manual Selection Required",
+		hasFooter: true,
+		isPermanent: true
+	});
+
+		this.levelUpModalClose = doClose;
+		$modalInner.html(modalContent);
+
+		const $btnContinue = $(`<button class="ve-btn ve-btn-primary">Continue</button>`)
+			.click(() => {
+				// Just continue without storing specific choices
+				this.levelUpState.currentFeatureIndex++;
+				doClose(true);
+				this.showNextFeatureChoice();
+			});
+
+		$modalFooter.append($btnContinue);
+	}
+
+	showGenericRacialChoiceModal(feature, raceData) {
+		// Generic modal for racial choices
+		this.showGenericFeatureChoiceModal(feature, { feature: { name: "Racial Feature Choice" } });
+	}
+
+	showGenericBackgroundChoiceModal(feature, backgroundData) {
+		// Generic modal for background choices
+		this.showGenericFeatureChoiceModal(feature, { feature: { name: "Background Feature Choice" } });
 	}
 
 	async showSpellChoiceModal(feature, featureData) {
@@ -11271,94 +13043,198 @@ class CharacterEditorPage {
 			cls.subclass && cls.subclass.name === 'Eldritch Knight'
 		);
 
-	if (hasEldritchKnight) {
+		if (hasEldritchKnight) {
 			spellList = 'wizard';
 			schoolRestrictions = ['A', 'V']; // Abjuration and Evocation
 
-			// At level 3, Eldritch Knight learns 2 cantrips and 3 spells
-			if (this.levelUpState.newLevel === 3) {
+			// Eldritch Knight spell progression based on Fighter level
+			const fighterLevel = this.levelUpState.newLevel;
+			if (fighterLevel === 3) {
 				cantripsToLearn = 2;
 				spellsToLearn = 3;
-			} else if (this.levelUpState.newLevel === 4) {
-				spellsToLearn = 1; // Learn 1 additional spell at level 4
-			} else if (this.levelUpState.newLevel === 7) {
-				spellsToLearn = 1; // Learn 1 additional spell at level 7
-			} else if (this.levelUpState.newLevel === 10) {
-				cantripsToLearn = 1; // Learn 1 additional cantrip at level 10
-				spellsToLearn = 1; // Learn 1 additional spell at level 10
+			} else if (fighterLevel === 4) {
+				spellsToLearn = 1;
+			} else if (fighterLevel === 7) {
+				spellsToLearn = 1;
+			} else if (fighterLevel === 8) {
+				spellsToLearn = 1;
+			} else if (fighterLevel === 10) {
+				cantripsToLearn = 1;
+				spellsToLearn = 1;
+			} else if (fighterLevel === 11) {
+				spellsToLearn = 1;
+			} else if (fighterLevel === 13) {
+				spellsToLearn = 1;
+			} else if (fighterLevel === 14) {
+				spellsToLearn = 1;
+			} else if (fighterLevel === 16) {
+				spellsToLearn = 1;
+			} else if (fighterLevel === 19) {
+				spellsToLearn = 1;
+			} else if (fighterLevel === 20) {
+				spellsToLearn = 1;
 			}
 		} else {
 			// Handle primary spellcasting classes
 			const primaryClass = (classes[0] && classes[0].name) ? classes[0].name : null;
 
-			if (primaryClass === 'Wizard') {
-				spellList = 'wizard';
-				if (this.levelUpState.newLevel === 1) {
-					cantripsToLearn = 3;
-					spellsToLearn = 6; // Wizards start with 6 first-level spells
+			// Load class data to get proper spell progression
+			try {
+				const classData = await this.loadClassData(primaryClass);
+				if (classData && classData.class && classData.class[0]) {
+					const classInfo = classData.class[0];
+					const level = this.levelUpState.newLevel;
+
+					// Set spell list
+					spellList = primaryClass.toLowerCase();
+
+					// Calculate cantrips progression
+					if (classInfo.cantripProgression && level <= classInfo.cantripProgression.length) {
+						const currentCantrips = classInfo.cantripProgression[level - 1] || 0;
+						const previousCantrips = level > 1 ? (classInfo.cantripProgression[level - 2] || 0) : 0;
+						cantripsToLearn = Math.max(0, currentCantrips - previousCantrips);
+					}
+
+					// Calculate spells progression
+					if (classInfo.spellsKnownProgressionFixed && level <= classInfo.spellsKnownProgressionFixed.length) {
+						const currentSpells = classInfo.spellsKnownProgressionFixed[level - 1] || 0;
+						const previousSpells = level > 1 ? (classInfo.spellsKnownProgressionFixed[level - 2] || 0) : 0;
+						spellsToLearn = Math.max(0, currentSpells - previousSpells);
+					} else if (classInfo.preparedSpells) {
+						// For prepared spell casters like Cleric, Druid, Wizard at level 1
+						if (level === 1) {
+							if (primaryClass === 'Wizard') {
+								spellsToLearn = 6; // Wizards start with 6 spells in spellbook
+							} else {
+								spellsToLearn = 2; // Base preparation for other prepared casters
+							}
+						} else if (primaryClass === 'Wizard' && level > 1) {
+							// Wizards learn 2 spells per level from leveling up
+							spellsToLearn = 2;
+						}
+					}
+
+					// Handle half-casters that start spellcasting at level 2
+					if ((primaryClass === 'Paladin' || primaryClass === 'Ranger') && level === 2) {
+						if (classInfo.spellsKnownProgressionFixed) {
+							spellsToLearn = classInfo.spellsKnownProgressionFixed[1] || 2; // Level 2 index
+						} else {
+							spellsToLearn = 2; // Default for half-casters starting
+						}
+					}
+				} else {
+					// Fallback for classes without data
+					spellList = primaryClass ? primaryClass.toLowerCase() : 'wizard';
+
+					if (primaryClass === 'Wizard' && this.levelUpState.newLevel === 1) {
+						cantripsToLearn = 3;
+						spellsToLearn = 6;
+					} else if ((primaryClass === 'Sorcerer' || primaryClass === 'Bard') && this.levelUpState.newLevel === 1) {
+						cantripsToLearn = 4;
+						spellsToLearn = 2;
+					} else if (primaryClass === 'Warlock' && this.levelUpState.newLevel === 1) {
+						cantripsToLearn = 2;
+						spellsToLearn = 2;
+					}
 				}
-			} else if (primaryClass === 'Sorcerer') {
-				spellList = 'sorcerer';
-				if (this.levelUpState.newLevel === 1) {
-					cantripsToLearn = 4;
-					spellsToLearn = 2;
-				}
-			} else if (primaryClass === 'Warlock') {
-				spellList = 'warlock';
+			} catch (error) {
+				console.error('Error loading class data for spell progression:', error);
+				// Use old hardcoded fallback
+				spellList = primaryClass ? primaryClass.toLowerCase() : 'wizard';
 				if (this.levelUpState.newLevel === 1) {
 					cantripsToLearn = 2;
-					spellsToLearn = 2;
-				}
-			} else if (primaryClass === 'Bard') {
-				spellList = 'bard';
-				if (this.levelUpState.newLevel === 1) {
-					cantripsToLearn = 2;
-					spellsToLearn = 4;
-				}
-			} else if (primaryClass === 'Cleric') {
-				spellList = 'cleric';
-				if (this.levelUpState.newLevel === 1) {
-					cantripsToLearn = 3;
-					spellsToLearn = 2; // Clerics prepare spells equal to Wis mod + level, starting with 2 as baseline
-				}
-			} else if (primaryClass === 'Druid') {
-				spellList = 'druid';
-				if (this.levelUpState.newLevel === 1) {
-					cantripsToLearn = 2;
-					spellsToLearn = 2; // Druids prepare spells equal to Wis mod + level, starting with 2 as baseline
-				}
-			} else if (primaryClass === 'Paladin') {
-				spellList = 'paladin';
-				if (this.levelUpState.newLevel === 2) { // Paladins get spells at level 2
-					spellsToLearn = 2;
-				}
-			} else if (primaryClass === 'Ranger') {
-				spellList = 'ranger';
-				if (this.levelUpState.newLevel === 2) { // Rangers get spells at level 2
 					spellsToLearn = 2;
 				}
 			}
 		}
 
-		// Gather available spells based on current character classes/subclasses
-		const primaryClass = (classes[0] && classes[0].name) ? classes[0].name : null;
-		const primarySubclass = (classes[0] && classes[0].subclass && classes[0].subclass.name) ? classes[0].subclass.name : null;
+		// Gather available spells based on the SPELLCASTING class, not primary class
+		const spellcastingClass = featureData?.className || (classes[0] && classes[0].name) ? classes[0].name : null;
+		const spellcastingClassEntry = classes.find(c => c.name === spellcastingClass);
+		const spellcastingSubclass = (spellcastingClassEntry && spellcastingClassEntry.subclass && spellcastingClassEntry.subclass.name) ? spellcastingClassEntry.subclass.name : null;
 
-		// Determine max spell level based on character level using proper D&D 5e progression
-		const maxSpellLevel = this.getMaxSpellLevelForCharacterLevel(this.levelUpState.newLevel, primaryClass);
+		// Determine max spell level based on the spellcasting class level, not total character level
+		const spellcastingClassLevel = spellcastingClassEntry ? spellcastingClassEntry.level : 1;
+		const maxSpellLevel = this.getMaxSpellLevelForCharacterLevel(spellcastingClassLevel, spellcastingClass);
+
+		// Fix spell list for Arcane Trickster
+		if (spellcastingClass === "Rogue" && spellcastingSubclass === "Arcane Trickster") {
+			spellList = "wizard"; // Arcane Tricksters use wizard spell list
+			schoolRestrictions = ["enchantment", "illusion"]; // Mainly enchantment and illusion
+		}
+
+		// Fix spell counts for Arcane Trickster at level 3
+		if (spellcastingClass === "Rogue" && spellcastingSubclass === "Arcane Trickster" && spellcastingClassLevel === 3) {
+			cantripsToLearn = 3; // 3 cantrips at level 3
+			spellsToLearn = 3;   // 3 1st-level spells at level 3
+		}
+
+		console.log("🔍 Spell Selection Debug:");
+		console.log("- Spellcasting Class:", spellcastingClass);
+		console.log("- Spellcasting Class Level:", spellcastingClassLevel);
+		console.log("- Subclass:", spellcastingSubclass);
+		console.log("- Character Level:", this.levelUpState.newLevel);
+		console.log("- Max Spell Level:", maxSpellLevel);
+		console.log("- Cantrips to Learn:", cantripsToLearn);
+		console.log("- Spells to Learn:", spellsToLearn);
+		console.log("- Spell List:", spellList);
+		console.log("- School Restrictions:", schoolRestrictions);
+
+		// Fix: Ensure level 1 spellcasters always get spells to learn if they have access to level 1 spells
+		if (this.levelUpState.newLevel === 1 && maxSpellLevel >= 1 && spellsToLearn === 0) {
+			console.log("🔧 FIXING: Level 1 character should be able to select spells but spellsToLearn is 0");
+			const fullCasters = ["Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard"];
+			const halfCasters = ["Paladin", "Ranger"];
+			
+			if (fullCasters.includes(spellcastingClass)) {
+				if (spellcastingClass === "Wizard") {
+					spellsToLearn = 6; // Wizards start with 6 spells in spellbook
+				} else {
+					spellsToLearn = 2; // Other full casters typically start with 2 spells known
+				}
+				console.log(`🔧 FIXED: Set spellsToLearn to ${spellsToLearn} for ${spellcastingClass}`);
+			} else if (halfCasters.includes(spellcastingClass)) {
+				// Half-casters (Paladin, Ranger) get access to spells at level 1
+				if (spellcastingClass === "Paladin") {
+					// Paladins prepare spells = Cha mod + half paladin level (minimum 1)
+					// For level 1, let's assume at least 1-2 spells they can prepare
+					spellsToLearn = 2; 
+				} else if (spellcastingClass === "Ranger") {
+					spellsToLearn = 2; // Rangers know specific spells
+				}
+				console.log(`🔧 FIXED: Set spellsToLearn to ${spellsToLearn} for half-caster ${spellcastingClass}`);
+			}
+		}
+
+		// Fix: Ensure wizards at any level > 1 get spells to learn
+		if (spellcastingClass === 'Wizard' && this.levelUpState.newLevel > 1 && spellsToLearn === 0) {
+			console.log("🔧 FIXING: Wizard above level 1 should learn 2 spells per level");
+			spellsToLearn = 2;
+			console.log(`🔧 FIXED: Set spellsToLearn to ${spellsToLearn} for ${spellcastingClass} level ${this.levelUpState.newLevel}`);
+		}
 
 		// Fetch lists of available spells for the expected spell list (e.g. wizard)
 		const availableSpellsByLevel = {};
 		try {
 			const spellListClass = spellList; // e.g. 'wizard'
 
-			// For cantrips and all available spell levels, pre-fetch lists
-			for (let lvl = 0; lvl <= maxSpellLevel; lvl++) {
-				availableSpellsByLevel[lvl] = await this.pGetAvailableSpellsForClass(spellListClass, primaryClass, primarySubclass, lvl, schoolRestrictions);
+			// Determine starting spell level - some classes don't get cantrips
+			const classesWithoutCantrips = ["Paladin", "Ranger"];
+			const startLevel = classesWithoutCantrips.includes(spellcastingClass) ? 1 : 0;
+
+			// For cantrips (if applicable) and all available spell levels, pre-fetch lists
+			for (let lvl = startLevel; lvl <= maxSpellLevel; lvl++) {
+				availableSpellsByLevel[lvl] = await this.pGetAvailableSpellsForClass(spellListClass, spellcastingClass, spellcastingSubclass, lvl, schoolRestrictions, character);
 			}
 		} catch (e) {
 			// If fetching fails, fall back to simplified behaviour
 			console.warn('Could not load spell lists for modal:', e);
+		}
+
+		console.log("📚 Available Spells by Level:");
+		for (let lvl = 0; lvl <= maxSpellLevel; lvl++) {
+			const spells = availableSpellsByLevel[lvl] || [];
+			console.log(`- Level ${lvl}: ${spells.length} spells available`);
 		}
 
 		// Helper functions for spell formatting (since PageFilterSpells might not be available)
@@ -11397,17 +13273,17 @@ class CharacterEditorPage {
 		// Track pre-selected spells to enforce limits
 		const preSelectedCantrips = new Set();
 		const preSelectedSpells = new Set();
-		
+
 		// Helper function to determine if a spell should be pre-selected
 		const shouldPreSelectSpell = (spell, isCantrip, spellLevel = null) => {
 			const actualSpellLevel = isCantrip ? 0 : (spellLevel || spell.level || 1);
 			const isCurrentlyKnown = currentSpells[actualSpellLevel]?.spells?.includes(spell.name) || false;
-			
+
 			if (!isCurrentlyKnown) return false;
-			
+
 			// For spell swapping mode (no new spells to learn), pre-select existing spells
 			if (cantripsToLearn === 0 && spellsToLearn === 0) return true;
-			
+
 			// For normal level up, respect slot limits
 			if (isCantrip) {
 				if (preSelectedCantrips.size < cantripsToLearn) {
@@ -11447,15 +13323,15 @@ class CharacterEditorPage {
 				Parser.spSchoolAndSubschoolsAbvsToFull(spell.school, spell.subschools) :
 				school;
 
-			// Use 5etools renderer to create proper spell link with hover
-			const spellLink = Renderer.get().render(`{@spell ${spell.name}|${spell.source}}`);
+			// Create spell hash for hover functionality
+			const spellHash = `${spell.name.toLowerCase().replace(/[^a-z0-9]/g, '')}|${spell.source}`;
 
 			return `
 				<div class="lst__row lst__row--sublist lst__row-border lst__row-inner clickable" data-spell-name="${spell.name}">
 					<span class="ve-col-0-5 px-1 ve-text-center">
 						<input type="checkbox" class="${checkboxClass}" value="${spell.name}" data-spell-level="${actualSpellLevel}" ${checkedAttr}>
 					</span>
-					<span class="bold ve-col-2-4 pl-0 pr-1">${spellLink}</span>
+					<span class="bold ve-col-2-4 pl-0 pr-1 spell-name-hover" data-spell-hash="${spellHash}" data-spell-source="${spell.source}">${spell.name}</span>
 					<span class="ve-col-1-5 px-1 ve-text-center">${levelText}</span>
 					<span class="ve-col-1-7 px-1 ve-text-center">${time}</span>
 					<span class="ve-col-1-2 px-1 sp__school-${spell.school} ve-text-center"
@@ -11470,9 +13346,9 @@ class CharacterEditorPage {
 		// Build spell lists dynamically using 5etools styling
 		let modalContent = `
 			<div class="mb-4 p-3 ve-flex-col">
-				<h5 class="mb-2">${primaryClass} Spell Selection</h5>
+				<h5 class="mb-2">${spellcastingClass} Spell Selection</h5>
 				<p class="mb-1"><strong>Level:</strong> ${this.levelUpState.currentLevel} → <strong>${this.levelUpState.newLevel}</strong></p>
-				<p class="mb-0"><strong>Spell List:</strong> ${spellList} • <strong>Max Spell Level:</strong> ${this.getMaxSpellLevelForCharacterLevel(this.levelUpState.newLevel, primaryClass)}</p>
+				<p class="mb-0"><strong>Spell List:</strong> ${spellList} • <strong>Max Spell Level:</strong> ${this.getMaxSpellLevelForCharacterLevel(spellcastingClassLevel, spellcastingClass)}</p>
 			</div>
 		`;
 
@@ -11602,7 +13478,7 @@ class CharacterEditorPage {
 			}
 
 			// Then show spells for swapping
-			for (let spellLevel = 1; spellLevel <= this.getMaxSpellLevelForCharacterLevel(this.levelUpState.newLevel, primaryClass); spellLevel++) {
+			for (let spellLevel = 1; spellLevel <= this.getMaxSpellLevelForCharacterLevel(spellcastingClassLevel, spellcastingClass); spellLevel++) {
 				const spellsAtLevel = availableSpellsByLevel[spellLevel] || [];
 				if (spellsAtLevel.length > 0) {
 					const levelName = spellLevel === 1 ? '1st' : spellLevel === 2 ? '2nd' : spellLevel === 3 ? '3rd' : `${spellLevel}th`;
@@ -11635,16 +13511,17 @@ class CharacterEditorPage {
 			}
 		}
 
-		// Create 5etools native modal with lower z-index to allow tooltips to appear above
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Level Up Character - Spell Selection",
-			hasFooter: true,
-			isWidth100: true,
-			isUncappedHeight: true,
-			isHeaderBorder: true,
-			isMinHeight0: true,
-			zIndex: 1050
-		});
+	// Create 5etools native modal with lower z-index to allow tooltips to appear above
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: "Level Up Character - Spell Selection",
+		hasFooter: true,
+		isWidth100: true,
+		isUncappedHeight: true,
+		isHeaderBorder: true,
+		isMinHeight0: true,
+		zIndex: 999,
+		isPermanent: true
+	});
 
 		// Store modal close function
 		this.levelUpModalClose = doClose;
@@ -11666,30 +13543,46 @@ class CharacterEditorPage {
 			<i class="fa fa-check" aria-hidden="true"></i> ${buttonText}
 		</button>`)
 			.click(() => {
-				// Collect spell selections from checkboxes
-				const spellSelections = {
-					cantrips: [],
+				// Collect spell selections from checkboxes by their actual spell levels
+				const spellSelections = {};
+
+				// Collect selected cantrips (level 0)
+				$modalInner.find('.cantrip-checkbox:checked').each((i, el) => {
+					if (!spellSelections['0']) spellSelections['0'] = [];
+					spellSelections['0'].push($(el).val());
+				});
+
+				// Collect selected spells by their actual levels
+				$modalInner.find('.spell-checkbox:checked').each((i, el) => {
+					const $checkbox = $(el);
+					const spellLevel = $checkbox.data('spell-level') || '1';
+					if (!spellSelections[spellLevel]) spellSelections[spellLevel] = [];
+					spellSelections[spellLevel].push($checkbox.val());
+				});
+
+				// For backward compatibility, also populate the old format
+				const legacySpellSelections = {
+					cantrips: spellSelections['0'] || [],
 					spells: []
 				};
-
-				// Collect selected cantrips
-				$modalInner.find('.cantrip-checkbox:checked').each((i, el) => {
-					spellSelections.cantrips.push($(el).val());
+				// Flatten all non-cantrip spells into the generic 'spells' array for legacy code
+				Object.keys(spellSelections).forEach(level => {
+					if (level !== '0') {
+						legacySpellSelections.spells.push(...spellSelections[level]);
+					}
 				});
 
-				// Collect selected spells
-				$modalInner.find('.spell-checkbox:checked').each((i, el) => {
-					spellSelections.spells.push($(el).val());
-				});
+				// Validate selection counts using legacy format for compatibility
+				const cantripsSelected = legacySpellSelections.cantrips.length;
+				const spellsSelected = legacySpellSelections.spells.length;
 
-				// Validate selection counts
-				if (cantripsToLearn > 0 && spellSelections.cantrips.length !== cantripsToLearn) {
-					alert(`Please select exactly ${cantripsToLearn} cantrip${cantripsToLearn > 1 ? 's' : ''}. You have selected ${spellSelections.cantrips.length}.`);
+				if (cantripsToLearn > 0 && cantripsSelected !== cantripsToLearn) {
+					alert(`Please select exactly ${cantripsToLearn} cantrip${cantripsToLearn > 1 ? 's' : ''}. You have selected ${cantripsSelected}.`);
 					return;
 				}
 
-				if (spellsToLearn > 0 && spellSelections.spells.length !== spellsToLearn) {
-					alert(`Please select exactly ${spellsToLearn} spell${spellsToLearn > 1 ? 's' : ''}. You have selected ${spellSelections.spells.length}.`);
+				if (spellsToLearn > 0 && spellsSelected !== spellsToLearn) {
+					alert(`Please select exactly ${spellsToLearn} spell${spellsToLearn > 1 ? 's' : ''}. You have selected ${spellsSelected}.`);
 					return;
 				}
 
@@ -11741,7 +13634,7 @@ class CharacterEditorPage {
 				}
 			}
 
-			// Handle spell limits - allow deselection and reselection up to the limit  
+			// Handle spell limits - allow deselection and reselection up to the limit
 			if (spellsToLearn > 0) {
 				if (spellCount >= spellsToLearn) {
 					// At limit: disable only unchecked checkboxes, allow deselecting checked ones
@@ -11754,7 +13647,7 @@ class CharacterEditorPage {
 					$modalInner.find('.spell-checkbox').closest('.lst__row').removeClass('lst__row--disabled');
 				}
 			}
-			
+
 			// For spell swapping mode (no new spells), always enable all checkboxes
 			if (cantripsToLearn === 0 && spellsToLearn === 0) {
 				$modalInner.find('.cantrip-checkbox, .spell-checkbox').prop('disabled', false);
@@ -11786,30 +13679,57 @@ class CharacterEditorPage {
 	 * Return a list of available spells (names) for a given class/subclass and spell level.
 	 * This uses the site's Renderer.spell lookup helpers to derive spells available to a class.
 	 */
-	async pGetAvailableSpellsForClass(classTag, className, subclassName, level, schoolRestrictions = []) {
-		// Attempt to load global spell list via DataLoader
+	async pGetAvailableSpellsForClass(classTag, className, subclassName, level, schoolRestrictions = [], character = null) {
+		// COMPREHENSIVE spell loading - includes ALL sources: class, subclass, race, background
 		try {
 			const allSpells = await DataLoader.pCacheAndGetAllSite(UrlUtil.PG_SPELLS);
 			console.log(`Loading spells for ${className || classTag}, level ${level}, found ${allSpells.length} total spells`);
 
-			// Filter spells by class and return full spell objects
+			// Filter spells by ALL sources and return full spell objects
 			const filteredSpells = allSpells
 				.filter(sp => sp.level === level)
 				.filter(sp => {
-					// Check combined classes
+					// Check ALL combined spell sources
 					const fromClasses = Renderer.spell.getCombinedClasses(sp, 'fromClassList') || [];
 					const fromSubclasses = Renderer.spell.getCombinedClasses(sp, 'fromSubclass') || [];
 					const fromVariantClasses = Renderer.spell.getCombinedClasses(sp, 'fromClassListVariant') || [];
+					const fromRaces = Renderer.spell.getCombinedClasses(sp, 'fromRaces') || [];
+					const fromBackgrounds = Renderer.spell.getCombinedClasses(sp, 'fromBackgrounds') || [];
 
 					// Check if spell is available to this class
 					const targetClass = (className || classTag).toLowerCase();
-					const matchesClass = fromClasses.some(c => c.name && c.name.toLowerCase() === targetClass) ||
-					                   fromVariantClasses.some(c => c.name && c.name.toLowerCase() === targetClass);
+					let matchesClass = fromClasses.some(c => c.name && c.name.toLowerCase() === targetClass) ||
+					                  fromVariantClasses.some(c => c.name && c.name.toLowerCase() === targetClass);
 
-					// If no class match, check if this spell is generally available to this class type
+					// Check subclass expanded spells if subclass is specified
+					if (!matchesClass && subclassName) {
+						const targetSubclass = subclassName.toLowerCase();
+						matchesClass = fromSubclasses.some(sc =>
+							sc.subclass && sc.subclass.name && sc.subclass.name.toLowerCase() === targetSubclass &&
+							sc.class && sc.class.name && sc.class.name.toLowerCase() === targetClass
+						);
+					}
+
+					// Check racial spells if character data provided
+					if (!matchesClass && character && character.race) {
+						const raceName = typeof character.race === 'string' ? character.race : character.race.name;
+						if (raceName) {
+							matchesClass = fromRaces.some(r => r.name && r.name.toLowerCase().includes(raceName.toLowerCase()));
+						}
+					}
+
+					// Check background spells if character data provided
+					if (!matchesClass && character && character.background) {
+						const backgroundName = typeof character.background === 'string' ? character.background : character.background.name;
+						if (backgroundName) {
+							matchesClass = fromBackgrounds.some(b => b.name && b.name.toLowerCase().includes(backgroundName.toLowerCase()));
+						}
+					}
+
+					// If no match from any source, exclude this spell
 					if (!matchesClass) return false;
 
-					// Apply simple school restrictions if provided (schoolRestrictions are school initials)
+					// Apply school restrictions if provided (schoolRestrictions are school initials)
 					if (schoolRestrictions && schoolRestrictions.length) {
 						const sch = sp.school ? sp.school.charAt(0).toUpperCase() : '';
 						if (!schoolRestrictions.includes(sch)) return false;
@@ -11819,7 +13739,7 @@ class CharacterEditorPage {
 				})
 				.sort((a, b) => a.name.localeCompare(b.name));
 
-			console.log(`Found ${filteredSpells.length} spells for ${className || classTag} at level ${level}:`, filteredSpells.slice(0, 5).map(sp => sp.name));
+			console.log(`Found ${filteredSpells.length} spells for ${className || classTag} at level ${level} (including ALL sources):`, filteredSpells.slice(0, 5).map(sp => sp.name));
 			return filteredSpells; // Return full spell objects, not just names
 		} catch (e) {
 			console.warn('pGetAvailableSpellsForClass failed', e);
@@ -12310,9 +14230,9 @@ class CharacterEditorPage {
 
 		// Track spell slot changes if character is a caster
 		const classEntry = character.class?.[selectedClassIndex];
-		if (classEntry && this.isSpellcastingClass(classEntry.name)) {
-			const oldSpellSlots = this.getSpellSlotsForClass(classEntry.name, classEntry.level - 1);
-			const newSpellSlots = this.getSpellSlotsForClass(classEntry.name, classEntry.level);
+		if (classEntry && this.isSpellcastingClass(classEntry.name, classEntry)) {
+			const oldSpellSlots = this.getSpellSlotsForClass(classEntry.name, classEntry.level - 1, classEntry);
+			const newSpellSlots = this.getSpellSlotsForClass(classEntry.name, classEntry.level, classEntry);
 
 			for (let level = 1; level <= 9; level++) {
 				const oldSlots = oldSpellSlots[level] || 0;
@@ -12525,13 +14445,20 @@ class CharacterEditorPage {
 		return characterData[ability] || 10;
 	}
 
-	isSpellcastingClass(className) {
+	isSpellcastingClass(className, classEntry = null) {
 		console.log('=== isSpellcastingClass DEBUG ===');
 		console.log('Input className:', className, typeof className);
+		console.log('Input classEntry:', classEntry);
 
 		if (!className) {
 			console.log('❌ No class name provided');
 			return false;
+		}
+
+		// Check if this is a third-caster subclass first
+		if (classEntry && this.isThirdCasterClass(classEntry)) {
+			console.log('✅ Third-caster subclass detected');
+			return true;
 		}
 
 		// Comprehensive list including variations
@@ -12584,14 +14511,13 @@ class CharacterEditorPage {
 			return 0;
 		}
 
-		// Half-casters (Paladin, Ranger) start at level 2
+		// Half-casters (Paladin, Ranger) get spells at level 1
 		if (classNameLower.includes('paladin') || classNameLower.includes('ranger')) {
-			if (characterLevel < 2) return 0;
 			if (characterLevel >= 17) return 5;
 			if (characterLevel >= 13) return 4;
 			if (characterLevel >= 9) return 3;
 			if (characterLevel >= 5) return 2;
-			if (characterLevel >= 2) return 1;
+			if (characterLevel >= 1) return 1; // Both get 1st level spells at level 1
 			return 0;
 		}
 
@@ -12636,8 +14562,8 @@ class CharacterEditorPage {
 			const classEntry = character.class[0]; // Assuming single class for now
 			const newLevel = classEntry.level;
 
-			// Check for ASI at levels 4, 8, 12, 16, 19
-			if ([4, 8, 12, 16, 19].includes(newLevel)) {
+			// Check for class-specific ASI levels (Fighter gets bonus at 6,14; Rogue at 10)
+			if (this.isASILevel(newLevel, [classEntry])) {
 				this.showASIChoice();
 				return;
 			}
@@ -12664,90 +14590,190 @@ class CharacterEditorPage {
 		updatedCharacter.proficiencyBonus = `+${newProfBonus}`;
 
 		// Apply feature choices to character data
-		this.applyLevelUpFeaturesToCharacter(updatedCharacter);
+		await this.applyLevelUpFeaturesToCharacter(updatedCharacter);
 
-		// For level 0->1 characters, generate a complete character using existing generation code
+		// For level 0->1 characters, build a complete character with all required data
 		if (isFirstLevelCreation) {
-			console.log('=== GENERATING COMPLETE LEVEL 1 CHARACTER WITH USER CHOICES ===');
+			console.log('=== BUILDING COMPLETE LEVEL 1 CHARACTER WITH USER CHOICES ===');
 
 			// Extract user choices from the level up process
 			const userChoices = this.extractUserChoicesFromLevelUpState();
 			console.log('User choices extracted:', userChoices);
 
-			// Use the existing generateRandomCharacterAtLevel but with user's specific choices
-			console.log('Calling generateRandomCharacterAtLevel with:', {
-				level: 1,
-				name: userChoices.characterName || updatedCharacter.name || 'Adventurer',
-				source: 'USER_CREATED',
-				baseClass: userChoices.selectedClass || 'Fighter',
-				race: userChoices.characterRace || this.generateRandomNonHumanRace(),
-			});
-
-			let completeCharacter = await this.generateRandomCharacterAtLevel(
-				1, // Level 1
-				userChoices.characterName || updatedCharacter.name || 'Adventurer',
-				'USER_CREATED',
-				userChoices.selectedClass || 'Fighter',
-				userChoices.characterRace || this.generateRandomNonHumanRace(),
-				userChoices.characterBackground || this.level0WizardData?.background || null,
-				userChoices.characterAlignment || this.level0WizardData?.alignment || null
-			);
-
-			console.log('Generated complete character:', completeCharacter);
-			if (completeCharacter) {
-				console.log('Character keys:', Object.keys(completeCharacter));
+			// Start with the character data from levelUpState to preserve all user choices
+			const completeCharacter = JSON.parse(JSON.stringify(updatedCharacter));
+			
+			// Debug: Check class data preservation
+			console.log('Initial class data from levelUpState:', completeCharacter.class);
+			
+			// Ensure we have the proper race - prefer from levelUpState.characterData, then level0WizardData
+			if (!completeCharacter.race && userChoices.characterRace) {
+				completeCharacter.race = userChoices.characterRace;
+			}
+			console.log('Using race for character building:', completeCharacter.race);
+			
+			// Ensure we have proper ability scores
+			if (userChoices.abilityScores) {
+				Object.assign(completeCharacter, userChoices.abilityScores);
 			} else {
-				console.error('generateRandomCharacterAtLevel returned null/undefined. Creating fallback completeCharacter object.');
-				const fallbackHpVal = Math.max(1, (this.getClassHitDie(userChoices.selectedClass) || 8) + Math.floor(((userChoices.abilityScores?.con || 10) - 10) / 2));
-				completeCharacter = {
-					name: userChoices.characterName || updatedCharacter.name || 'Adventurer',
-					class: [{ name: userChoices.selectedClass || 'Fighter', level: 1 }],
-					race: userChoices.characterRace || 'Human',
-					ac: [{ ac: 10, from: ['Default'] }],
-					passive: 10,
-					hp: { average: fallbackHpVal, formula: `${fallbackHpVal}`, current: fallbackHpVal, max: fallbackHpVal, temp: 0 }
-				};
+				// Fallback to default scores if none chosen
+				completeCharacter.str = 13;
+				completeCharacter.dex = 12;
+				completeCharacter.con = 14;
+				completeCharacter.int = 10;
+				completeCharacter.wis = 15;
+				completeCharacter.cha = 8;
 			}
 
-			// Override the randomly generated ability scores with user's choices
-			if (userChoices.abilityScores) {
-				console.log('Applying user ability scores:', userChoices.abilityScores);
-				if (completeCharacter) Object.assign(completeCharacter, userChoices.abilityScores);
+			// Apply racial ability score bonuses
+			if (completeCharacter.race) {
+				const racialBonuses = await this.getRacialAbilityBonuses(completeCharacter.race);
+				Object.keys(racialBonuses).forEach(ability => {
+					if (racialBonuses[ability]) {
+						completeCharacter[ability] = (completeCharacter[ability] || 10) + racialBonuses[ability];
+					}
+				});
+			}
 
-				// Recalculate derived stats with user's ability scores
-				const dexMod = Math.floor((userChoices.abilityScores.dex - 10) / 2);
-				const wisMod = Math.floor((userChoices.abilityScores.wis - 10) / 2);
-				const conMod = Math.floor((userChoices.abilityScores.con - 10) / 2);
+			// Calculate derived stats
+			const dexMod = Math.floor((completeCharacter.dex - 10) / 2);
+			const wisMod = Math.floor((completeCharacter.wis - 10) / 2);
+			const conMod = Math.floor((completeCharacter.con - 10) / 2);
 
-				// Update AC, passive perception, and HP
-				completeCharacter.ac = Math.max(completeCharacter.ac || 0, 10 + dexMod);
-				const profBonus = this.getProficiencyBonus(1);
-				const perceptionBonus = this.hasSkillProficiency("perception", completeCharacter?.class) ? profBonus : 0;
-				completeCharacter.passive = 10 + wisMod + perceptionBonus;
+			// Set size from race data  
+			if (!completeCharacter.size) {
+				completeCharacter.size = 'M'; // Default to Medium
+			}
 
-				// Update HP with new CON modifier
-				if (completeCharacter.class?.[0]) {
-					const hitDie = this.getClassHitDie(completeCharacter.class[0].name) || 8;
-					completeCharacter.hp = Math.max(1, hitDie + conMod);
+			// Set speed from race
+			const raceSpeed = await this.getRacialStats(completeCharacter.race);
+			if (raceSpeed?.speed) {
+				completeCharacter.speed = raceSpeed.speed;
+			} else {
+				completeCharacter.speed = { walk: 30 }; // Default human speed
+			}
+
+			// Calculate HP
+			if (completeCharacter.class?.[0]) {
+				const classData = await this.loadClassData(completeCharacter.class[0].name);
+				const hitDie = classData?.class?.[0]?.hd?.faces || 8;
+				const hpVal = Math.max(1, hitDie + conMod);
+				completeCharacter.hp = { 
+					average: hpVal, 
+					formula: `${hitDie}+${conMod}`, 
+					current: hpVal, 
+					max: hpVal, 
+					temp: 0 
+				};
+			} else {
+				completeCharacter.hp = { average: 8, formula: '8+0', current: 8, max: 8, temp: 0 };
+			}
+
+			// Calculate AC
+			completeCharacter.ac = await this.generateRandomAC(completeCharacter.class, {
+				str: completeCharacter.str, dex: completeCharacter.dex, con: completeCharacter.con,
+				int: completeCharacter.int, wis: completeCharacter.wis, cha: completeCharacter.cha
+			}, completeCharacter.race);
+
+			// Set passive Perception
+			const profBonus = this.getProficiencyBonus(1);
+			const perceptionProf = userChoices.skills?.some(s => s.selectedSkills?.includes('Perception')) ? profBonus : 0;
+			completeCharacter.passive = 10 + wisMod + perceptionProf;
+
+			// Add save proficiencies from class
+			if (completeCharacter.class?.[0]) {
+				const saves = await this.generateRandomSaves({
+					str: completeCharacter.str, dex: completeCharacter.dex, con: completeCharacter.con,
+					int: completeCharacter.int, wis: completeCharacter.wis, cha: completeCharacter.cha
+				}, completeCharacter.class, profBonus);
+				completeCharacter.saveProficiencies = saves;
+			}
+
+			// Add skill proficiencies
+			if (userChoices.skills?.length > 0) {
+				const allSkills = [];
+				userChoices.skills.forEach(skillSet => {
+					if (skillSet.selectedSkills) {
+						allSkills.push(...skillSet.selectedSkills.map(s => s.toLowerCase().replace(' ', '_')));
+					}
+				});
+				completeCharacter.skillProficiencies = [...new Set(allSkills)]; // Remove duplicates
+			}
+
+			// Add starting equipment
+			if (completeCharacter.class?.[0]) {
+				console.log('Class before equipment application:', completeCharacter.class[0]);
+				
+				const equipment = this.getClassEquipment(completeCharacter.class[0].name, 1, {
+					str: completeCharacter.str, dex: completeCharacter.dex, con: completeCharacter.con,
+					int: completeCharacter.int, wis: completeCharacter.wis, cha: completeCharacter.cha
+				});
+				
+				// Apply class starting equipment to character
+				await this.applyClassDataToCharacter(completeCharacter.class, completeCharacter, 1);
+				
+				console.log('Class after applyClassDataToCharacter:', completeCharacter.class[0]);
+				
+				// Apply background equipment
+				await this.applyBackgroundDataToCharacter(completeCharacter.background, completeCharacter);
+				
+				console.log('Class after applyBackgroundDataToCharacter:', completeCharacter.class[0]);
+			}
+
+			// Add basic actions
+			completeCharacter.action = this.generateRandomActions(completeCharacter.class, {
+				str: completeCharacter.str, dex: completeCharacter.dex, con: completeCharacter.con,
+				int: completeCharacter.int, wis: completeCharacter.wis, cha: completeCharacter.cha
+			}) || [];
+
+			// Add spellcasting if class is a caster
+			if (this.hasSpellcastingClass(completeCharacter)) {
+				const spells = this.generateRandomSpells(completeCharacter.class, 1, {
+					str: completeCharacter.str, dex: completeCharacter.dex, con: completeCharacter.con,
+					int: completeCharacter.int, wis: completeCharacter.wis, cha: completeCharacter.cha
+				});
+				if (spells) {
+					completeCharacter.spells = spells;
 				}
 			}
 
-			// Add any additional user choices (fighting styles, feats, spells) to the complete character
+			// Add starting currency
+			completeCharacter.currency = this.generateRandomCurrency(1);
+
+			// Add language proficiencies
+			const languages = await this.generateLanguageProficiencies(completeCharacter.class, completeCharacter.race, completeCharacter.background);
+			if (languages && languages.length > 0) {
+				completeCharacter.languages = languages;
+			}
+
+			// Generate Features & Traits section
+			console.log('Class before generateAllFeatureEntries:', completeCharacter.class[0]);
+			const featureEntries = await this.generateAllFeatureEntries(completeCharacter.class, completeCharacter.race);
+			console.log('Class after generateAllFeatureEntries:', completeCharacter.class[0]);
+			
+			// Build entries array
+			completeCharacter.entries = [
+				{
+					type: "section",
+					name: "Features & Traits",
+					entries: featureEntries
+				}
+			];
+
+			// Add user choices to the complete character
 			this.addUserChoicesToCompleteCharacter(completeCharacter, userChoices);
 
-			// Replace the character data with the complete generated character
+			// Replace the character data with the complete character
 			console.log('About to replace character data...');
-			console.log('updatedCharacter before replacement:', updatedCharacter);
-			console.log('completeCharacter to assign:', completeCharacter);
+			console.log('Final completeCharacter class data:', completeCharacter.class);
+			console.log('Final completeCharacter race data:', completeCharacter.race);
 
 			Object.keys(updatedCharacter).forEach(key => delete updatedCharacter[key]);
-			if (completeCharacter) Object.assign(updatedCharacter, completeCharacter);
+			Object.assign(updatedCharacter, completeCharacter);
 
-			// Recalculate button visibility after replacing character data
-			this.updateButtonVisibility();
-
-			console.log('updatedCharacter after replacement:', updatedCharacter);
-			console.log('=== COMPLETE CHARACTER GENERATED WITH USER CHOICES ===');
+			console.log('=== COMPLETE CHARACTER BUILT WITH USER CHOICES ===');
+			console.log('Final character class data:', updatedCharacter.class);
+			console.log('Final character race data:', updatedCharacter.race);
 		}
 
 		// Update all character stats based on new level
@@ -12787,7 +14813,8 @@ class CharacterEditorPage {
 
 			// Get character details from basic character
 			const characterName = basicCharacter.name || 'Adventurer';
-			const characterRace = basicCharacter.race?.name || this.generateRandomNonHumanRace().name;
+			const raceData = basicCharacter.race?.name ? { name: basicCharacter.race.name } : await this.generateForcedRace(null);
+			const characterRace = raceData.name;
 			const characterClass = userChoices.selectedClass || 'Fighter';
 
 			// Generate a complete random level 1 character with specified class and race
@@ -12795,7 +14822,7 @@ class CharacterEditorPage {
 			const completeCharacter = await this.generateRandomCharacterAtLevel(
 				1,
 				characterName,
-				'USER_CREATED',
+				this.getWizardSourceName(),
 				characterClass,
 				characterRace,
 				userChoices.characterBackground || this.level0WizardData?.background || null,
@@ -12829,19 +14856,20 @@ class CharacterEditorPage {
 			abilityScores: null,
 			fightingStyle: null,
 			spells: null,
-			feats: null
+			feats: null,
+			skills: null
 		};
 
 		// Extract basic character info
 		if (this.levelUpState?.characterData) {
 			choices.characterName = this.levelUpState.characterData.name;
-			choices.characterRace = this.levelUpState.characterData.race?.name || this.levelUpState.characterData.race;
+			choices.characterRace = this.levelUpState.characterData.race; // Keep full race object
 		}
 
 		// For level 0 characters, prioritize the race from URL parameters stored in level0WizardData
 		if (this.level0WizardData?.race) {
 			console.log('Using race from level0WizardData:', this.level0WizardData.race);
-			choices.characterRace = this.level0WizardData.race;
+			choices.characterRace = this.level0WizardData.race; // This should already be a full race object
 		}
 
 		// Also pull background/alignment choices from level0WizardData if present
@@ -12886,6 +14914,23 @@ class CharacterEditorPage {
 						name: choice.featName,
 						data: choice.featData
 					});
+					break;
+				case 'skillSelection':
+					choices.skills = choices.skills || [];
+					choices.skills.push({
+						className: choice.className,
+						selectedSkills: choice.selectedSkills
+					});
+					break;
+				case 'skills':
+					// Handle legacy skill format
+					choices.skills = choices.skills || [];
+					if (choice.selections && Array.isArray(choice.selections)) {
+						choices.skills.push({
+							className: choice.className || 'Class',
+							selectedSkills: choice.selections
+						});
+					}
 					break;
 			}
 		});
@@ -12972,9 +15017,22 @@ class CharacterEditorPage {
 			});
 		}
 
-		// 5. Add spells if selected
+		// 5. Add skill proficiencies if selected
+		if (userChoices.skills?.length > 0) {
+			console.log('Applying user skill selections:', userChoices.skills);
+			userChoices.skills.forEach(skillChoice => {
+				if (skillChoice.selectedSkills?.length > 0) {
+					skillChoice.selectedSkills.forEach(skillName => {
+						this.addSingleSkillProficiency(completeCharacter, skillName, `Class (${skillChoice.className})`);
+					});
+				}
+			});
+		}
+
+		// 6. Replace spells if selected
 		if (userChoices.spells) {
-			this.addSpellsToCharacter(completeCharacter, userChoices.spells);
+			console.log('Replacing character spells with user selections:', userChoices.spells);
+			this.replaceCharacterSpells(completeCharacter, userChoices.spells);
 		}
 
 		console.log('User choices applied to complete character');
@@ -13023,6 +15081,34 @@ class CharacterEditorPage {
 				entries: spellEntries
 			});
 		}
+	}
+
+	replaceCharacterSpells(character, userSpells) {
+		console.log('=== REPLACING CHARACTER SPELLS ===');
+		console.log('Current character.spells:', character.spells);
+		console.log('User spell selections:', userSpells);
+
+		if (!character.spells) {
+			console.log('Character has no spells object, nothing to replace');
+			return;
+		}
+
+		// Replace cantrips (level 0)
+		if (userSpells.cantrips?.length > 0 && character.spells.levels?.["0"]) {
+			console.log(`Replacing ${character.spells.levels["0"].spells.length} cantrips with ${userSpells.cantrips.length} user-selected cantrips`);
+			character.spells.levels["0"].spells = [...userSpells.cantrips];
+		}
+
+		// Replace level 1 spells
+		if (userSpells.spells?.length > 0 && character.spells.levels?.["1"]) {
+			console.log(`Replacing ${character.spells.levels["1"].spells.length} level 1 spells with ${userSpells.spells.length} user-selected spells`);
+			character.spells.levels["1"].spells = [...userSpells.spells];
+		}
+
+		// Also update the text entries to reflect the correct spells
+		this.addSpellsToCharacter(character, userSpells);
+
+		console.log('Updated character.spells:', character.spells);
 	}
 
 	async addStartingCharacterSections(character) {
@@ -13211,24 +15297,559 @@ class CharacterEditorPage {
 			// Load background data to get detailed features
 			const backgroundData = await this.loadBackgroundData(character.background.name);
 
-			if (backgroundData && backgroundData.entries) {
-				// Add background feature to entries
-				if (!character.entries) character.entries = [];
+			if (backgroundData) {
+				// Add background features to the Features & Traits section
+				const featuresSection = this.ensureSingleFeaturesSection(character);
 
-				character.entries.push({
-					type: "entries",
-					name: `Background: ${character.background.name}`,
-					entries: [
-						`You have the ${character.background.name} background, which provides the following benefits:`,
-						...backgroundData.entries
-					]
-				});
+				// Add the background feature
+				if (backgroundData.entries) {
+					// Find the feature entry (usually the first entry with a name)
+					const featureEntry = backgroundData.entries.find(entry =>
+						entry.type === 'entries' && entry.name
+					);
+
+					if (featureEntry) {
+						featuresSection.entries.push({
+							type: "entries",
+							name: `${featureEntry.name} (Background)`,
+							entries: featureEntry.entries || [`Background feature from ${character.background.name}.`]
+						});
+					}
+				}
+
+				// Add skill proficiencies from background
+				if (backgroundData.skillProficiencies) {
+					this.addSkillProficiencies(character, backgroundData.skillProficiencies, 'Background');
+				}
+
+				// Add tool proficiencies from background
+				if (backgroundData.toolProficiencies) {
+					this.addToolProficiencies(character, backgroundData.toolProficiencies, 'Background');
+				}
+
+				// Add languages from background
+				if (backgroundData.languageProficiencies) {
+					this.addLanguageProficiencies(character, backgroundData.languageProficiencies, 'Background');
+				}
+
+				// Add starting equipment from background
+				if (backgroundData.startingEquipment) {
+					this.addBackgroundEquipment(character, backgroundData.startingEquipment);
+				}
 			}
 
 			console.log('Added background features');
 		} catch (error) {
 			console.error('Error loading background data:', error);
 		}
+	}
+
+	addSkillProficiencies(character, skillProfs, source) {
+		// Note: We no longer add character.skill or character._skillProficiencies to keep character sheets clean
+		// Skills will be calculated dynamically from proficiencies by 5etools
+
+		// Handle skill proficiency arrays from background data
+		if (Array.isArray(skillProfs)) {
+			skillProfs.forEach(skillEntry => {
+				if (typeof skillEntry === 'string') {
+					// Direct skill name - just add to proficiencies array, no calculated values
+					if (!character.skillProficiencies) character.skillProficiencies = [];
+					if (!character.expertise) character.expertise = [];
+					if (!character.skillProficiencies.includes(skillEntry)) {
+						character.skillProficiencies.push(skillEntry);
+					}
+				} else if (skillEntry.choose && skillEntry.choose.from) {
+					// Show user choice modal for skill proficiency selection
+					this.showSkillChoiceModal(skillEntry.choose, 'Skill Proficiency', (selectedSkills) => {
+						selectedSkills.forEach(skill => {
+							if (!character.skillProficiencies) character.skillProficiencies = [];
+							if (!character.expertise) character.expertise = [];
+							if (!character.skillProficiencies.includes(skill)) {
+								character.skillProficiencies.push(skill);
+							}
+						});
+						// Update character data in editor
+						this.ace.setValue(JSON.stringify(character, null, 2));
+					});
+				}
+			});
+		}
+	}
+
+	updateSingleSkillModifier(character, skillName) {
+		const totalLevel = CharacterEditorPage.getCharacterLevel(character);
+		const profBonus = this.getProficiencyBonus(totalLevel);
+		const abilityScore = this.getAbilityScoreForSkill(character, skillName);
+		const abilityMod = Math.floor((abilityScore - 10) / 2);
+
+		// Ensure _skillProficiencies is a Set
+		if (!character._skillProficiencies || !(character._skillProficiencies instanceof Set)) {
+			character._skillProficiencies = new Set();
+		}
+
+		const hasProficiency = character._skillProficiencies.has(skillName) || false;
+		const hasExpertise = this.characterHasSkillExpertise(character, skillName);
+
+		// Only set skill modifier if character has proficiency or expertise
+		if (hasProficiency || hasExpertise) {
+			let modifier = abilityMod;
+			if (hasExpertise) {
+				modifier += profBonus * 2; // Expertise doubles proficiency bonus
+			} else if (hasProficiency) {
+				modifier += profBonus;
+			}
+
+			character.skill[skillName] = modifier;
+		}
+	}
+
+	async initializeSkillProficiencies(character) {
+		// Initialize skill proficiency tracking with D&D 5e rule validation
+		if (!character._skillProficiencies) character._skillProficiencies = new Set();
+		if (!character._proficiencySources) character._proficiencySources = {};
+
+		console.log('🎯 Initializing skill proficiencies following D&D 5e rules');
+
+		// Step 1: Add racial skill proficiencies (automatic, no choices)
+		await this.addRacialSkillProficiencies(character);
+
+		// Step 2: Add background skill proficiencies (automatic, predefined)
+		await this.addBackgroundSkillProficiencies(character);
+
+		// Step 3: Add class skill proficiencies (requires user choice)
+		// Note: This only handles automatic proficiencies
+		// User choices are handled separately in the character creation wizard
+		await this.addAutomaticClassSkillProficiencies(character);
+
+		console.log('✅ Skill proficiencies initialized:', {
+			skills: Array.from(character._skillProficiencies),
+			sources: character._proficiencySources
+		});
+	}
+
+	async addRacialSkillProficiencies(character) {
+		if (!character.race) return;
+
+		try {
+			const raceName = typeof character.race === 'string' ? character.race : character.race.name;
+			const raceData = await this.loadRaceData(raceName);
+
+			if (raceData?.race?.[0]?.skillProficiencies) {
+				raceData.race[0].skillProficiencies.forEach(proficiencySet => {
+					Object.keys(proficiencySet).forEach(skillName => {
+						const normalizedSkill = skillName.toLowerCase().replace(/\s+/g, '');
+						this.addSingleSkillProficiency(character, normalizedSkill, 'Race');
+					});
+				});
+			}
+		} catch (error) {
+			console.warn(`Could not load racial skill proficiencies for ${character.race}:`, error);
+		}
+	}
+
+	async addBackgroundSkillProficiencies(character) {
+		if (!character.background) return;
+
+		try {
+			const backgroundName = typeof character.background === 'string' ? character.background : character.background.name;
+			const backgroundData = await this.loadBackgroundData(backgroundName);
+
+			if (backgroundData?.background?.[0]?.skillProficiencies) {
+				backgroundData.background[0].skillProficiencies.forEach(proficiencySet => {
+					Object.keys(proficiencySet).forEach(skillName => {
+						const normalizedSkill = skillName.toLowerCase().replace(/\s+/g, '');
+						this.addSingleSkillProficiency(character, normalizedSkill, 'Background');
+					});
+				});
+			}
+		} catch (error) {
+			console.warn(`Could not load background skill proficiencies for ${character.background}:`, error);
+		}
+	}
+
+	async addAutomaticClassSkillProficiencies(character) {
+		if (!character.class || character.class.length === 0) return;
+
+		// Only first class grants skill proficiencies in D&D 5e multiclassing
+		const primaryClass = character.class[0];
+
+		try {
+			const classData = await this.loadClassData(primaryClass.name);
+
+			if (classData?.class?.[0]?.startingProficiencies?.skills) {
+				const skillProfs = classData.class[0].startingProficiencies.skills;
+
+				// Only add automatic skill proficiencies, not choices
+				skillProfs.forEach(skillEntry => {
+					if (typeof skillEntry === 'string') {
+						// Direct skill proficiency (automatic)
+						const normalizedSkill = skillEntry.toLowerCase().replace(/\s+/g, '');
+						this.addSingleSkillProficiency(character, normalizedSkill, 'Class');
+					}
+					// Skip choice-based proficiencies - these need user input
+				});
+			}
+		} catch (error) {
+			console.warn(`Could not load class skill proficiencies for ${primaryClass.name}:`, error);
+		}
+	}
+
+	addSingleSkillProficiency(character, skillName, source) {
+		// Initialize tracking objects if missing
+		if (!character._skillProficiencies || !(character._skillProficiencies instanceof Set)) {
+			character._skillProficiencies = new Set();
+		}
+		if (!character._proficiencySources) character._proficiencySources = {};
+
+		// Normalize skill name for consistency
+		const normalizedSkill = this.normalizeSkillName(skillName);
+
+		// Validate against D&D 5e rules - no duplicate proficiencies
+		if (character._skillProficiencies.has(normalizedSkill)) {
+			console.log(`⚠️ Character already has ${normalizedSkill} proficiency from ${character._proficiencySources[normalizedSkill]}, skipping ${source}`);
+			return false;
+		}
+
+		// Add the proficiency
+		character._skillProficiencies.add(normalizedSkill);
+		character._proficiencySources[normalizedSkill] = source;
+
+		// Calculate and set the skill modifier
+		this.updateSingleSkillModifier(character, normalizedSkill);
+
+		console.log(`✅ Added ${normalizedSkill} proficiency from ${source}`);
+		return true;
+	}
+
+	async showClassSkillSelectionModal(character, className) {
+		console.log(`🎯 Showing skill selection modal for ${className}`);
+
+		try {
+			const classData = await this.loadClassData(className);
+			if (!classData?.class?.[0]?.startingProficiencies?.skills) {
+				console.log(`No skill choices for ${className}`);
+				return { success: true, selectedSkills: [] };
+			}
+
+			const skillChoices = classData.class[0].startingProficiencies.skills.find(
+				entry => entry.choose && entry.choose.from
+			);
+
+			if (!skillChoices) {
+				console.log(`No skill choices found for ${className}`);
+				return { success: true, selectedSkills: [] };
+			}
+
+			const availableSkills = skillChoices.choose.from;
+			const maxCount = skillChoices.choose.count || 2;
+			const alreadyProficient = Array.from(character._skillProficiencies || []);
+
+			// Filter out skills the character already has proficiency in
+			const selectableSkills = availableSkills.filter(skill => {
+				const normalizedSkill = skill.toLowerCase().replace(/\s+/g, '');
+				return !alreadyProficient.includes(normalizedSkill);
+			});
+
+			if (selectableSkills.length === 0) {
+				console.log(`All ${className} skills already known`);
+				return { success: true, selectedSkills: [] };
+			}
+
+			// Create modal content
+			const modalContent = `
+				<div class="mb-3">
+					<h5>Choose ${maxCount} Skills for ${className}</h5>
+					<p class="text-muted">Select ${maxCount} skill proficiencies from the ${className} class list:</p>
+
+					${alreadyProficient.length > 0 ? `
+						<div class="alert alert-info">
+							<strong>Already Proficient:</strong> ${alreadyProficient.join(', ')}
+						</div>
+					` : ''}
+				</div>
+
+				<div class="row">
+					${selectableSkills.map((skill, index) => `
+						<div class="col-md-6 mb-2">
+							<label class="ve-flex-v-center">
+								<input type="checkbox" class="skill-choice mr-2" value="${skill}" data-skill="${skill.toLowerCase().replace(/\s+/g, '')}">
+								<strong>${skill}</strong>
+								<small class="text-muted ml-1">(${this.getSkillAbility(skill)})</small>
+							</label>
+						</div>
+					`).join('')}
+				</div>
+
+				<div class="mt-3">
+					<small class="text-muted">
+						<strong>Note:</strong> You must select exactly ${maxCount} skills.
+						In D&D 5e, you cannot gain proficiency in a skill you're already proficient in.
+					</small>
+				</div>
+			`;
+
+			return new Promise((resolve) => {
+			const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+				title: `${className} - Skill Selection`,
+				hasFooter: true,
+				isPermanent: true
+			});
+
+				$modalInner.html(modalContent);
+
+				// Update button state based on selection count
+				const updateButtonState = () => {
+					const selected = $modalInner.find('.skill-choice:checked').length;
+					$btnConfirm.prop('disabled', selected !== maxCount);
+					$selectionCount.text(`${selected}/${maxCount} selected`);
+				};
+
+				// Add selection counter
+				const $selectionCount = $('<span class="mr-3 badge badge-info">0/' + maxCount + ' selected</span>');
+
+				// Handle skill selection with max count validation
+				$modalInner.find('.skill-choice').on('change', function() {
+					const selected = $modalInner.find('.skill-choice:checked').length;
+
+					if (selected > maxCount) {
+						$(this).prop('checked', false);
+						return;
+					}
+
+					updateButtonState();
+				});
+
+				const $btnCancel = $('<button class="ve-btn ve-btn-default mr-2">Cancel</button>')
+					.click(() => {
+						doClose();
+						resolve({ success: false, selectedSkills: [] });
+					});
+
+				const $btnConfirm = $('<button class="ve-btn ve-btn-primary">Confirm Selection</button>')
+					.prop('disabled', true)
+					.click(() => {
+						const selectedSkills = [];
+						$modalInner.find('.skill-choice:checked').each(function() {
+							selectedSkills.push($(this).data('skill'));
+						});
+
+						doClose();
+						resolve({ success: true, selectedSkills });
+					});
+
+				$modalFooter.append($selectionCount, $btnCancel, $btnConfirm);
+				updateButtonState();
+			});
+
+		} catch (error) {
+			console.error('Error in skill selection modal:', error);
+			return { success: false, selectedSkills: [] };
+		}
+	}
+
+	getSkillAbility(skillName) {
+		const skillAbilityMap = {
+			'Acrobatics': 'DEX', 'Animal Handling': 'WIS', 'Arcana': 'INT',
+			'Athletics': 'STR', 'Deception': 'CHA', 'History': 'INT',
+			'Insight': 'WIS', 'Intimidation': 'CHA', 'Investigation': 'INT',
+			'Medicine': 'WIS', 'Nature': 'INT', 'Perception': 'WIS',
+			'Performance': 'CHA', 'Persuasion': 'CHA', 'Religion': 'INT',
+			'Sleight of Hand': 'DEX', 'Stealth': 'DEX', 'Survival': 'WIS'
+		};
+		return skillAbilityMap[skillName] || 'Unknown';
+	}
+
+	getMulticlassProficiencies(className, classInfo) {
+		// D&D 5e multiclassing proficiency rules - very limited compared to starting with the class
+		const multiclassProfs = {
+			skills: [],
+			armor: [],
+			weapons: [],
+			tools: []
+		};
+
+		// Most classes don't grant skill proficiencies when multiclassing
+		// Only specific cases allow it (like Ranger and Rogue)
+		switch (className.toLowerCase()) {
+			case 'ranger':
+				multiclassProfs.skills = ['Animal Handling', 'Athletics', 'Insight', 'Investigation', 'Nature', 'Perception', 'Stealth', 'Survival'];
+				break;
+			case 'rogue':
+				multiclassProfs.skills = ['Acrobatics', 'Athletics', 'Deception', 'Insight', 'Intimidation', 'Investigation', 'Perception', 'Performance', 'Persuasion', 'Sleight of Hand', 'Stealth'];
+				break;
+			// Most other classes don't grant skills when multiclassing
+			default:
+				break;
+		}
+
+		// Add armor/weapon proficiencies based on multiclassing rules
+		switch (className.toLowerCase()) {
+			case 'fighter':
+				multiclassProfs.armor = ['Light armor', 'Medium armor', 'Shields'];
+				multiclassProfs.weapons = ['Simple weapons', 'Martial weapons'];
+				break;
+			case 'paladin':
+				multiclassProfs.armor = ['Light armor', 'Medium armor', 'Shields'];
+				multiclassProfs.weapons = ['Simple weapons', 'Martial weapons'];
+				break;
+			case 'ranger':
+				multiclassProfs.armor = ['Light armor', 'Medium armor', 'Shields'];
+				multiclassProfs.weapons = ['Simple weapons', 'Martial weapons'];
+				break;
+			case 'barbarian':
+				multiclassProfs.armor = ['Medium armor', 'Shields'];
+				multiclassProfs.weapons = ['Simple weapons', 'Martial weapons'];
+				break;
+			case 'cleric':
+				multiclassProfs.armor = ['Light armor', 'Medium armor', 'Shields'];
+				break;
+			case 'druid':
+				multiclassProfs.armor = ['Light armor', 'Medium armor', 'Shields (non-metal)'];
+				break;
+			case 'bard':
+				multiclassProfs.weapons = ['Simple weapons', 'Hand crossbows', 'Longswords', 'Rapiers', 'Shortswords'];
+				break;
+			case 'warlock':
+				multiclassProfs.armor = ['Light armor'];
+				multiclassProfs.weapons = ['Simple weapons'];
+				break;
+		}
+
+		return multiclassProfs;
+	}
+
+	async showClassSkillSelectionForLevelUp(className) {
+		const character = this.levelUpState.characterData;
+
+		const result = await this.showClassSkillSelectionModal(character, className);
+
+		if (result.success && result.selectedSkills.length > 0) {
+			// Store the skill selection in choices
+			this.levelUpState.choices.push({
+				type: 'skillSelection',
+				className: className,
+				selectedSkills: result.selectedSkills
+			});
+		}
+
+		// Move to next feature
+		this.levelUpState.currentFeatureIndex++;
+		await this.showNextFeatureChoice();
+	}
+
+	async showMulticlassSkillSelectionForLevelUp(className, multiclassOptions) {
+		const character = this.levelUpState.characterData;
+
+		if (!multiclassOptions.skills || multiclassOptions.skills.length === 0) {
+			// No skill choices for this multiclass, just continue
+			this.levelUpState.currentFeatureIndex++;
+			await this.showNextFeatureChoice();
+			return;
+		}
+
+		// Create a simplified skill selection for multiclass (usually just 1 skill)
+		const modalContent = `
+			<div class="mb-3">
+				<h5>Multiclass Skill Selection - ${className}</h5>
+				<p class="text-muted">When multiclassing into ${className}, you can choose 1 skill from a limited list:</p>
+			</div>
+
+			<div class="row">
+				${multiclassOptions.skills.map(skill => {
+					const normalizedSkill = skill.toLowerCase().replace(/\s+/g, '');
+					const isAlreadyProficient = character._skillProficiencies && character._skillProficiencies.has(normalizedSkill);
+
+					return `
+						<div class="col-md-6 mb-2">
+							<label class="ve-flex-v-center ${isAlreadyProficient ? 'text-muted' : ''}">
+								<input type="radio" name="multiclass-skill" class="mr-2" value="${skill}"
+									data-skill="${normalizedSkill}" ${isAlreadyProficient ? 'disabled' : ''}>
+								<strong>${skill}</strong>
+								<small class="text-muted ml-1">(${this.getSkillAbility(skill)})</small>
+								${isAlreadyProficient ? '<small class="text-muted ml-2">[Already Proficient]</small>' : ''}
+							</label>
+						</div>
+					`;
+				}).join('')}
+			</div>
+
+			<div class="mt-3">
+				<small class="text-muted">
+					<strong>Note:</strong> Multiclassing grants limited proficiencies compared to starting with a class.
+				</small>
+			</div>
+		`;
+
+	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+		title: `${className} - Multiclass Proficiencies`,
+		hasFooter: true,
+		isPermanent: true
+	});
+
+		$modalInner.html(modalContent);
+
+		const $btnCancel = $('<button class="ve-btn ve-btn-default mr-2">Skip</button>')
+			.click(() => {
+				doClose();
+				this.levelUpState.currentFeatureIndex++;
+				this.showNextFeatureChoice();
+			});
+
+		const $btnConfirm = $('<button class="ve-btn ve-btn-primary">Confirm</button>')
+			.click(() => {
+				const selectedSkill = $modalInner.find('input[name="multiclass-skill"]:checked').data('skill');
+
+				if (selectedSkill) {
+					this.levelUpState.choices.push({
+						type: 'multiclassSkillSelection',
+						className: className,
+						selectedSkills: [selectedSkill]
+					});
+				}
+
+				doClose();
+				this.levelUpState.currentFeatureIndex++;
+				this.showNextFeatureChoice();
+			});
+
+		$modalFooter.append($btnCancel, $btnConfirm);
+	}
+
+	addToolProficiencies(character, toolProfs, source) {
+		if (!character.tool) character.tool = [];
+
+		// Add tool proficiencies - simplified implementation
+		if (Array.isArray(toolProfs)) {
+			toolProfs.forEach(toolEntry => {
+				if (typeof toolEntry === 'string') {
+					character.tool.push(toolEntry);
+				}
+			});
+		}
+	}
+
+	addLanguageProficiencies(character, langProfs, source) {
+		if (!character.languages) character.languages = [];
+
+		// Add language proficiencies
+		if (Array.isArray(langProfs)) {
+			langProfs.forEach(langEntry => {
+				if (typeof langEntry === 'string') {
+					character.languages.push(langEntry);
+				} else if (langEntry.choose && langEntry.choose.from) {
+					// Choose languages - take first available
+					const count = langEntry.choose.count || 1;
+					const available = langEntry.choose.from.slice(0, count);
+					available.forEach(lang => character.languages.push(lang));
+				}
+			});
+		}
+	}
+
+	addBackgroundEquipment(character, equipment) {
+		// Background equipment is typically handled during character generation
+		// This is a placeholder for future equipment system enhancement
+		console.log('Background equipment to add:', equipment);
 	}
 
 	async addRacialTraitsToFeatures(character) {
@@ -13368,9 +15989,26 @@ class CharacterEditorPage {
 			if (!response.ok) return null;
 
 			const data = await response.json();
-			return data.background?.find(bg => bg.name === backgroundName) || null;
+			// Return the background in the 5etools format with background array
+			const background = data.background?.find(bg => bg.name === backgroundName);
+			return background ? { background: [background] } : null;
 		} catch (error) {
 			console.error('Error loading background data:', error);
+			return null;
+		}
+	}
+
+	async loadRaceData(raceName) {
+		try {
+			const response = await fetch('data/races.json');
+			if (!response.ok) return null;
+
+			const data = await response.json();
+			// Return the race in the 5etools format with race array
+			const race = data.race?.find(race => race.name === raceName);
+			return race ? { race: [race] } : null;
+		} catch (error) {
+			console.error('Error loading race data:', error);
 			return null;
 		}
 	}
@@ -13403,26 +16041,45 @@ class CharacterEditorPage {
 	async updateSpellcastingStats(character, profBonus) {
 		if (!character.spells) return;
 
-		// Update spell DC and attack bonus for spellcasting classes
+		// Update spell DC and attack bonus for spellcasting classes and subclasses
 		for (const classEntry of character.class) {
 			try {
+				let spellAbility = null;
+
+				// Check if this is a full spellcasting class
 				const classData = await this.loadClassData(classEntry.name);
 				if (classData && classData.class && classData.class[0]) {
 					const classInfo = classData.class[0];
-
-					// Check if this class has spellcasting
 					if (classInfo.spellcastingAbility) {
-						const spellAbility = classInfo.spellcastingAbility;
-						const abilityScore = character.abilities?.[spellAbility] || character[spellAbility] || 10;
-						const abilityMod = Math.floor((abilityScore - 10) / 2);
-
-						// Update spell DC and attack bonus
-						character.spells.dc = 8 + profBonus + abilityMod;
-						character.spells.attackBonus = `+${profBonus + abilityMod}`;
-						character.spells.ability = spellAbility.charAt(0).toUpperCase() + spellAbility.slice(1);
-
-						break; // Use the first spellcasting class found
+						spellAbility = classInfo.spellcastingAbility;
 					}
+				}
+
+				// Check if this is a subclass spellcaster (Arcane Trickster, Eldritch Knight)
+				if (!spellAbility && classEntry.subclass?.name) {
+					if (classEntry.name === 'Rogue' && classEntry.subclass.name === 'Arcane Trickster' && classEntry.level >= 3) {
+						spellAbility = 'int';
+					} else if (classEntry.name === 'Fighter' && classEntry.subclass.name === 'Eldritch Knight' && classEntry.level >= 3) {
+						spellAbility = 'int';
+					}
+				}
+
+				if (spellAbility) {
+					const abilityScore = character.abilities?.[spellAbility] || character[spellAbility] || 10;
+					const abilityMod = Math.floor((abilityScore - 10) / 2);
+
+					// Update spell DC and attack bonus
+					const newDC = 8 + profBonus + abilityMod;
+					const newAttackBonus = profBonus + abilityMod;
+
+					console.log(`🔮 Updating spell DC: ${spellAbility.toUpperCase()} ${abilityScore} (mod ${abilityMod}) + prof ${profBonus} = DC ${newDC}`);
+
+					character.spells.dc = newDC;
+					character.spells.attackBonus = `+${newAttackBonus}`;
+					character.spells.ability = spellAbility.charAt(0).toUpperCase() + spellAbility.slice(1);
+					character.spells.spellcastingAbility = spellAbility;
+
+					break; // Use the first spellcasting class found
 				}
 			} catch (e) {
 				console.warn(`Could not update spellcasting for class ${classEntry.name}:`, e);
@@ -13433,18 +16090,32 @@ class CharacterEditorPage {
 	async updateSpellProgression(character) {
 		if (!character.spells) return;
 
-		// Calculate spell slots for each caster class
+		// Calculate spell slots for each caster class and subclass
 		for (const classEntry of character.class) {
 			try {
+				let hasSpellcasting = false;
+				let classInfo = null;
+
+				// Check if this is a full spellcasting class
 				const classData = await this.loadClassData(classEntry.name);
 				if (classData && classData.class && classData.class[0]) {
-					const classInfo = classData.class[0];
-
-					// Check if this class has spellcasting
+					classInfo = classData.class[0];
 					if (classInfo.spellcastingAbility) {
-						const classLevel = classEntry.level || 1;
-						await this.updateSpellSlotsForClass(character, classEntry, classInfo, classLevel);
+						hasSpellcasting = true;
 					}
+				}
+
+				// Check if this is a subclass spellcaster (Arcane Trickster, Eldritch Knight)
+				if (!hasSpellcasting && classEntry.subclass?.name) {
+					if ((classEntry.name === 'Rogue' && classEntry.subclass.name === 'Arcane Trickster' && classEntry.level >= 3) ||
+					    (classEntry.name === 'Fighter' && classEntry.subclass.name === 'Eldritch Knight' && classEntry.level >= 3)) {
+						hasSpellcasting = true;
+					}
+				}
+
+				if (hasSpellcasting) {
+					const classLevel = classEntry.level || 1;
+					await this.updateSpellSlotsForClass(character, classEntry, classInfo, classLevel);
 				}
 			} catch (e) {
 				console.warn(`Could not update spell progression for class ${classEntry.name}:`, e);
@@ -13479,7 +16150,25 @@ class CharacterEditorPage {
 		}
 	}
 
-	getSpellSlotsForClass(className, level) {
+	isThirdCasterClass(classEntry) {
+		// Check if a class entry represents a third-caster
+		if (!classEntry) return false;
+
+		const className = classEntry.name;
+		const subclassName = classEntry.subclass?.name;
+
+		// Direct third-caster subclasses
+		if (subclassName === "Eldritch Knight" && className === "Fighter") {
+			return true;
+		}
+		if (subclassName === "Arcane Trickster" && className === "Rogue") {
+			return true;
+		}
+
+		return false;
+	}
+
+	getSpellSlotsForClass(className, level, classEntry = null) {
 		// Standard D&D 5e spell slot progression tables
 		const fullCasters = {
 			"Bard": true, "Cleric": true, "Druid": true, "Sorcerer": true, "Wizard": true, "Warlock": false // Warlock is special
@@ -13499,8 +16188,8 @@ class CharacterEditorPage {
 			return this.getHalfCasterSlots(level);
 		} else if (className === "Warlock") {
 			return this.getWarlockSlots(level);
-		} else if (thirdCasters[className] || (className === "Fighter" || className === "Rogue")) {
-			// Fighter/Rogue with Eldritch Knight/Arcane Trickster subclass
+		} else if (thirdCasters[className] || (classEntry && this.isThirdCasterClass(classEntry))) {
+			// Third-caster subclasses (Eldritch Knight, Arcane Trickster)
 			return this.getThirdCasterSlots(level);
 		}
 
@@ -13531,7 +16220,7 @@ class CharacterEditorPage {
 		// Half casters start getting spells at level 2
 		if (level < 2) return {};
 
-		const effectiveLevel = Math.ceil(level / 2);
+		const effectiveLevel = Math.floor(level / 2);
 		return this.getFullCasterSlots(effectiveLevel);
 	}
 
@@ -13539,14 +16228,41 @@ class CharacterEditorPage {
 		// Third casters start getting spells at level 3
 		if (level < 3) return {};
 
-		const effectiveLevel = Math.ceil(level / 3);
+		const effectiveLevel = Math.floor(level / 3);
 		return this.getFullCasterSlots(effectiveLevel);
 	}
 
 	getWarlockSlots(level) {
-		// Warlock spell slots are different - few slots but they're all max level
-		const slots = Math.min(4, Math.ceil(level / 2)); // 1 at 1st, 2 at 3rd, 3 at 5th, 4 at 7th+
-		const slotLevel = Math.min(5, Math.ceil((level + 1) / 2)); // 1st at 1st, 2nd at 3rd, 3rd at 5th, 4th at 7th, 5th at 9th
+		// Warlock Pact Magic progression - different from other casters
+		let slots, slotLevel;
+
+		if (level >= 17) {
+			slots = 4;
+			slotLevel = 5;
+		} else if (level >= 11) {
+			slots = 3;
+			slotLevel = 5;
+		} else if (level >= 9) {
+			slots = 2;
+			slotLevel = 5;
+		} else if (level >= 7) {
+			slots = 2;
+			slotLevel = 4;
+		} else if (level >= 5) {
+			slots = 2;
+			slotLevel = 3;
+		} else if (level >= 3) {
+			slots = 2;
+			slotLevel = 2;
+		} else if (level >= 2) {
+			slots = 2;
+			slotLevel = 1;
+		} else if (level >= 1) {
+			slots = 1;
+			slotLevel = 1;
+		} else {
+			return {};
+		}
 
 		return { [slotLevel]: slots };
 	}
@@ -13741,21 +16457,963 @@ class CharacterEditorPage {
 		}
 	}
 
-	addOrUpdateAction(character, actionName, entries) {
+	addOrUpdateAction(character, actionName, entries, actionData = null) {
 		const existingIndex = character.action.findIndex(action =>
 			action.name === actionName || action.name.includes(actionName)
 		);
 
-		const action = {
-			name: actionName,
-			entries: entries
-		};
+		let action;
+		if (actionData) {
+			// Use structured action data if provided
+			action = {
+				name: actionName,
+				entries: entries,
+				...actionData,
+				dataType: 'action'
+			};
+		} else {
+			// Fallback to simple action format
+			action = {
+				name: actionName,
+				entries: entries
+			};
+		}
 
 		if (existingIndex >= 0) {
 			character.action[existingIndex] = action;
 		} else {
 			character.action.push(action);
 		}
+
+		console.log(`✨ ${existingIndex >= 0 ? 'Updated' : 'Added'} action: ${actionName} ${actionData ? '(structured)' : '(basic)'}`);
+	}
+
+	async addOrUpdateFeature(character, featureName, entries, featureData = null, source = 'class') {
+		const featuresSection = this.ensureSingleFeaturesSection(character);
+
+		// Check if feature already exists
+		const existingIndex = featuresSection.entries.findIndex(entry =>
+			entry.name === featureName || entry.name.includes(featureName)
+		);
+
+		let featureEntry;
+		if (featureData) {
+			// Use structured feature data if provided
+			featureEntry = await this.createStructuredFeatureData({
+				name: featureName,
+				entries: entries,
+				...featureData
+			}, source);
+		} else {
+			// Fallback to simple feature format
+			featureEntry = {
+				type: "entries",
+				name: featureName,
+				entries: entries
+			};
+		}
+
+		if (existingIndex >= 0) {
+			featuresSection.entries[existingIndex] = featureEntry;
+		} else {
+			featuresSection.entries.push(featureEntry);
+		}
+
+		console.log(`✨ ${existingIndex >= 0 ? 'Updated' : 'Added'} feature: ${featureName} ${featureData ? '(structured)' : '(basic)'}`);
+	}
+
+	async validateCharacterRules(character, validationLevel = 'strict') {
+		console.log('🔍 Starting comprehensive D&D 5e rule validation...');
+		const validationResults = {
+			valid: true,
+			warnings: [],
+			errors: [],
+			suggestions: []
+		};
+
+		try {
+			// Core D&D 5e rule validations
+			await this.validateAbilityScores(character, validationResults);
+			await this.validateClassRequirements(character, validationResults);
+			await this.validateProficiencyRules(character, validationResults);
+			await this.validateSpellcastingRules(character, validationResults);
+			await this.validateEquipmentRules(character, validationResults);
+			await this.validateFeatureCompatibility(character, validationResults);
+
+			// Set overall validity
+			validationResults.valid = validationResults.errors.length === 0;
+
+			if (validationResults.valid) {
+				console.log('✅ Character passes all D&D 5e rule validations');
+			} else {
+				console.log(`❌ Character has ${validationResults.errors.length} rule violations`);
+			}
+
+			return validationResults;
+		} catch (error) {
+			console.error('Error during rule validation:', error);
+			validationResults.valid = false;
+			validationResults.errors.push('Validation system error occurred');
+			return validationResults;
+		}
+	}
+
+	async validateAbilityScores(character, results) {
+		// Handle both nested (character.abilities.str) and direct (character.str) formats
+		const abilities = character.abilities || character;
+		const requiredAbilities = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+
+		// Check all abilities are present and valid
+		for (const ability of requiredAbilities) {
+			const score = abilities[ability];
+			if (score === undefined || score === null) {
+				results.errors.push(`Missing ${ability.toUpperCase()} ability score`);
+			} else if (score < 3 || score > 20) {
+				results.errors.push(`${ability.toUpperCase()} score ${score} is outside valid range (3-20)`);
+			} else if (score < 8) {
+				results.warnings.push(`${ability.toUpperCase()} score ${score} is very low - consider point buy or rolling method`);
+			}
+		}
+
+		// Validate ability score generation method compliance
+		const totalPoints = Object.values(abilities).reduce((sum, score) => sum + (score || 0), 0);
+		if (totalPoints < 45) {
+			results.warnings.push('Total ability scores seem low - verify generation method');
+		} else if (totalPoints > 108) {
+			results.warnings.push('Total ability scores seem high - verify generation method');
+		}
+	}
+
+	async validateClassRequirements(character, results) {
+		if (!character.class || character.class.length === 0) {
+			results.errors.push('Character must have at least one class');
+			return;
+		}
+
+		for (const classEntry of character.class) {
+			const className = classEntry.name;
+			const classLevel = classEntry.level;
+
+			// Validate multiclass requirements
+			if (character.class.length > 1) {
+				await this.validateMulticlassRequirements(character, classEntry, results);
+			}
+
+			// Validate class level progression
+			if (classLevel < 1 || classLevel > 20) {
+				results.errors.push(`Invalid level ${classLevel} for ${className} (must be 1-20)`);
+			}
+
+			// Validate subclass selection timing
+			await this.validateSubclassRequirements(classEntry, results);
+		}
+
+		// Validate total character level
+		const totalLevel = character.class.reduce((sum, cls) => sum + cls.level, 0);
+		if (totalLevel > 20) {
+			results.errors.push(`Total character level ${totalLevel} exceeds maximum of 20`);
+		}
+	}
+
+	async validateMulticlassRequirements(character, classEntry, results) {
+		const className = classEntry.name;
+		const abilities = character.abilities || {};
+
+		// D&D 5e multiclass ability score requirements
+		const multiclassRequirements = {
+			'Barbarian': {str: 13},
+			'Bard': {cha: 13},
+			'Cleric': {wis: 13},
+			'Druid': {wis: 13},
+			'Fighter': {str: 13, dex: 13}, // Either STR or DEX 13+
+			'Monk': {dex: 13, wis: 13},
+			'Paladin': {str: 13, cha: 13},
+			'Ranger': {dex: 13, wis: 13},
+			'Rogue': {dex: 13},
+			'Sorcerer': {cha: 13},
+			'Warlock': {cha: 13},
+			'Wizard': {int: 13}
+		};
+
+		const requirements = multiclassRequirements[className];
+		if (requirements) {
+			for (const [ability, minScore] of Object.entries(requirements)) {
+				const score = abilities[ability] || 0;
+
+				// Special case for Fighter - need either STR OR DEX 13+
+				if (className === 'Fighter') {
+					const strScore = abilities.str || 0;
+					const dexScore = abilities.dex || 0;
+					if (strScore < 13 && dexScore < 13) {
+						results.errors.push(`Multiclass Fighter requires STR 13+ OR DEX 13+ (have STR ${strScore}, DEX ${dexScore})`);
+					}
+				} else if (score < minScore) {
+					results.errors.push(`Multiclass ${className} requires ${ability.toUpperCase()} ${minScore}+ (have ${score})`);
+				}
+			}
+		}
+	}
+
+	async validateSubclassRequirements(classEntry, results) {
+		const className = classEntry.name;
+		const classLevel = classEntry.level;
+		const hasSubclass = classEntry.subclass && classEntry.subclass.name;
+
+		// Subclass selection levels by class
+		const subclassLevels = {
+			'Barbarian': 3, 'Bard': 3, 'Cleric': 1, 'Druid': 2,
+			'Fighter': 3, 'Monk': 3, 'Paladin': 3, 'Ranger': 3,
+			'Rogue': 3, 'Sorcerer': 1, 'Warlock': 1, 'Wizard': 2
+		};
+
+		const requiredLevel = subclassLevels[className];
+		if (requiredLevel) {
+			if (classLevel >= requiredLevel && !hasSubclass) {
+				results.errors.push(`${className} level ${classLevel} must have a subclass selected (required at level ${requiredLevel})`);
+			} else if (classLevel < requiredLevel && hasSubclass) {
+				results.warnings.push(`${className} has subclass selected before level ${requiredLevel} requirement`);
+			}
+		}
+	}
+
+	async validateProficiencyRules(character, results) {
+		// Validate skill proficiencies follow D&D rules
+		// Count skills from both the rendered character.skill and internal _skillProficiencies
+		let skillCount = 0;
+
+		// Count from _proficiencySources which tracks actual proficiencies
+		if (character._proficiencySources) {
+			skillCount += Object.keys(character._proficiencySources).length;
+		}
+
+		// Also count from internal _skillProficiencies Set if it exists
+		if (character._skillProficiencies && character._skillProficiencies instanceof Set) {
+			// Add any internal proficiencies not already counted in _proficiencySources
+			const sourcedSkills = new Set(Object.keys(character._proficiencySources || {}));
+			for (const skill of character._skillProficiencies) {
+				if (!sourcedSkills.has(skill)) {
+					skillCount++;
+				}
+			}
+		}
+
+		console.log(`Skill proficiency count: ${skillCount} (sources: ${Object.keys(character._proficiencySources || {}).join(', ')})`);
+
+		if (skillCount > 0) {
+			const expectedSkills = this.calculateExpectedSkillProficiencies(character);
+
+			if (skillCount > expectedSkills.max) {
+				results.errors.push(`Too many skill proficiencies: ${skillCount} (expected max: ${expectedSkills.max})`);
+			} else if (skillCount < expectedSkills.min) {
+				results.warnings.push(`Few skill proficiencies: ${skillCount} (expected min: ${expectedSkills.min})`);
+			}
+		}
+
+		// Validate saving throw proficiencies
+		if (character.save) {
+			for (const classEntry of character.class || []) {
+				const expectedSaves = this.getClassSavingThrows(classEntry.name);
+				for (const save of expectedSaves) {
+					if (!character.save[save]) {
+						results.errors.push(`Missing required ${save.toUpperCase()} saving throw proficiency for ${classEntry.name}`);
+					}
+				}
+			}
+		}
+	}
+
+	calculateExpectedSkillProficiencies(character) {
+		// Calculate expected skill proficiencies based on D&D 5e rules
+		let min = 0;
+		let max = 0;
+
+		// Base class skills
+		for (const classEntry of character.class || []) {
+			const classSkills = this.getClassSkillAllowance(classEntry.name);
+			min += classSkills.min;
+			max += classSkills.max;
+		}
+
+		// Background skills (typically 2)
+		if (character.background) {
+			min += 2;
+			max += 2;
+		}
+
+		// Racial skills (varies by race)
+		if (character.race) {
+			const raceName = typeof character.race === 'string' ? character.race : character.race.name;
+			const racialSkills = this.getRaceSkillCount(raceName);
+			min += racialSkills.min;
+			max += racialSkills.max;
+		}
+
+		return { min: Math.max(min, 2), max: Math.min(max, 18) }; // Reasonable bounds
+	}
+
+	getClassSkillCount(className) {
+		// Standard skill proficiencies granted by each class
+		const classSkills = {
+			'Barbarian': { min: 2, max: 2 },
+			'Bard': { min: 3, max: 3 },
+			'Cleric': { min: 2, max: 2 },
+			'Druid': { min: 2, max: 2 },
+			'Fighter': { min: 2, max: 2 },
+			'Monk': { min: 2, max: 2 },
+			'Paladin': { min: 2, max: 2 },
+			'Ranger': { min: 3, max: 3 },
+			'Rogue': { min: 4, max: 4 },
+			'Sorcerer': { min: 2, max: 2 },
+			'Warlock': { min: 2, max: 2 },
+			'Wizard': { min: 2, max: 2 }
+		};
+
+		return classSkills[className] || { min: 2, max: 2 };
+	}
+
+	getRaceSkillCount(raceName) {
+		// Races that grant skill proficiencies
+		const raceSkills = {
+			'Half-Elf': { min: 2, max: 2 },
+			'Human': { min: 1, max: 1 }, // Variant Human
+			'Elf': { min: 1, max: 1 }, // Keen Senses (Perception)
+			'Half-Orc': { min: 1, max: 1 }, // Menacing (Intimidation)
+			default: { min: 0, max: 1 } // Most races don't grant skills
+		};
+
+		return raceSkills[raceName] || raceSkills.default;
+	}
+
+
+	getClassSkillAllowance(className) {
+		const skillAllowances = {
+			'Barbarian': {min: 2, max: 2},
+			'Bard': {min: 3, max: 3},
+			'Cleric': {min: 2, max: 2},
+			'Druid': {min: 2, max: 2},
+			'Fighter': {min: 2, max: 2},
+			'Monk': {min: 2, max: 2},
+			'Paladin': {min: 2, max: 2},
+			'Ranger': {min: 3, max: 3},
+			'Rogue': {min: 4, max: 4},
+			'Sorcerer': {min: 2, max: 2},
+			'Warlock': {min: 2, max: 2},
+			'Wizard': {min: 2, max: 2}
+		};
+		return skillAllowances[className] || {min: 2, max: 2};
+	}
+
+	getClassSavingThrows(className) {
+		const classSaves = {
+			'Barbarian': ['str', 'con'],
+			'Bard': ['dex', 'cha'],
+			'Cleric': ['wis', 'cha'],
+			'Druid': ['int', 'wis'],
+			'Fighter': ['str', 'con'],
+			'Monk': ['str', 'dex'],
+			'Paladin': ['wis', 'cha'],
+			'Ranger': ['str', 'dex'],
+			'Rogue': ['dex', 'int'],
+			'Sorcerer': ['con', 'cha'],
+			'Warlock': ['wis', 'cha'],
+			'Wizard': ['int', 'wis']
+		};
+		return classSaves[className] || [];
+	}
+
+	getRacialSkillCount(raceName) {
+		const racialSkills = {
+			'Human': 1, // Variant Human
+			'Half-Elf': 2,
+			'Elf': 1, // Perception typically
+			"Bugbear": 1, // Stealth proficiency
+			'Dwarf': 0,
+			'Halfling': 0,
+			'Dragonborn': 0,
+			'Gnome': 0,
+			'Half-Orc': 0,
+			'Tiefling': 0
+		};
+		return racialSkills[raceName] || 0;
+	}
+
+	async validateSpellcastingRules(character, results) {
+		if (!character.spells) return; // Non-spellcasters don't need spell validation
+
+		const spellcastingClasses = character.class.filter(cls =>
+			this.isSpellcastingClass(cls.name)
+		);
+
+		if (spellcastingClasses.length === 0) {
+			results.warnings.push('Character has spells but no spellcasting classes');
+			return;
+		}
+
+		// Validate spell slot progression
+		await this.validateSpellSlots(character, spellcastingClasses, results);
+
+		// Validate spell lists by class
+		await this.validateSpellLists(character, spellcastingClasses, results);
+
+		// Validate spellcasting ability and DC
+		await this.validateSpellcastingStats(character, spellcastingClasses, results);
+	}
+
+	async validateSpellSlots(character, spellcastingClasses, results) {
+		if (!character.spells.levels) return;
+
+		// Calculate expected spell slots based on class levels
+		let expectedSlots = {};
+		for (const classEntry of spellcastingClasses) {
+			const progression = this.getSpellcastingProgression(classEntry.name);
+			const slots = this.calculateSpellSlots(classEntry.level, progression);
+
+			for (const [level, count] of Object.entries(slots)) {
+				expectedSlots[level] = (expectedSlots[level] || 0) + count;
+			}
+		}
+
+		// Check actual vs expected
+		for (const [level, spellLevel] of Object.entries(character.spells.levels)) {
+			const actualSlots = spellLevel.maxSlots || 0;
+			const expected = expectedSlots[level] || 0;
+
+			if (actualSlots > expected) {
+				results.warnings.push(`Too many level ${level} spell slots: ${actualSlots} (expected: ${expected})`);
+			} else if (actualSlots < expected && level !== '0') {
+				results.warnings.push(`Too few level ${level} spell slots: ${actualSlots} (expected: ${expected})`);
+			}
+		}
+	}
+
+	async validateSpellLists(character, spellcastingClasses, results) {
+		if (!character.spells.levels) return;
+
+		for (const [level, spellLevel] of Object.entries(character.spells.levels)) {
+			if (!spellLevel.spells) continue;
+
+			for (const spell of spellLevel.spells) {
+				const spellName = typeof spell === 'string' ? spell : spell.name;
+
+				// Check if spell is valid for character's classes
+				let validForAnyClass = false;
+				for (const classEntry of spellcastingClasses) {
+					if (await this.isSpellValidForClass(spellName, classEntry.name, classEntry.subclass?.name, character)) {
+						validForAnyClass = true;
+						break;
+					}
+				}
+
+				if (!validForAnyClass) {
+					results.warnings.push(`Spell "${spellName}" may not be available to character's classes`);
+				}
+			}
+		}
+	}
+
+	async validateSpellcastingStats(character, spellcastingClasses, results) {
+		if (!character.spells.dc || !character.spells.attackBonus) {
+			results.warnings.push('Missing spell DC or attack bonus calculation');
+			return;
+		}
+
+		// Calculate expected DC based on primary spellcasting class
+		const primaryClass = spellcastingClasses[0]; // Use first spellcasting class
+		const spellAbility = this.getSpellcastingAbility(primaryClass.name);
+		const abilityScore = character.abilities?.[spellAbility] || character[spellAbility] || 10;
+		const abilityMod = Math.floor((abilityScore - 10) / 2);
+		const totalLevel = CharacterEditorPage.getCharacterLevel(character);
+		const profBonus = this.getProficiencyBonus(totalLevel);
+
+		const expectedDC = 8 + profBonus + abilityMod;
+		const expectedAttack = profBonus + abilityMod;
+
+		if (character.spells.dc !== expectedDC) {
+			results.warnings.push(`Spell DC ${character.spells.dc} doesn't match expected ${expectedDC} (${spellAbility.toUpperCase()} ${abilityScore})`);
+		}
+
+		const attackBonus = parseInt(character.spells.attackBonus.replace('+', ''));
+		if (attackBonus !== expectedAttack) {
+			results.warnings.push(`Spell attack ${character.spells.attackBonus} doesn't match expected +${expectedAttack}`);
+		}
+	}
+
+	async validateEquipmentRules(character, results) {
+		// Validate armor proficiency vs equipped armor
+		if (character.ac && character.ac.from) {
+			const armorType = this.determineArmorType(character.ac.from);
+			if (armorType && !this.hasArmorProficiency(character, armorType)) {
+				results.errors.push(`Character lacks proficiency for ${armorType} armor but has AC from armor`);
+			}
+		}
+
+		// Validate weapon proficiency vs attacks
+		if (character.action) {
+			for (const action of character.action) {
+				if (this.isWeaponAttack(action)) {
+					const weaponType = this.determineWeaponType(action.name);
+					if (weaponType && !this.hasWeaponProficiency(character, weaponType)) {
+						results.warnings.push(`Character may lack proficiency with ${action.name}`);
+					}
+				}
+			}
+		}
+	}
+
+	async validateFeatureCompatibility(character, results) {
+		// Check for conflicting or redundant features
+		const features = this.getAllCharacterFeatures(character);
+		const featureNames = features.map(f => f.name);
+
+		// Check for duplicate features
+		const duplicates = featureNames.filter((name, index) =>
+			featureNames.indexOf(name) !== index
+		);
+
+		for (const duplicate of duplicates) {
+			results.warnings.push(`Duplicate feature detected: ${duplicate}`);
+		}
+
+		// Validate class feature prerequisites
+		for (const classEntry of character.class || []) {
+			await this.validateClassFeaturePrerequisites(character, classEntry, results);
+		}
+	}
+
+	async validateClassFeaturePrerequisites(character, classEntry, results) {
+		// Validate that high-level features have prerequisites met
+		const className = classEntry.name;
+		const level = classEntry.level;
+
+		// Example: Barbarian Brutal Critical requires Rage
+		if (className === 'Barbarian' && level >= 9) {
+			const hasRage = this.characterHasFeature(character, 'Rage');
+			if (!hasRage) {
+				results.errors.push('Barbarian level 9+ requires Rage feature');
+			}
+		}
+
+		// Example: Fighter Extra Attack progression
+		if (className === 'Fighter' && level >= 5) {
+			const hasExtraAttack = this.characterHasFeature(character, 'Extra Attack');
+			if (!hasExtraAttack) {
+				results.warnings.push('Fighter level 5+ should have Extra Attack feature');
+			}
+		}
+	}
+
+	// Helper methods for validation
+	isSpellcastingClass(className) {
+		const fullCasters = ['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Warlock', 'Wizard'];
+		const halfCasters = ['Paladin', 'Ranger'];
+		const thirdCasters = ['Fighter', 'Rogue']; // Eldritch Knight, Arcane Trickster
+
+		return fullCasters.includes(className) || halfCasters.includes(className) || thirdCasters.includes(className);
+	}
+
+	async canCharacterSelectSpells(character, level) {
+		console.log('=== CHECKING IF CHARACTER CAN SELECT SPELLS ===');
+		console.log('Character:', character);
+		console.log('Level:', level);
+
+		const reasons = [];
+		let canSelect = false;
+
+		// Check each class for spellcasting ability
+		for (const classEntry of character.class || []) {
+			const className = classEntry.name;
+			console.log(`Checking class: ${className}`);
+
+			// Check if it's a known spellcasting class
+			if (this.isSpellcastingClass(className)) {
+				reasons.push(`${className} is a spellcasting class`);
+
+				// Check level requirements for spellcasting
+				const classLevel = classEntry.level || 1;
+				if (className === 'Paladin' && classLevel >= 2) {
+					canSelect = true;
+					reasons.push(`${className} gains spells at level 2`);
+				} else if (className === 'Ranger' && classLevel >= 2) {
+					canSelect = true;
+					reasons.push(`${className} gains spells at level 2`);
+				} else if (['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Warlock', 'Wizard'].includes(className)) {
+					canSelect = true;
+					reasons.push(`${className} is a full caster from level 1`);
+				} else if (className === 'Fighter' && classEntry.subclass?.name === 'Eldritch Knight' && classLevel >= 3) {
+					canSelect = true;
+					reasons.push(`Eldritch Knight Fighter gains spells at level 3`);
+				} else if (className === 'Rogue' && classEntry.subclass?.name === 'Arcane Trickster' && classLevel >= 3) {
+					canSelect = true;
+					reasons.push(`Arcane Trickster Rogue gains spells at level 3`);
+				}
+			}
+		}
+
+		// Check racial spellcasting (if any)
+		if (character.race) {
+			const raceName = character.race.name || character.race;
+			// Some races get innate spellcasting
+			const spellcastingRaces = ['Tiefling', 'Drow', 'High Elf', 'Forest Gnome'];
+			if (spellcastingRaces.includes(raceName)) {
+				reasons.push(`${raceName} race has innate spellcasting`);
+				// Don't set canSelect for racial spells alone, only class-based spell selection
+			}
+		}
+
+		console.log(`Spell selection result: ${canSelect ? 'YES' : 'NO'}`);
+		console.log(`Reasons: ${reasons.join(', ')}`);
+
+		return {
+			canSelect,
+			reasons
+		};
+	}
+
+	async isSpellValidForClass(spellName, className, subclassName = null, character = null) {
+		console.log(`Checking if ${spellName} is valid for ${className} ${subclassName ? `(${subclassName})` : ''}`);
+
+		// Check all spell levels for the spell using the existing function
+		for (let level = 0; level <= 9; level++) {
+			const spellsAtLevel = this.getClassSpellList(className, level);
+			if (spellsAtLevel.includes(spellName)) {
+				console.log(`✅ ${spellName} found in ${className} level ${level} spells`);
+				return true;
+			}
+		}
+
+		// Check subclass-specific spell lists if applicable
+		if (subclassName) {
+			// Some subclasses get expanded spell lists (like Warlock patrons)
+			const expandedSpells = this.getSubclassExpandedSpells(className, subclassName);
+			if (expandedSpells) {
+				for (let level = 0; level <= 9; level++) {
+					const spellsAtLevel = expandedSpells[level] || [];
+					if (spellsAtLevel.includes(spellName)) {
+						console.log(`✅ ${spellName} found in ${className} ${subclassName} expanded spells level ${level}`);
+						return true;
+					}
+				}
+			}
+		}
+
+		// Check racial spells if character provided
+		if (character) {
+			const racialSpells = this.getRacialSpells(character.race);
+			if (racialSpells.includes(spellName)) {
+				console.log(`✅ ${spellName} found in racial spells for ${character.race?.name || character.race}`);
+				return true;
+			}
+		}
+
+		console.log(`❌ ${spellName} not found in ${className} spell list`);
+		return false;
+	}
+
+	getSubclassExpandedSpells(className, subclassName) {
+		// Handle expanded spell lists for subclasses like Warlock patrons
+		if (className === 'Warlock') {
+			const patronSpells = {
+				'The Fiend': {
+					1: ['Burning Hands', 'Command'],
+					2: ['Blindness/Deafness', 'Scorching Ray'],
+					3: ['Fireball', 'Stinking Cloud'],
+					4: ['Fire Shield', 'Wall of Fire'],
+					5: ['Flame Strike', 'Hallow']
+				},
+				'The Great Old One': {
+					1: ['Dissonant Whispers', 'Tasha\'s Hideous Laughter'],
+					2: ['Calm Emotions', 'Detect Thoughts'],
+					3: ['Clairvoyance', 'Sending'],
+					4: ['Dominate Beast', 'Evard\'s Black Tentacles'],
+					5: ['Dominate Person', 'Telekinesis']
+				},
+				'The Genie': {
+					1: ['Detect Evil and Good'],
+					2: ['Phantasmal Force'],
+					3: ['Create Food and Water'],
+					4: ['Phantasmal Killer'],
+					5: ['Creation'],
+					9: ['Wish']
+				},
+				'The Celestial': {
+					1: ['Cure Wounds', 'Guiding Bolt'],
+					2: ['Flaming Sphere', 'Lesser Restoration'],
+					3: ['Daylight', 'Revivify'],
+					4: ['Guardian of Faith', 'Wall of Fire'],
+					5: ['Flame Strike', 'Greater Restoration']
+				}
+			};
+			return patronSpells[subclassName] || null;
+		}
+
+		// Add other subclass expanded spells as needed
+		return null;
+	}
+
+	getSpellcastingProgression(className) {
+		const progressions = {
+			'Bard': 'full', 'Cleric': 'full', 'Druid': 'full',
+			'Sorcerer': 'full', 'Wizard': 'full',
+			'Paladin': 'half', 'Ranger': 'half',
+			'Warlock': 'pact',
+			'Fighter': 'third', 'Rogue': 'third'
+		};
+		return progressions[className] || 'none';
+	}
+
+	getSpellcastingAbility(className) {
+		const abilities = {
+			'Bard': 'cha', 'Cleric': 'wis', 'Druid': 'wis',
+			'Paladin': 'cha', 'Ranger': 'wis', 'Sorcerer': 'cha',
+			'Warlock': 'cha', 'Wizard': 'int',
+			'Fighter': 'int', 'Rogue': 'int'
+		};
+		return abilities[className] || 'int';
+	}
+
+	isWeaponAttack(action) {
+		if (!action || !action.entries) return false;
+
+		// Check if the action contains attack roll indicators
+		const actionText = action.entries.join(' ').toLowerCase();
+		const attackIndicators = [
+			'@atk', // 5etools attack notation
+			'to hit',
+			'attack roll',
+			'melee weapon attack',
+			'ranged weapon attack',
+			'weapon attack'
+		];
+
+		return attackIndicators.some(indicator => actionText.includes(indicator));
+	}
+
+	determineWeaponType(weaponName) {
+		// Remove 5etools notation and get clean weapon name
+		const cleanName = weaponName.replace(/\{@[^}]+\}/g, '').trim().toLowerCase();
+
+		const weaponTypes = {
+			// Simple Melee Weapons
+			'club': 'simple',
+			'dagger': 'simple',
+			'dart': 'simple',
+			'javelin': 'simple',
+			'mace': 'simple',
+			'quarterstaff': 'simple',
+			'sickle': 'simple',
+			'spear': 'simple',
+			'crossbow, light': 'simple',
+			'light crossbow': 'simple',
+			'shortbow': 'simple',
+			'sling': 'simple',
+
+			// Martial Melee Weapons
+			'battleaxe': 'martial',
+			'flail': 'martial',
+			'glaive': 'martial',
+			'greataxe': 'martial',
+			'greatsword': 'martial',
+			'halberd': 'martial',
+			'lance': 'martial',
+			'longsword': 'martial',
+			'maul': 'martial',
+			'morningstar': 'martial',
+			'pike': 'martial',
+			'rapier': 'martial',
+			'scimitar': 'martial',
+			'shortsword': 'martial',
+			'trident': 'martial',
+			'war pick': 'martial',
+			'warhammer': 'martial',
+			'whip': 'martial',
+			'crossbow, hand': 'martial',
+			'hand crossbow': 'martial',
+			'crossbow, heavy': 'martial',
+			'heavy crossbow': 'martial',
+			'longbow': 'martial',
+			'net': 'martial'
+		};
+
+		return weaponTypes[cleanName] || null;
+	}
+
+	hasWeaponProficiency(character, weaponType) {
+		if (!character.class || !weaponType) return false;
+
+		// Check class weapon proficiencies
+		for (const classEntry of character.class) {
+			const classProficiencies = this.getClassWeaponProficiencies(classEntry.name);
+			if (classProficiencies.includes(weaponType) || classProficiencies.includes('all')) {
+				return true;
+			}
+		}
+
+		// Check racial weapon proficiencies
+		if (character.race) {
+			const raceName = character.race.name || character.race;
+			const racialProficiencies = this.getRacialWeaponProficiencies(raceName);
+			if (racialProficiencies.includes(weaponType) || racialProficiencies.includes('all')) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	getClassWeaponProficiencies(className) {
+		const classProficiencies = {
+			'Barbarian': ['simple', 'martial'],
+			'Bard': ['simple', 'hand crossbow', 'longsword', 'rapier', 'shortsword'],
+			'Cleric': ['simple'],
+			'Druid': ['club', 'dagger', 'dart', 'javelin', 'mace', 'quarterstaff', 'scimitar', 'shield', 'sickle', 'sling', 'spear'],
+			'Fighter': ['simple', 'martial'],
+			'Monk': ['simple', 'shortsword'],
+			'Paladin': ['simple', 'martial'],
+			'Ranger': ['simple', 'martial'],
+			'Rogue': ['simple', 'hand crossbow', 'longsword', 'rapier', 'shortsword'],
+			'Sorcerer': ['dagger', 'dart', 'sling', 'quarterstaff', 'light crossbow'],
+			'Warlock': ['simple'],
+			'Wizard': ['dagger', 'dart', 'sling', 'quarterstaff', 'light crossbow']
+		};
+
+		return classProficiencies[className] || [];
+	}
+
+	getRacialWeaponProficiencies(raceName) {
+		const racialProficiencies = {
+			'Dwarf': ['battleaxe', 'handaxe', 'light hammer', 'warhammer'],
+			'Elf': ['longsword', 'shortsword', 'shortbow', 'longbow'],
+			'High Elf': ['longsword', 'shortsword', 'shortbow', 'longbow'],
+			'Wood Elf': ['longsword', 'shortsword', 'shortbow', 'longbow'],
+			'Dark Elf': ['rapier', 'shortsword', 'hand crossbow'],
+			'Drow': ['rapier', 'shortsword', 'hand crossbow'],
+			'Hobgoblin': ['simple', 'martial'] // Some races get broad proficiencies
+		};
+
+		return racialProficiencies[raceName] || [];
+	}
+
+	characterHasFeature(character, featureName) {
+		// Check in Features & Traits section
+		const featuresSection = character.entries?.find(e => e.name === 'Features & Traits');
+		if (featuresSection) {
+			return featuresSection.entries.some(entry =>
+				entry.name === featureName || entry.name.includes(featureName)
+			);
+		}
+
+		// Check legacy feature array
+		if (character.feature) {
+			return character.feature.some(f => f.name === featureName || f.name.includes(featureName));
+		}
+
+		return false;
+	}
+
+	getAllCharacterFeatures(character) {
+		const features = [];
+
+		// Get from Features & Traits section
+		const featuresSection = character.entries?.find(e => e.name === 'Features & Traits');
+		if (featuresSection) {
+			features.push(...featuresSection.entries);
+		}
+
+		// Get from legacy feature array
+		if (character.feature) {
+			features.push(...character.feature);
+		}
+
+		return features;
+	}
+
+	determineArmorType(acFrom) {
+		if (Array.isArray(acFrom)) {
+			const armorSource = acFrom.find(ac => ac.from && typeof ac.from === 'string');
+			if (armorSource) {
+				if (armorSource.from.includes('leather')) return 'light';
+				if (armorSource.from.includes('chain') || armorSource.from.includes('scale')) return 'medium';
+				if (armorSource.from.includes('plate') || armorSource.from.includes('splint')) return 'heavy';
+			}
+		}
+		return null;
+	}
+
+	hasArmorProficiency(character, armorType) {
+		// Check class proficiencies
+		for (const classEntry of character.class || []) {
+			const proficiencies = this.getClassArmorProficiencies(classEntry.name);
+			if (proficiencies.includes(armorType)) return true;
+		}
+		return false;
+	}
+
+	getClassArmorProficiencies(className) {
+		const armorProfs = {
+			'Barbarian': ['light', 'medium', 'shield'],
+			'Bard': ['light'],
+			'Cleric': ['light', 'medium', 'shield'],
+			'Druid': ['light', 'medium', 'shield'], // non-metal
+			'Fighter': ['light', 'medium', 'heavy', 'shield'],
+			'Monk': [], // Unarmored typically
+			'Paladin': ['light', 'medium', 'heavy', 'shield'],
+			'Ranger': ['light', 'medium', 'shield'],
+			'Rogue': ['light'],
+			'Sorcerer': [],
+			'Warlock': ['light'],
+			'Wizard': []
+		};
+		return armorProfs[className] || [];
+	}
+
+	createValidationSummaryHTML(validationResults) {
+		if (validationResults.valid && validationResults.warnings.length === 0) {
+			return `
+				<div class="alert alert-success mb-3">
+					<strong>✅ Character Validation Passed!</strong> Your character follows all D&D 5e rules.
+				</div>
+			`;
+		}
+
+		let html = '';
+
+		// Show errors if any
+		if (validationResults.errors.length > 0) {
+			html += `
+				<div class="alert alert-danger mb-3">
+					<strong>❌ Rule Violations Found:</strong>
+					<ul class="mb-0 mt-2">
+						${validationResults.errors.map(error => `<li>${error}</li>`).join('')}
+					</ul>
+				</div>
+			`;
+		}
+
+		// Show warnings if any
+		if (validationResults.warnings.length > 0) {
+			html += `
+				<div class="alert alert-warning mb-3">
+					<strong>⚠️ Rule Warnings:</strong>
+					<ul class="mb-0 mt-2">
+						${validationResults.warnings.map(warning => `<li>${warning}</li>`).join('')}
+					</ul>
+				</div>
+			`;
+		}
+
+		// Show suggestions if any
+		if (validationResults.suggestions.length > 0) {
+			html += `
+				<div class="alert alert-info mb-3">
+					<strong>💡 Suggestions:</strong>
+					<ul class="mb-0 mt-2">
+						${validationResults.suggestions.map(suggestion => `<li>${suggestion}</li>`).join('')}
+					</ul>
+				</div>
+			`;
+		}
+
+		return html;
 	}
 
 	async updateCharacterSpeeds(character) {
@@ -13892,6 +17550,7 @@ class CharacterEditorPage {
 
 	async updateScalingStats(character, profBonus) {
 		// Update any other stats that scale with level or proficiency bonus
+		const totalLevel = CharacterEditorPage.getCharacterLevel(character);
 
 		// Update passive perception
 		const wisScore = character.abilities?.wis || character.wis || 10;
@@ -13899,15 +17558,321 @@ class CharacterEditorPage {
 		const hasPerceptionProf = this.characterHasSkillProficiency(character, "perception");
 		character.passive = 10 + wisMod + (hasPerceptionProf ? profBonus : 0);
 
-		// Update other derived stats as needed
+		// Note: Removed skill and save object creation to keep character sheets clean
+		// 5etools will calculate skill/save modifiers dynamically from proficiencies
+		// await this.initializeSkillProficiencies(character);
+		// await this.updateSkillModifiers(character, profBonus);
+		// await this.updateSavingThrows(character, profBonus);
+
+		// Update class feature DCs that scale with proficiency bonus
+		await this.updateClassFeatureDCs(character, profBonus, totalLevel);
+
+		// Update weapon attack bonuses with proficiency
+		await this.updateWeaponProficiencies(character, profBonus);
 	}
 
-	characterHasSkillProficiency(character, skillName) {
-		// Check if character has proficiency in a skill
-		if (character.skill && character.skill[skillName]) {
+	async updateSkillModifiers(character, profBonus) {
+		if (!character.skill) character.skill = {};
+
+		const skillToAbility = {
+			'acrobatics': 'dex',
+			'animalhandling': 'wis',
+			'arcana': 'int',
+			'athletics': 'str',
+			'deception': 'cha',
+			'history': 'int',
+			'insight': 'wis',
+			'intimidation': 'cha',
+			'investigation': 'int',
+			'medicine': 'wis',
+			'nature': 'int',
+			'perception': 'wis',
+			'performance': 'cha',
+			'persuasion': 'cha',
+			'religion': 'int',
+			'sleightofhand': 'dex',
+			'stealth': 'dex',
+			'survival': 'wis'
+		};
+
+		// Calculate modifiers for all skills, but only add proficiency bonus where character has proficiency
+		for (const [skill, ability] of Object.entries(skillToAbility)) {
+			const abilityScore = character.abilities?.[ability] || character[ability] || 10;
+			const abilityMod = Math.floor((abilityScore - 10) / 2);
+
+			// Check proficiency using only the internal tracking and data sources (not existing modifiers)
+			const hasProficiency = this.characterHasSkillProficiencyFromSources(character, skill);
+			const hasExpertise = this.characterHasSkillExpertise(character, skill);
+
+			let modifier = abilityMod;
+			if (hasExpertise) {
+				modifier += profBonus * 2; // Expertise doubles proficiency bonus
+			} else if (hasProficiency) {
+				modifier += profBonus;
+			}
+
+			character.skill[skill] = modifier;
+		}
+	}
+
+	async updateSavingThrows(character, profBonus) {
+		if (!character.save) character.save = {};
+
+		const abilities = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+
+		// Calculate modifiers for all saving throws, but only add proficiency bonus where character has proficiency
+		for (const ability of abilities) {
+			const abilityScore = character.abilities?.[ability] || character[ability] || 10;
+			const abilityMod = Math.floor((abilityScore - 10) / 2);
+
+			const hasProficiency = await this.characterHasSavingThrowProficiency(character, ability);
+
+			let modifier = abilityMod;
+			if (hasProficiency) {
+				modifier += profBonus;
+			}
+
+			character.save[ability] = modifier;
+		}
+	}
+
+	async updateClassFeatureDCs(character, profBonus, totalLevel) {
+		// Update class feature DCs that scale with proficiency bonus
+		for (const classEntry of character.class) {
+			try {
+				const classData = await this.loadClassData(classEntry.name);
+				if (classData && classData.class && classData.class[0]) {
+					const classInfo = classData.class[0];
+
+					// Update Ki save DC for Monks
+					if (classEntry.name.toLowerCase() === 'monk') {
+						const wisScore = character.abilities?.wis || character.wis || 10;
+						const wisMod = Math.floor((wisScore - 10) / 2);
+						const kiDC = 8 + profBonus + wisMod;
+
+						// Update existing Ki features with correct DC
+						if (character.feature) {
+							character.feature.forEach(feature => {
+								if (feature.name === 'Ki' || (feature.entries && feature.entries.some(e =>
+									typeof e === 'string' && e.includes('Ki')
+								))) {
+									feature.entries = feature.entries.map(entry => {
+										if (typeof entry === 'string' && entry.includes('DC')) {
+											return entry.replace(/DC \d+/, `DC ${kiDC}`);
+										}
+										return entry;
+									});
+								}
+							});
+						}
+					}
+
+					// Update Channel Divinity DC for Clerics and Paladins
+					if (['cleric', 'paladin'].includes(classEntry.name.toLowerCase())) {
+						const chaScore = character.abilities?.cha || character.cha || 10;
+						const chaMod = Math.floor((chaScore - 10) / 2);
+						const channelDC = 8 + profBonus + chaMod;
+
+						// Update existing Channel Divinity features
+						if (character.feature) {
+							character.feature.forEach(feature => {
+								if (feature.name.includes('Channel Divinity') || feature.name.includes('Turn Undead')) {
+									feature.entries = feature.entries.map(entry => {
+										if (typeof entry === 'string' && entry.includes('DC')) {
+											return entry.replace(/DC \d+/, `DC ${channelDC}`);
+										}
+										return entry;
+									});
+								}
+							});
+						}
+					}
+				}
+			} catch (e) {
+				console.warn(`Could not update class feature DCs for ${classEntry.name}:`, e);
+			}
+		}
+	}
+
+	async updateWeaponProficiencies(character, profBonus) {
+		if (!character.action) return;
+
+		// Update weapon attacks with proficiency bonuses
+		character.action.forEach(action => {
+			if (action.entries && action.entries.some(e =>
+				typeof e === 'string' && e.includes('weapon attack')
+			)) {
+				action.entries = action.entries.map(entry => {
+					if (typeof entry === 'string' && entry.includes('+')) {
+						// Update attack bonus to include proficiency
+						// This is a simplified approach - in a full implementation,
+						// you'd check weapon proficiencies from class data
+						return entry.replace(/\+(\d+) to hit/, `+${profBonus + parseInt(RegExp.$1) || profBonus} to hit`);
+					}
+					return entry;
+				});
+			}
+		});
+	}
+
+	characterHasSkillExpertise(character, skillName) {
+		// Check if character has expertise in a skill (doubles proficiency bonus)
+		if (!character.expertise) return false;
+		
+		// Check if skill is in the expertise array
+		return character.expertise.includes(skillName);
+	}
+
+	async characterHasSavingThrowProficiency(character, ability) {
+		// In D&D 5e, you only get saving throw proficiencies from your FIRST class when multiclassing
+		if (!character.class || character.class.length === 0) {
+			return false;
+		}
+
+		const primaryClass = character.class[0]; // First class only
+		try {
+			const classData = await this.loadClassData(primaryClass.name);
+			if (classData && classData.class && classData.class[0] && classData.class[0].proficiency) {
+				const proficiencies = classData.class[0].proficiency;
+				// Check if the ability is in the proficiency array
+				return proficiencies.includes(ability);
+			}
+		} catch (e) {
+			console.warn(`Could not load saving throw proficiencies for ${primaryClass.name}:`, e);
+		}
+
+		return false;
+	}
+
+	characterHasSkillProficiencyFromSources(character, skillName) {
+		// Check proficiency from sources only (no circular logic with existing modifiers)
+
+		// First check the internal proficiency tracking set
+		if (character._skillProficiencies && character._skillProficiencies instanceof Set && character._skillProficiencies.has(skillName)) {
 			return true;
 		}
-		// You might need to check other places depending on how skills are stored
+
+		return false;
+	}
+
+	async characterHasSkillProficiency(character, skillName) {
+		// Check if character has proficiency in a skill from multiple sources
+
+		// First check the internal proficiency tracking set
+		if (character._skillProficiencies && character._skillProficiencies instanceof Set && character._skillProficiencies.has(skillName)) {
+			return true;
+		}
+
+		// Check class skill proficiencies (only first class due to multiclassing rules)
+		if (character.class && character.class.length > 0) {
+			const hasProficiency = await this.classGrantsSkillProficiency(character.class[0].name, skillName);
+			if (hasProficiency) return true;
+		}
+
+		// Check background skill proficiencies
+		if (character.background) {
+			const hasProficiency = await this.backgroundGrantsSkillProficiency(character.background, skillName);
+			if (hasProficiency) return true;
+		}
+
+		// Check racial skill proficiencies
+		if (character.race) {
+			const hasProficiency = await this.raceGrantsSkillProficiency(character.race, skillName);
+			if (hasProficiency) return true;
+		}
+
+		return false;
+	}
+
+	normalizeSkillName(skillName) {
+		// Normalize skill names to lowercase with no spaces for consistency
+		return skillName.toLowerCase().replace(/\s+/g, '').replace(/[^\w]/g, '');
+	}
+
+	getAbilityScoreForSkill(character, skillName) {
+		const skillToAbility = {
+			'acrobatics': 'dex',
+			'animalhandling': 'wis',
+			'arcana': 'int',
+			'athletics': 'str',
+			'deception': 'cha',
+			'history': 'int',
+			'insight': 'wis',
+			'intimidation': 'cha',
+			'investigation': 'int',
+			'medicine': 'wis',
+			'nature': 'int',
+			'perception': 'wis',
+			'performance': 'cha',
+			'persuasion': 'cha',
+			'religion': 'int',
+			'sleightofhand': 'dex',
+			'stealth': 'dex',
+			'survival': 'wis'
+		};
+
+		const normalizedSkillName = this.normalizeSkillName(skillName);
+		const ability = skillToAbility[normalizedSkillName];
+		if (!ability) return 10;
+
+		return character.abilities?.[ability] || character[ability] || 10;
+	}
+
+	async classGrantsSkillProficiency(className, skillName) {
+		try {
+			const classData = await this.loadClassData(className);
+			if (classData && classData.class && classData.class[0] && classData.class[0].startingProficiencies) {
+				const proficiencies = classData.class[0].startingProficiencies;
+				if (proficiencies.skills) {
+					// Handle different skill proficiency formats
+					if (Array.isArray(proficiencies.skills)) {
+						return proficiencies.skills.some(skill =>
+							skill.toLowerCase().includes(skillName.toLowerCase())
+						);
+					} else if (proficiencies.skills.choose && proficiencies.skills.choose.from) {
+						return proficiencies.skills.choose.from.some(skill =>
+							skill.toLowerCase().includes(skillName.toLowerCase())
+						);
+					}
+				}
+			}
+		} catch (e) {
+			// Continue checking
+		}
+		return false;
+	}
+
+	async backgroundGrantsSkillProficiency(backgroundName, skillName) {
+		try {
+			const backgroundData = await this.loadBackgroundData(backgroundName);
+			if (backgroundData && backgroundData.background && backgroundData.background[0] && backgroundData.background[0].skillProficiencies) {
+				const skillProfs = backgroundData.background[0].skillProficiencies;
+				return skillProfs.some(profSet =>
+					Object.keys(profSet).some(skill =>
+						skill.toLowerCase().includes(skillName.toLowerCase())
+					)
+				);
+			}
+		} catch (e) {
+			// Continue checking
+		}
+		return false;
+	}
+
+	async raceGrantsSkillProficiency(raceName, skillName) {
+		try {
+			const raceData = await this.loadRaceData(raceName);
+			if (raceData && raceData.race && raceData.race[0] && raceData.race[0].skillProficiencies) {
+				const skillProfs = raceData.race[0].skillProficiencies;
+				return skillProfs.some(profSet =>
+					Object.keys(profSet).some(skill =>
+						skill.toLowerCase().includes(skillName.toLowerCase())
+					)
+				);
+			}
+		} catch (e) {
+			// Continue checking
+		}
 		return false;
 	}
 
@@ -13972,13 +17937,10 @@ class CharacterEditorPage {
 		`);
 	}
 
-	applyLevelUpFeaturesToCharacter(character) {
+	async applyLevelUpFeaturesToCharacter(character) {
 		// Initialize both entries and trait arrays if they don't exist
 		if (!character.entries) {
 			character.entries = [];
-		}
-		if (!character.trait) {
-			character.trait = [];
 		}
 
 		// Ensure single Features & Traits section exists
@@ -13995,24 +17957,86 @@ class CharacterEditorPage {
 					const featureName = featureData.feature.name || 'Unknown Feature';
 					const featureEntries = featureData.feature.entries || [`${featureName} - Gained at level ${this.levelUpState.newLevel}.`];
 
-					// Create feature entry for the Features & Traits section
-					const featureEntry = {
-						type: "entries",
-						name: featureName,
-						entries: featureEntries
-					};
+					// Skip spell selection for non-spellcasters
+					if (featureName.includes('Spell Selection') && character.class) {
+						// For multiclass characters, we need to be more careful about spell selection
+						// Allow spell selection if:
+						// 1. Any class in the character is a spellcaster
+						// 2. OR the current class being leveled up is a spellcaster (even if it wasn't detected in #1)
+						
+						const isAnyClassSpellcaster = character.class.some(cls => {
+							if (!cls || !cls.name) return false;
+							
+							// Check both versions of isSpellcastingClass for compatibility
+							const isSpellcaster1 = this.isSpellcastingClass(cls.name, cls);
+							const isSpellcaster2 = this.isSpellcastingClass(cls.name); // simpler version
+							
+							console.log(`Checking ${cls.name}: method1=${isSpellcaster1}, method2=${isSpellcaster2}`);
+							return isSpellcaster1 || isSpellcaster2;
+						});
+						
+						// Also check the specific class being leveled up
+						const currentClass = this.levelUpState?.selectedClassIndex !== undefined 
+							? character.class[this.levelUpState.selectedClassIndex]
+							: null;
+						const isCurrentClassSpellcaster = currentClass 
+							? (this.isSpellcastingClass(currentClass.name, currentClass) || this.isSpellcastingClass(currentClass.name))
+							: false;
+						
+						if (!isAnyClassSpellcaster && !isCurrentClassSpellcaster) {
+							console.log(`Skipped "${featureName}" for non-spellcaster. Classes checked:`, character.class.map(c => c.name));
+							return; // Skip this feature
+						} else {
+							console.log(`Allowing "${featureName}" for spellcaster. isAnyClass=${isAnyClassSpellcaster}, isCurrentClass=${isCurrentClassSpellcaster}`);
+						}
+					}
 
-					// Add to the existing Features & Traits section
-					featuresSection.entries.push(featureEntry);
+					// Check for duplicate features before adding (more robust check)
+					const existingFeature = featuresSection.entries.find(entry => {
+						// Check exact name match
+						if (entry.name === featureName) return true;
 
-					console.log(`Added feature "${featureName}" to Features & Traits section`);
+						// Check if it's a string entry that contains the feature name
+						if (typeof entry === 'string' && entry.includes(featureName)) return true;
+
+						// Check nested entries for the feature name
+						if (entry.entries && Array.isArray(entry.entries)) {
+							return entry.entries.some(e =>
+								typeof e === 'string' && e.includes(featureName)
+							);
+						}
+
+						// Check for similar names (handles cases like "Eldritch Invocations" vs "Eldritch Invocations (Level X)")
+						if (entry.name && featureName) {
+							const normalizedExisting = entry.name.toLowerCase().replace(/\s*\([^)]*\)|\s*-.*$/g, '').trim();
+							const normalizedNew = featureName.toLowerCase().replace(/\s*\([^)]*\)|\s*-.*$/g, '').trim();
+							if (normalizedExisting === normalizedNew) return true;
+						}
+
+						return false;
+					});
+					if (!existingFeature) {
+						// Create feature entry for the Features & Traits section
+						const featureEntry = {
+							type: "entries",
+							name: featureName,
+							entries: featureEntries
+						};
+
+						// Add to the existing Features & Traits section
+						featuresSection.entries.push(featureEntry);
+
+						console.log(`Added feature "${featureName}" to Features & Traits section`);
+					} else {
+						console.log(`Skipped duplicate feature: ${featureName}`);
+					}
 				}
 			});
 		}
 
 		// Apply chosen features from levelUpState.choices
 		if (this.levelUpState && this.levelUpState.choices) {
-			this.levelUpState.choices.forEach(choice => {
+			for (const choice of this.levelUpState.choices) {
 				if (choice.type === 'abilityScores' && choice.scores) {
 					// Apply initial ability score assignment for level 0 characters
 					console.log('Applying initial ability scores:', choice.scores);
@@ -14077,14 +18101,20 @@ class CharacterEditorPage {
 						.join(', ');
 
 					const improvementDescription = [`Increased ability scores: ${improvementText}`];
+					const featureName = `Ability Score Improvement (Level ${this.levelUpState.newLevel})`;
 
-					// Add to Features & Traits section
-					const featureEntry = {
-						type: "entries",
-						name: "Ability Score Improvement",
-						entries: improvementDescription
-					};
-					featuresSection.entries.push(featureEntry);
+					// Check for duplicate features before adding (using level-specific name)
+					const existingFeature = featuresSection.entries.find(entry => entry.name === featureName);
+					if (!existingFeature) {
+						const featureEntry = {
+							type: "entries",
+							name: featureName,
+							entries: improvementDescription
+						};
+						featuresSection.entries.push(featureEntry);
+					} else {
+						console.log(`Skipped duplicate ASI for level ${this.levelUpState.newLevel}`);
+					}
 
 					console.log(`Applied ASI: ${improvementText} at level ${this.levelUpState.newLevel}`);
 
@@ -14094,30 +18124,119 @@ class CharacterEditorPage {
 				} else if (choice.type === 'feat' && choice.featName) {
 					// Apply feat choice
 					const featDescription = [choice.featDescription || `${choice.featName} feat selected at level ${this.levelUpState.newLevel}.`];
+					const featureName = `Feat: ${choice.featName}`;
 
-					// Add to Features & Traits section
-					const featureEntry = {
-						type: "entries",
-						name: `Feat: ${choice.featName}`,
-						entries: featDescription
-					};
-					featuresSection.entries.push(featureEntry);
-
-					console.log(`Applied feat: ${choice.featName} at level ${this.levelUpState.newLevel}`);
+					// Check for duplicate features before adding
+					const existingFeature = featuresSection.entries.find(entry => entry.name === featureName);
+					if (!existingFeature) {
+						const featureEntry = {
+							type: "entries",
+							name: featureName,
+							entries: featDescription
+						};
+						featuresSection.entries.push(featureEntry);
+						console.log(`Applied feat: ${choice.featName} at level ${this.levelUpState.newLevel}`);
+					} else {
+						console.log(`Skipped duplicate feat: ${choice.featName}`);
+					}
 
 				} else if (choice.type === 'fightingStyle' && choice.styleName) {
 					// Apply fighting style choice
 					const styleDescription = [choice.styleDescription || `${choice.styleName} fighting style selected.`];
+					const featureName = `Fighting Style: ${choice.styleName}`;
 
-					// Add to Features & Traits section
+					// Check for duplicate features before adding
+					const existingFeature = featuresSection.entries.find(entry => entry.name === featureName);
+					if (!existingFeature) {
+						const featureEntry = {
+							type: "entries",
+							name: featureName,
+							entries: styleDescription
+						};
+						featuresSection.entries.push(featureEntry);
+						console.log(`Applied fighting style: ${choice.styleName} at level ${this.levelUpState.newLevel}`);
+					} else {
+						console.log(`Skipped duplicate fighting style: ${choice.styleName}`);
+					}
+
+				} else if (choice.type === 'metamagic' && choice.selections) {
+					// Apply metamagic choices
+					for (const selection of choice.selections) {
+						const featureName = `Metamagic: ${selection.name}`;
+
+						// Check for duplicate features before adding
+						const existingFeature = featuresSection.entries.find(entry => entry.name === featureName);
+						if (!existingFeature) {
+							const featureEntry = {
+								type: "entries",
+								name: featureName,
+								entries: [selection.description, `Cost: ${selection.cost}`]
+							};
+							featuresSection.entries.push(featureEntry);
+						} else {
+							console.log(`Skipped duplicate metamagic: ${selection.name}`);
+						}
+					}
+					console.log(`Applied ${choice.selections.length} metamagic options at level ${this.levelUpState.newLevel}`);
+
+				} else if (choice.type === 'dragonbornAncestry' && choice.ancestry) {
+					// Apply dragonborn ancestry choice
+					const ancestry = choice.ancestry;
+					const featureName = `Draconic Ancestry: ${ancestry.name} Dragon`;
+
+					// Check for duplicate features before adding
+					const existingFeature = featuresSection.entries.find(entry => entry.name === featureName);
+					if (!existingFeature) {
+						const featureEntry = {
+							type: "entries",
+							name: featureName,
+							entries: [
+								`Damage Type: ${ancestry.damageType}`,
+								`Breath Weapon: ${ancestry.breathWeapon}`,
+								`Damage Resistance: ${ancestry.resistance}`
+							]
+						};
+						featuresSection.entries.push(featureEntry);
+
+						// Add damage resistance to character
+						if (!character.resist) character.resist = [];
+						if (!character.resist.includes(ancestry.resistance.toLowerCase())) {
+							character.resist.push(ancestry.resistance.toLowerCase());
+						}
+
+						console.log(`Applied dragonborn ancestry: ${ancestry.name} at level ${this.levelUpState.newLevel}`);
+					} else {
+						console.log(`Skipped duplicate dragonborn ancestry: ${ancestry.name}`);
+					}
+
+				} else if (choice.type === 'classFeature' && choice.featureName) {
+					// Apply general class feature choices
+					const featureName = choice.featureName;
+
+					// Check for duplicate features before adding
+					const existingFeature = featuresSection.entries.find(entry => entry.name === featureName);
+					if (!existingFeature) {
+						const featureEntry = {
+							type: "entries",
+							name: featureName,
+							entries: choice.featureDescription ? [choice.featureDescription] : [`${featureName} class feature selected.`]
+						};
+						featuresSection.entries.push(featureEntry);
+						console.log(`Applied class feature: ${featureName} at level ${this.levelUpState.newLevel}`);
+					} else {
+						console.log(`Skipped duplicate class feature: ${featureName}`);
+					}
+
+				} else if (choice.type === 'racialFeature' && choice.featureName) {
+					// Apply racial feature choices
 					const featureEntry = {
 						type: "entries",
-						name: `Fighting Style: ${choice.styleName}`,
-						entries: styleDescription
+						name: choice.featureName,
+						entries: choice.featureDescription ? [choice.featureDescription] : [`${choice.featureName} racial feature selected.`]
 					};
 					featuresSection.entries.push(featureEntry);
 
-					console.log(`Applied fighting style: ${choice.styleName} at level ${this.levelUpState.newLevel}`);
+					console.log(`Applied racial feature: ${choice.featureName} at level ${this.levelUpState.newLevel}`);
 
 				} else if (choice.type === 'optional' && choice.selections) {
 					// Apply optional feature selections
@@ -14145,17 +18264,88 @@ class CharacterEditorPage {
 
 					console.log(`Applied generic feature: ${featureName} with notes: ${choice.notes}`);
 
-				} else if (choice.type === 'spells' && choice.selections) {
-					// Apply spell selections
-					const spells = choice.selections;
-					const spellEntries = [];
+				} else if (choice.type === 'skillSelection' && choice.selectedSkills) {
+					// Apply skill proficiency selections
+					console.log('Applying skill proficiencies:', choice.selectedSkills);
 
-					if (spells.cantrips && spells.cantrips.length > 0) {
-						spellEntries.push(`**Cantrips Known:** ${spells.cantrips.join(', ')}`);
+					choice.selectedSkills.forEach(skillName => {
+						this.addSingleSkillProficiency(character, skillName, 'Class');
+					});
+
+					// Update skill modifiers to include the new proficiencies
+					// Note: Removed skill modifier updates to keep character sheets clean
+					// const totalLevel = CharacterEditorPage.getCharacterLevel(character);
+					// const profBonus = this.getProficiencyBonus(totalLevel);
+					// await this.updateSkillModifiers(character, profBonus);
+
+					console.log(`Applied ${choice.selectedSkills.length} skill proficiencies from class selection`);
+
+				} else if (choice.type === 'multiclassSkillSelection' && choice.selectedSkills) {
+					// Apply multiclass skill proficiency selections
+					console.log('Applying multiclass skill proficiencies:', choice.selectedSkills);
+
+					choice.selectedSkills.forEach(skillName => {
+						this.addSingleSkillProficiency(character, skillName, 'Multiclass');
+					});
+
+					// Update skill modifiers to include the new proficiencies
+					// Note: Removed skill modifier updates to keep character sheets clean
+					// const totalLevel = CharacterEditorPage.getCharacterLevel(character);
+					// const profBonus = this.getProficiencyBonus(totalLevel);
+					// await this.updateSkillModifiers(character, profBonus);
+
+					console.log(`Applied ${choice.selectedSkills.length} multiclass skill proficiencies`);
+
+				} else if (choice.type === 'spells' && choice.selections) {
+					// Apply spell selections to proper spell level slots
+					const spells = choice.selections;
+
+					// Initialize spells structure if it doesn't exist
+					if (!character.spells) character.spells = {};
+					if (!character.spells.levels) character.spells.levels = {};
+
+					// Process spells by their actual spell levels
+					for (const spellLevel of Object.keys(spells)) {
+						const spellsAtLevel = spells[spellLevel];
+						if (spellsAtLevel && spellsAtLevel.length > 0) {
+							// Initialize the spell level if it doesn't exist
+							if (!character.spells.levels[spellLevel]) {
+								character.spells.levels[spellLevel] = {
+									maxSlots: spellLevel === '0' ? 0 : 0, // Will be updated by spell slot progression
+									slotsUsed: 0,
+									spells: []
+								};
+							}
+
+							// Ensure the spells array exists before using .find()
+							if (!character.spells.levels[spellLevel].spells) {
+								character.spells.levels[spellLevel].spells = [];
+							}
+
+							// Add spells to the correct level, avoiding duplicates
+							for (const spellName of spellsAtLevel) {
+								// Check if spell already exists (handle both string and object formats)
+								const existingSpell = character.spells.levels[spellLevel].spells.find(s =>
+									(typeof s === 'string' ? s : s.name) === spellName
+								);
+
+								if (!existingSpell) {
+									// Store spell as string only (per user requirement)
+									character.spells.levels[spellLevel].spells.push(spellName);
+									console.log(`✨ Added spell to character: ${spellName} (Level ${spellLevel})`);
+								}
+							}
+						}
 					}
 
-					if (spells.spells && spells.spells.length > 0) {
-						spellEntries.push(`**Spells Known:** ${spells.spells.join(', ')}`);
+					// Create feature entry for display
+					const spellEntries = [];
+					for (const spellLevel of Object.keys(spells)) {
+						const spellsAtLevel = spells[spellLevel];
+						if (spellsAtLevel && spellsAtLevel.length > 0) {
+							const levelName = spellLevel === '0' ? 'Cantrips Known' : `Level ${spellLevel} Spells Known`;
+							spellEntries.push(`**${levelName}:** ${spellsAtLevel.join(', ')}`);
+						}
 					}
 
 					if (spellEntries.length > 0) {
@@ -14166,7 +18356,8 @@ class CharacterEditorPage {
 						};
 						featuresSection.entries.push(featureEntry);
 
-						console.log(`Applied spell selections: ${spells.cantrips?.length || 0} cantrips, ${spells.spells?.length || 0} spells`);
+						const totalSpells = Object.values(spells).reduce((sum, arr) => sum + arr.length, 0);
+						console.log(`Applied ${totalSpells} spell selections across ${Object.keys(spells).length} spell levels`);
 					}
 
 				} else if (choice.selectedOption) {
@@ -14181,7 +18372,7 @@ class CharacterEditorPage {
 					};
 					featuresSection.entries.push(featureEntry);
 				}
-			});
+			}
 		}
 
 		// Apply optional feature choice if it exists
@@ -14195,8 +18386,8 @@ class CharacterEditorPage {
 			featuresSection.entries.push(featureEntry);
 		}
 
-		// Update hit points based on class level increase
-		this.updateHitPointsForLevelUp(character);
+		// Show HP choice modal and update hit points based on user choice
+		this.showHPChoiceModal(character);
 
 		// Update spell slots if character is a spellcaster
 		this.updateSpellSlotsForLevelUp(character);
@@ -14206,16 +18397,14 @@ class CharacterEditorPage {
 		// Recalculate all stats that depend on ability scores after ASI
 		console.log('Recalculating derived stats after ability score changes...');
 
-		const abilities = character.abilities || {};
-
-		// Calculate ability modifiers
+		// Calculate ability modifiers (handle both nested and direct formats)
 		const getModifier = (score) => Math.floor((score - 10) / 2);
-		const strMod = getModifier(abilities.str || 10);
-		const dexMod = getModifier(abilities.dex || 10);
-		const conMod = getModifier(abilities.con || 10);
-		const intMod = getModifier(abilities.int || 10);
-		const wisMod = getModifier(abilities.wis || 10);
-		const chaMod = getModifier(abilities.cha || 10);
+		const strMod = getModifier(character.abilities?.str || character.str || 10);
+		const dexMod = getModifier(character.abilities?.dex || character.dex || 10);
+		const conMod = getModifier(character.abilities?.con || character.con || 10);
+		const intMod = getModifier(character.abilities?.int || character.int || 10);
+		const wisMod = getModifier(character.abilities?.wis || character.wis || 10);
+		const chaMod = getModifier(character.abilities?.cha || character.cha || 10);
 
 		// Update proficiency bonus based on total character level
 		const totalLevel = character.level || 1;
@@ -14241,6 +18430,11 @@ class CharacterEditorPage {
 			}
 		}
 
+		// Update spellcasting stats if character has spells
+		if (character.spells) {
+			this.updateSpellcastingStats(character, character.profBonus);
+		}
+
 		console.log('Derived stats recalculated:', {
 			profBonus: character.profBonus,
 			hitPoints: character.hitPoints,
@@ -14248,8 +18442,144 @@ class CharacterEditorPage {
 		});
 	}
 
-	updateHitPointsForLevelUp(character) {
+	showHPChoiceModal(character) {
+		const classes = character.class;
+		if (!classes || !Array.isArray(classes)) {
+			return;
+		}
 
+		const selectedClassIndex = this.levelUpState.selectedClassIndex;
+		if (selectedClassIndex === undefined || !classes[selectedClassIndex]) {
+			return;
+		}
+
+		const selectedClass = classes[selectedClassIndex];
+		const className = selectedClass.name;
+		const hitDie = this.getClassHitDie(className, character);
+
+		// Handle both nested abilities object and direct properties for CON
+		const conScore = character.abilities ? character.abilities.con : character.con || 10;
+		const conMod = Math.floor((conScore - 10) / 2);
+
+		// Calculate average HP gain
+		const averageGain = Math.floor(hitDie / 2) + 1 + conMod;
+		const maxPossibleGain = hitDie + conMod;
+		const minPossibleGain = 1 + conMod;
+
+		// Simulate a dice roll
+		const rolledValue = Math.floor(Math.random() * hitDie) + 1;
+		const rolledGain = rolledValue + conMod;
+
+		const modalContent = `
+			<p class="mb-3"><strong>Leveling up ${className}</strong></p>
+			<p class="mb-3">Hit Die: d${hitDie} + CON modifier (${conMod >= 0 ? '+' : ''}${conMod})</p>
+
+			<h6>Choose HP Gain Method:</h6>
+			<div class="form-group">
+				<div class="form-check mb-3">
+					<input class="form-check-input" type="radio" name="hpChoice" id="takeAverage" value="average" checked>
+					<label class="form-check-label" for="takeAverage">
+						<strong>Take Average: ${averageGain} HP</strong>
+						<small class="text-muted d-block">Safe choice - always get the average value</small>
+					</label>
+				</div>
+				<div class="form-check mb-3">
+					<input class="form-check-input" type="radio" name="hpChoice" id="rollDice" value="roll">
+					<label class="form-check-label" for="rollDice">
+						<strong>Roll Dice: ${rolledGain} HP</strong>
+						<small class="text-muted d-block">You rolled ${rolledValue} on d${hitDie} + ${conMod} CON = ${rolledGain} HP</small>
+						<small class="text-muted d-block">Range: ${minPossibleGain}-${maxPossibleGain} HP</small>
+					</label>
+				</div>
+			</div>
+
+			<div id="rollResult" class="alert alert-info" style="display: none;">
+				<strong>New Roll:</strong> <span id="newRollValue"></span> HP
+			</div>
+		`;
+
+		const $modal = UiUtil.getModal({
+			title: "Hit Point Increase",
+			cbClose: () => {
+				// If modal is closed without selection, default to average
+				this.updateHitPointsForLevelUp(character, averageGain);
+			}
+		});
+
+		const $modalInner = $modal.find('.modal-dialog');
+		$modalInner.addClass('modal-lg');
+
+		const $modalBody = $modal.find('.modal-body');
+		$modalBody.html(modalContent);
+
+		const $modalFooter = $modal.find('.modal-footer');
+		$modalFooter.empty();
+
+		const $btnReroll = $('<button class="btn btn-secondary mr-2">Roll Again</button>');
+		const $btnConfirm = $('<button class="btn btn-primary">Confirm Choice</button>');
+		const $btnCancel = $('<button class="btn btn-outline-secondary">Cancel</button>');
+
+		// Reroll functionality
+		$btnReroll.click(() => {
+			const newRoll = Math.floor(Math.random() * hitDie) + 1;
+			const newGain = newRoll + conMod;
+
+			// Update the roll option label
+			$modalInner.find('#rollDice').next('label').html(`
+				<strong>Roll Dice: ${newGain} HP</strong>
+				<small class="text-muted d-block">You rolled ${newRoll} on d${hitDie} + ${conMod} CON = ${newGain} HP</small>
+				<small class="text-muted d-block">Range: ${minPossibleGain}-${maxPossibleGain} HP</small>
+			`);
+
+			// Update the roll option value
+			$modalInner.find('#rollDice').val(newGain);
+
+			// Show roll result
+			$modalInner.find('#newRollValue').text(`${newRoll} + ${conMod} = ${newGain}`);
+			$modalInner.find('#rollResult').show().fadeTo(100, 0.1).fadeTo(200, 1.0);
+		});
+
+		// Cancel functionality
+		$btnCancel.click(() => {
+			$modal.modal('hide');
+		});
+
+		// Confirm functionality
+		$btnConfirm.click(() => {
+			const choice = $modalInner.find('input[name="hpChoice"]:checked').val();
+			let hpGain;
+
+			if (choice === 'average') {
+				hpGain = averageGain;
+			} else {
+				// Get the current roll value from the radio button value or calculate from label
+				const rollValue = parseInt($modalInner.find('#rollDice').val()) || rolledGain;
+				hpGain = rollValue;
+			}
+
+			this.updateHitPointsForLevelUp(character, hpGain);
+			$modal.modal('hide');
+		});
+
+		// Show/hide reroll button based on choice
+		$modalInner.find('input[name="hpChoice"]').change(() => {
+			const choice = $modalInner.find('input[name="hpChoice"]:checked').val();
+			if (choice === 'roll') {
+				$btnReroll.show();
+			} else {
+				$btnReroll.hide();
+			}
+		});
+
+		$modalFooter.append($btnCancel, $btnReroll, $btnConfirm);
+
+		// Initially hide reroll button since average is selected by default
+		$btnReroll.hide();
+
+		$modal.modal('show');
+	}
+
+	updateHitPointsForLevelUp(character, providedHpGain = null) {
 		// Calculate new hit points based on class hit die
 		const classes = character.class;
 		if (!classes || !Array.isArray(classes)) {
@@ -14265,37 +18595,46 @@ class CharacterEditorPage {
 			const className = selectedClass.name;
 			console.log('Leveling up class:', className);
 
-			// Get hit die for the class (try to use character's data first)
-			const hitDie = this.getClassHitDie(className, character);
-			console.log('Hit die for', className, ':', hitDie);
-
-			// Handle both nested abilities object and direct properties for CON
-			const conScore = character.abilities ? character.abilities.con : character.con || 10;
-			const conMod = Math.floor((conScore - 10) / 2);
-
-			// Add average hit points (half hit die + 1 + CON modifier)
-			const hpGain = Math.floor(hitDie / 2) + 1 + conMod;
+			// Use provided HP gain if available, otherwise calculate default (average)
+			let finalHpGain;
+			if (providedHpGain !== null) {
+				finalHpGain = providedHpGain;
+				console.log('Using provided HP gain:', finalHpGain);
+			} else {
+				// Fallback: calculate average HP gain
+				const hitDie = this.getClassHitDie(className, character);
+				const conScore = character.abilities ? character.abilities.con : character.con || 10;
+				const conMod = Math.floor((conScore - 10) / 2);
+				finalHpGain = Math.floor(hitDie / 2) + 1 + conMod;
+				console.log('Calculated average HP gain:', finalHpGain);
+			}
 
 			// Use hitPoints field (consistent with 5etools format) instead of hp
 
 			if (character.hitPoints && typeof character.hitPoints.max === 'number') {
 				const oldMaxHP = character.hitPoints.max;
-				character.hitPoints.max += hpGain;
-				character.hitPoints.current = Math.min(character.hitPoints.current + hpGain, character.hitPoints.max);
+				character.hitPoints.max += finalHpGain;
+				character.hitPoints.current = Math.min(character.hitPoints.current + finalHpGain, character.hitPoints.max);
+				console.log(`HP updated: ${oldMaxHP} -> ${character.hitPoints.max} (+${finalHpGain})`);
 			} else if (character.hp && typeof character.hp.max === 'number') {
 				// Handle alternate HP format
 				const oldMaxHP = character.hp.max;
-				character.hp.max += hpGain;
-				character.hp.current = Math.min(character.hp.current + hpGain, character.hp.max);
+				character.hp.max += finalHpGain;
+				character.hp.current = Math.min(character.hp.current + finalHpGain, character.hp.max);
+				console.log(`HP updated (alt format): ${oldMaxHP} -> ${character.hp.max} (+${finalHpGain})`);
 			} else {
-				// Initialize hitPoints if not present
+				// Initialize hitPoints if not present - use fallback calculation
+				const hitDie = this.getClassHitDie(className, character);
+				const conScore = character.abilities ? character.abilities.con : character.con || 10;
+				const conMod = Math.floor((conScore - 10) / 2);
 				const baseHP = hitDie + conMod;
 				const totalLevel = CharacterEditorPage.getCharacterLevel(character);
-				const estimatedHP = baseHP + ((totalLevel - 1) * hpGain);
+				const estimatedHP = baseHP + ((totalLevel - 1) * finalHpGain);
 				character.hitPoints = {
 					max: estimatedHP,
 					current: estimatedHP
 				};
+				console.log(`HP initialized: ${estimatedHP} (base: ${baseHP}, levels: ${totalLevel-1} x ${finalHpGain})`);
 			}
 
 			// Also update proficiency bonus
@@ -14305,41 +18644,101 @@ class CharacterEditorPage {
 	}
 
 	updateSpellSlotsForLevelUp(character) {
-		// Update spell slots based on class progression
+		// Update spell slots based on class progression for multiclass spellcasters
 		const classes = character.class || [];
-
-		// Check for Eldritch Knight (1/3 caster)
-		const eldritchKnight = classes.find(cls =>
-			cls.subclass && cls.subclass.name === 'Eldritch Knight'
-		);
-
-		if (eldritchKnight && eldritchKnight.level >= 3) {
-			if (!character.spellcasting) {
-				character.spellcasting = {};
-			}
-
-			// Eldritch Knight spell slot progression (1/3 caster)
-			const fighterLevel = eldritchKnight.level;
-			const spellSlots = this.calculateEldritchKnightSpellSlots(fighterLevel);
-
-			if (spellSlots) {
-				character.spellcasting.spells = spellSlots;
-			}
+		if (!Array.isArray(classes)) {
+			console.warn('character.class is not an array, skipping spell slot updates');
+			return;
 		}
 
-		// Add other spellcasting classes as needed
-		classes.forEach(cls => {
-			const fullCasters = ['Wizard', 'Sorcerer', 'Cleric', 'Druid', 'Bard'];
-			const halfCasters = ['Paladin', 'Ranger'];
+		console.log('Updating spell slots for classes:', classes.map(c => `${c.name} ${c.level}`));
 
-			if (fullCasters.includes(cls.name)) {
-				// Full caster progression - would need more complex implementation
-				console.log(`${cls.name} is a full spellcaster - spell slot calculation not fully implemented`);
-			} else if (halfCasters.includes(cls.name)) {
-				// Half caster progression - would need more complex implementation
-				console.log(`${cls.name} is a half spellcaster - spell slot calculation not fully implemented`);
+		// Initialize spellcasting structure if needed
+		if (!character.spellcasting) {
+			character.spellcasting = {};
+		}
+
+		// Calculate total caster level for multiclass spellcasters
+		let totalCasterLevel = 0;
+		let hasSpellcasters = false;
+
+		classes.forEach(cls => {
+			if (!cls || !cls.name || !cls.level) return;
+			
+			const className = cls.name;
+			const classLevel = cls.level;
+			
+			// Full casters: add full level
+			const fullCasters = ['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Warlock', 'Wizard'];
+			// Half casters: add half level (rounded down)
+			const halfCasters = ['Paladin', 'Ranger'];
+			
+			if (fullCasters.includes(className)) {
+				totalCasterLevel += classLevel;
+				hasSpellcasters = true;
+				console.log(`${className} ${classLevel} (full caster): +${classLevel} caster levels`);
+			} else if (halfCasters.includes(className)) {
+				const halfLevels = Math.floor(classLevel / 2);
+				totalCasterLevel += halfLevels;
+				hasSpellcasters = true;
+				console.log(`${className} ${classLevel} (half caster): +${halfLevels} caster levels`);
+			}
+			
+			// Special case for third casters (Eldritch Knight, Arcane Trickster)
+			if (className === 'Fighter' && cls.subclass && cls.subclass.name === 'Eldritch Knight' && classLevel >= 3) {
+				const thirdLevels = Math.floor(classLevel / 3);
+				totalCasterLevel += thirdLevels;
+				hasSpellcasters = true;
+				console.log(`${className} ${classLevel} (Eldritch Knight): +${thirdLevels} caster levels`);
+			} else if (className === 'Rogue' && cls.subclass && cls.subclass.name === 'Arcane Trickster' && classLevel >= 3) {
+				const thirdLevels = Math.floor(classLevel / 3);
+				totalCasterLevel += thirdLevels;
+				hasSpellcasters = true;
+				console.log(`${className} ${classLevel} (Arcane Trickster): +${thirdLevels} caster levels`);
 			}
 		});
+
+		if (hasSpellcasters && totalCasterLevel > 0) {
+			console.log(`Total multiclass caster level: ${totalCasterLevel}`);
+			
+			// Calculate spell slots based on total caster level using standard progression
+			const spellSlots = this.calculateSpellSlotsByLevel(totalCasterLevel);
+			
+			if (spellSlots && Object.keys(spellSlots).length > 0) {
+				character.spellcasting.spells = spellSlots;
+				console.log('Updated spell slots:', spellSlots);
+			}
+		} else {
+			console.log('No spellcasting classes found or total caster level is 0');
+		}
+	}
+
+	calculateSpellSlotsByLevel(casterLevel) {
+		// Standard D&D 5e spell slot progression table
+		const spellSlotTable = {
+			1: { 1: 2 },
+			2: { 1: 3 },
+			3: { 1: 4, 2: 2 },
+			4: { 1: 4, 2: 3 },
+			5: { 1: 4, 2: 3, 3: 2 },
+			6: { 1: 4, 2: 3, 3: 3 },
+			7: { 1: 4, 2: 3, 3: 3, 4: 1 },
+			8: { 1: 4, 2: 3, 3: 3, 4: 2 },
+			9: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 1 },
+			10: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2 },
+			11: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1 },
+			12: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1 },
+			13: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1 },
+			14: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1 },
+			15: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1, 8: 1 },
+			16: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1, 8: 1 },
+			17: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1, 8: 1, 9: 1 },
+			18: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 3, 6: 1, 7: 1, 8: 1, 9: 1 },
+			19: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 3, 6: 2, 7: 1, 8: 1, 9: 1 },
+			20: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 3, 6: 2, 7: 2, 8: 1, 9: 1 }
+		};
+
+		return spellSlotTable[Math.min(casterLevel, 20)] || {};
 	}
 
 	calculateEldritchKnightSpellSlots(fighterLevel) {
@@ -14359,6 +18758,416 @@ class CharacterEditorPage {
 		};
 
 		return spellSlotsByLevel[fighterLevel] || null;
+	}
+
+	// Method to apply missing racial features to existing characters
+	async applyMissingRacialFeatures(character) {
+		if (!character.race || !character.race.name || !character.race.source) {
+			console.log('No race information found to apply features');
+			return;
+		}
+
+		console.log(`Applying missing racial features for ${character.race.name} (${character.race.source})`);
+
+		try {
+			// Load race data
+			const response = await fetch('data/races.json');
+			if (!response.ok) {
+				console.warn('Could not load race data');
+				return;
+			}
+
+			const raceData = await response.json();
+			const raceInfo = raceData.race?.find(r =>
+				r.name === character.race.name && r.source === character.race.source
+			);
+
+			if (!raceInfo) {
+				console.log(`Race ${character.race.name} (${character.race.source}) not found in data`);
+				return;
+			}
+
+			console.log('Found race data:', raceInfo);
+
+			// Apply flying speed if missing
+			if (!character.speed) character.speed = { walk: 30 };
+			
+			if (raceInfo.speed && typeof raceInfo.speed === 'object') {
+				// Handle MPMM-style flying speed (fly: true means equal to walk speed)
+				if (raceInfo.speed.fly === true && !character.speed.fly) {
+					character.speed.fly = character.speed.walk || 30;
+					console.log(`Applied flying speed: ${character.speed.fly} ft (equal to walking speed)`);
+				}
+				// Handle specific flying speed numbers
+				else if (typeof raceInfo.speed.fly === 'number' && !character.speed.fly) {
+					character.speed.fly = raceInfo.speed.fly;
+					console.log(`Applied flying speed: ${character.speed.fly} ft`);
+				}
+
+				// Apply other movement speeds if missing
+				if (raceInfo.speed.swim && !character.speed.swim) {
+					character.speed.swim = raceInfo.speed.swim;
+					console.log(`Applied swim speed: ${character.speed.swim} ft`);
+				}
+				if (raceInfo.speed.climb && !character.speed.climb) {
+					character.speed.climb = raceInfo.speed.climb;
+					console.log(`Applied climb speed: ${character.speed.climb} ft`);
+				}
+			}
+
+			// Apply racial spells if missing
+			if (raceInfo.additionalSpells && Array.isArray(raceInfo.additionalSpells)) {
+				if (!character.spells) character.spells = { levels: {} };
+				if (!character.spells.levels) character.spells.levels = {};
+
+				for (const spellGroup of raceInfo.additionalSpells) {
+					if (spellGroup.innate) {
+						for (const [level, spells] of Object.entries(spellGroup.innate)) {
+							if (Array.isArray(spells)) {
+								const spellLevel = level === '0' ? '0' : '2'; // Wind Caller is a 2nd level spell
+								
+								if (!character.spells.levels[spellLevel]) {
+									character.spells.levels[spellLevel] = { spells: [], maxSlots: 0, slotsUsed: 0 };
+								}
+
+								for (const spellName of spells) {
+									// Check if spell already exists
+									const existingSpell = character.spells.levels[spellLevel].spells.find(s =>
+										(typeof s === 'string' ? s : s.name) === spellName
+									);
+
+									if (!existingSpell) {
+										character.spells.levels[spellLevel].spells.push(spellName);
+										console.log(`Added racial spell: ${spellName} (Level ${spellLevel})`);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Apply missing Arcane Trickster spells if the character is an Arcane Trickster but has no spells
+			const arcanneTrickster = character.class?.find(cls => 
+				cls.name === 'Rogue' && cls.subclass?.name === 'Arcane Trickster'
+			);
+
+			if (arcanneTrickster && arcanneTrickster.level >= 3) {
+				if (!character.spells) character.spells = { levels: {} };
+				if (!character.spells.levels) character.spells.levels = {};
+
+				// Arcane Trickster gets cantrips and 1st level spells at 3rd level
+				const cantripLevel = '0';
+				const firstLevel = '1';
+
+				// Add cantrips if missing
+				if (!character.spells.levels[cantripLevel] || character.spells.levels[cantripLevel].spells.length === 0) {
+					if (!character.spells.levels[cantripLevel]) {
+						character.spells.levels[cantripLevel] = { spells: [], maxSlots: 0, slotsUsed: 0 };
+					}
+					
+					// Arcane Trickster gets 3 cantrips at 3rd level (2 from enchantment/illusion, 1 from any school)
+					const defaultCantrips = ['Mage Hand', 'Minor Illusion', 'Prestidigitation'];
+					for (const cantrip of defaultCantrips) {
+						const existingCantrip = character.spells.levels[cantripLevel].spells.find(s =>
+							(typeof s === 'string' ? s : s.name) === cantrip
+						);
+						if (!existingCantrip) {
+							character.spells.levels[cantripLevel].spells.push(cantrip);
+							console.log(`Added Arcane Trickster cantrip: ${cantrip}`);
+						}
+					}
+				}
+
+				// Add 1st level spells if missing
+				if (!character.spells.levels[firstLevel] || character.spells.levels[firstLevel].spells.length === 0) {
+					if (!character.spells.levels[firstLevel]) {
+						character.spells.levels[firstLevel] = { spells: [], maxSlots: 0, slotsUsed: 0 };
+					}
+					
+					// Arcane Trickster gets 2 first-level spells at 3rd level (from enchantment/illusion)
+					const defaultSpells = ['Charm Person', 'Disguise Self'];
+					for (const spell of defaultSpells) {
+						const existingSpell = character.spells.levels[firstLevel].spells.find(s =>
+							(typeof s === 'string' ? s : s.name) === spell
+						);
+						if (!existingSpell) {
+							character.spells.levels[firstLevel].spells.push(spell);
+							console.log(`Added Arcane Trickster spell: ${spell}`);
+						}
+					}
+				}
+
+				// Set up spellcasting info if missing
+				if (!character.spells.dc) character.spells.dc = 13; // Default with +1 INT and +2 prof
+				if (!character.spells.attackBonus) character.spells.attackBonus = '+5'; // Default with +1 INT and +2 prof
+				if (!character.spells.ability) character.spells.ability = 'Int';
+				if (!character.spells.spellcastingAbility) character.spells.spellcastingAbility = 'int';
+
+				console.log('Applied Arcane Trickster spellcasting features');
+			}
+
+		} catch (error) {
+			console.error('Error applying racial features:', error);
+		}
+	}
+
+	// Method to fix the currently loaded character
+	async fixCurrentCharacter() {
+		try {
+			const characterData = JSON.parse(this.ace.getValue());
+			console.log('Applying missing features to current character...');
+			
+			await this.applyMissingRacialFeatures(characterData);
+			
+			// Update the editor and re-render
+			this.ace.setValue(JSON.stringify(characterData, null, 2), 1);
+			this.renderCharacter();
+			
+			console.log('✅ Character fixes applied successfully!');
+			
+		} catch (error) {
+			console.error('Error fixing current character:', error);
+		}
+	}
+
+	// Comprehensive background feature application from data files
+	async applyMissingBackgroundFeatures(characterData) {
+		try {
+			if (!characterData.background?.name) {
+				console.log('No background found, skipping background features');
+				return;
+			}
+
+			console.log(`Applying background features for ${characterData.background.name}...`);
+
+			// Load backgrounds data
+			const backgroundsResponse = await fetch('/data/backgrounds.json');
+			const backgroundsData = await backgroundsResponse.json();
+			
+			// Find the specific background
+			const backgroundName = characterData.background.name.toLowerCase();
+			const backgroundEntry = backgroundsData.background.find(bg => 
+				bg.name.toLowerCase() === backgroundName
+			);
+
+			if (!backgroundEntry) {
+				console.warn(`Background ${characterData.background.name} not found in data`);
+				return;
+			}
+
+			console.log(`Found background data for ${backgroundEntry.name}`);
+
+			// Initialize character proficiencies if not present
+			if (!characterData.skillProficiencies) characterData.skillProficiencies = [];
+			if (!characterData.expertise) characterData.expertise = [];
+			if (!characterData.toolProficiencies) characterData.toolProficiencies = [];
+			if (!characterData.languageProficiencies) characterData.languageProficiencies = [];
+			if (!characterData.startingEquipment) characterData.startingEquipment = [];
+			if (!characterData.entries) characterData.entries = [];
+
+			let appliedFeatures = [];
+
+			// Apply skill proficiencies from background
+			if (backgroundEntry.skillProficiencies) {
+				for (const skillGroup of backgroundEntry.skillProficiencies) {
+					for (const [skillName, isProficient] of Object.entries(skillGroup)) {
+						if (isProficient === true) {
+							const skillKey = skillName.toLowerCase();
+							// Check if character already has this skill proficiency
+							const hasSkill = characterData.skillProficiencies.some(sp => 
+								sp.skill && sp.skill.toLowerCase() === skillKey
+							);
+							
+							if (!hasSkill) {
+								characterData.skillProficiencies.push({
+									skill: skillName,
+									proficient: true,
+									source: `Background: ${backgroundEntry.name}`
+								});
+								appliedFeatures.push(`Skill: ${skillName}`);
+							}
+						}
+					}
+				}
+			}
+
+			// Apply tool proficiencies from background
+			if (backgroundEntry.toolProficiencies) {
+				for (const toolGroup of backgroundEntry.toolProficiencies) {
+					for (const [toolName, isProficient] of Object.entries(toolGroup)) {
+						if (isProficient === true) {
+							// Check if character already has this tool proficiency
+							const hasTool = characterData.toolProficiencies.some(tp => 
+								tp.tool && tp.tool.toLowerCase() === toolName.toLowerCase()
+							);
+							
+							if (!hasTool) {
+								characterData.toolProficiencies.push({
+									tool: toolName,
+									proficient: true,
+									source: `Background: ${backgroundEntry.name}`
+								});
+								appliedFeatures.push(`Tool: ${toolName}`);
+							}
+						} else if (typeof isProficient === 'number') {
+							// Handle cases like "anyGamingSet": 1
+							if (toolName === 'anyGamingSet') {
+								// Add a gaming set if not present
+								const hasGamingSet = characterData.toolProficiencies.some(tp => 
+									tp.tool && tp.tool.toLowerCase().includes('gaming set')
+								);
+								if (!hasGamingSet) {
+									characterData.toolProficiencies.push({
+										tool: 'dice set',
+										proficient: true,
+										source: `Background: ${backgroundEntry.name} (gaming set choice)`
+									});
+									appliedFeatures.push('Tool: dice set (gaming set)');
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Apply language proficiencies from background
+			if (backgroundEntry.languageProficiencies) {
+				for (const langGroup of backgroundEntry.languageProficiencies) {
+					if (langGroup.anyStandard) {
+						// Add common languages if missing
+						const commonLanguages = ['Common', 'Elvish', 'Dwarvish', 'Halfling'];
+						let languagesAdded = 0;
+						
+						for (const lang of commonLanguages) {
+							if (languagesAdded >= langGroup.anyStandard) break;
+							
+							const hasLanguage = characterData.languageProficiencies.some(lp => 
+								lp.language && lp.language.toLowerCase() === lang.toLowerCase()
+							);
+							
+							if (!hasLanguage) {
+								characterData.languageProficiencies.push({
+									language: lang,
+									source: `Background: ${backgroundEntry.name}`
+								});
+								appliedFeatures.push(`Language: ${lang}`);
+								languagesAdded++;
+							}
+						}
+					} else {
+						// Handle specific languages
+						for (const [langName, isProficient] of Object.entries(langGroup)) {
+							if (isProficient === true) {
+								const hasLanguage = characterData.languageProficiencies.some(lp => 
+									lp.language && lp.language.toLowerCase() === langName.toLowerCase()
+								);
+								
+								if (!hasLanguage) {
+									characterData.languageProficiencies.push({
+										language: langName,
+										source: `Background: ${backgroundEntry.name}`
+									});
+									appliedFeatures.push(`Language: ${langName}`);
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Apply starting equipment from background
+			if (backgroundEntry.startingEquipment) {
+				for (const equipGroup of backgroundEntry.startingEquipment) {
+					if (equipGroup._) {
+						// Handle mandatory equipment
+						for (const item of equipGroup._) {
+							let itemName, itemData;
+							
+							if (typeof item === 'string') {
+								itemName = item;
+								itemData = { item: itemName, source: `Background: ${backgroundEntry.name}` };
+							} else if (item.item) {
+								itemName = item.displayName || item.item;
+								itemData = { 
+									...item, 
+									source: `Background: ${backgroundEntry.name}` 
+								};
+							} else if (item.special) {
+								itemName = item.special;
+								itemData = { 
+									item: item.special,
+									quantity: item.quantity || 1,
+									source: `Background: ${backgroundEntry.name}` 
+								};
+							}
+
+							if (itemName && itemData) {
+								// Check if character already has this item
+								const hasItem = characterData.startingEquipment.some(eq => 
+									(eq.item && eq.item.toLowerCase().includes(itemName.toLowerCase())) ||
+									(eq.name && eq.name.toLowerCase().includes(itemName.toLowerCase()))
+								);
+								
+								if (!hasItem) {
+									characterData.startingEquipment.push(itemData);
+									appliedFeatures.push(`Equipment: ${itemName}`);
+								}
+							}
+						}
+					}
+				}
+			}
+
+			// Apply background features (like "Criminal Contact", "Shelter of the Faithful", etc.)
+			if (backgroundEntry.entries) {
+				for (const entry of backgroundEntry.entries) {
+					if (entry.name && entry.data?.isFeature) {
+						// Check if character already has this feature
+						const hasFeature = characterData.entries.some(e => 
+							e.name && e.name.toLowerCase() === entry.name.toLowerCase()
+						);
+						
+						if (!hasFeature) {
+							characterData.entries.push({
+								...entry,
+								source: `Background: ${backgroundEntry.name}`
+							});
+							appliedFeatures.push(`Feature: ${entry.name}`);
+						}
+					}
+				}
+			}
+
+			if (appliedFeatures.length > 0) {
+				console.log(`✅ Applied background features: ${appliedFeatures.join(', ')}`);
+			} else {
+				console.log('No missing background features found to apply');
+			}
+
+		} catch (error) {
+			console.error('Error applying background features:', error);
+		}
+	}
+
+	// Method to fix both racial and background features for the currently loaded character
+	async fixCurrentCharacterComplete() {
+		try {
+			const characterData = JSON.parse(this.ace.getValue());
+			console.log('Applying missing features to current character...');
+			
+			await this.applyMissingRacialFeatures(characterData);
+			await this.applyMissingBackgroundFeatures(characterData);
+			
+			// Update the editor and re-render
+			this.ace.setValue(JSON.stringify(characterData, null, 2), 1);
+			this.renderCharacter();
+			
+			console.log('✅ Complete character fixes applied successfully!');
+			
+		} catch (error) {
+			console.error('Error fixing current character:', error);
+		}
 	}
 
 	getClassHitDie(className, characterData = null) {

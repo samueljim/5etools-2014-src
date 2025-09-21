@@ -3200,7 +3200,7 @@ Renderer.utils = class {
 	static getNameTr (ent, opts) {
 		opts = opts || {};
 
-		const name = ent._displayName || ent.name;
+		const name = ent._displayName || ent.name || "Unknown";
 		const pageLinkPart = SourceUtil.getAdventureBookSourceHref(ent.source, ent.page);
 
 		let dataPart = `data-name="${name.qq()}"`;
@@ -7149,20 +7149,6 @@ Renderer.spell = class {
 		}
 	}
 
-	/**
-	 * Bind interactive listeners for compact spell HTML (hover/popout)
-	 * @param spell
-	 * @param ele DOM element or jQuery element
-	 */
-	static bindListenersCompact (spell, ele) {
-		if (!ele) return;
-		const dom = ele.jquery ? ele[0] : ele;
-		if (!dom) return;
-
-		// Bind dice-roll onclick listeners present in rendered spell HTML
-		if (Renderer.dice && Renderer.dice.bindOnclickListener) Renderer.dice.bindOnclickListener(dom);
-	}
-
 	/* -------------------------------------------- */
 
 	static getHtmlPtLevelSchoolRitual (spell, {styleHint = null} = {}) {
@@ -8500,11 +8486,298 @@ Renderer.race = class {
 
 Renderer.character = class {
 	/**
+	 * Data cache for races, backgrounds, and classes
+	 */
+	static _dataCache = {
+		races: null,
+		backgrounds: null,
+		classes: null
+	};
+
+	/**
+	 * Load and cache data from JSON files
+	 */
+	static async _loadData(dataType) {
+		if (this._dataCache[dataType]) return this._dataCache[dataType];
+		
+		try {
+			let url;
+			switch (dataType) {
+				case 'races':
+					url = `${Renderer.get().baseUrl}data/races.json`;
+					break;
+				case 'backgrounds':
+					url = `${Renderer.get().baseUrl}data/backgrounds.json`;
+					break;
+				case 'classes':
+					// Classes are split across multiple files
+					const classFiles = [
+						'class-artificer', 'class-barbarian', 'class-bard', 'class-cleric',
+						'class-druid', 'class-fighter', 'class-monk', 'class-paladin',
+						'class-ranger', 'class-rogue', 'class-sorcerer', 'class-warlock',
+						'class-wizard'
+					];
+					const classData = { class: [] };
+					for (const fileName of classFiles) {
+						try {
+							const response = await fetch(`${Renderer.get().baseUrl}data/class/${fileName}.json`);
+							if (response.ok) {
+								const data = await response.json();
+								if (data.class) {
+									classData.class.push(...data.class);
+								}
+							}
+						} catch (e) {
+							console.warn(`Failed to load ${fileName}.json:`, e);
+						}
+					}
+					this._dataCache[dataType] = classData;
+					return classData;
+				default:
+					throw new Error(`Unknown data type: ${dataType}`);
+			}
+			
+			const response = await fetch(url);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+			}
+			
+			const data = await response.json();
+			this._dataCache[dataType] = data;
+			return data;
+		} catch (error) {
+			console.error(`Failed to load ${dataType} data:`, error);
+			// Return empty data structure to prevent crashes
+			return dataType === 'classes' ? { class: [] } : { [dataType.slice(0, -1)]: [] };
+		}
+	}
+
+	/**
+	 * Get race data by name and source
+	 */
+	static async getRaceData(raceName, source = null) {
+		const data = await this._loadData('races');
+		return data.race?.find(race => 
+			race.name === raceName && (!source || race.source === source)
+		);
+	}
+
+	/**
+	 * Get background data by name and source
+	 */
+	static async getBackgroundData(backgroundName, source = null) {
+		const data = await this._loadData('backgrounds');
+		return data.background?.find(bg => 
+			bg.name === backgroundName && (!source || bg.source === source)
+		);
+	}
+
+	/**
+	 * Get class data by name and source
+	 */
+	static async getClassData(className, source = null) {
+		const data = await this._loadData('classes');
+		return data.class?.find(cls => 
+			cls.name === className && (!source || cls.source === source)
+		);
+	}
+
+	/**
+	 * Extract skill proficiencies from race data
+	 */
+	static _extractRaceSkillProficiencies(raceData) {
+		const skills = [];
+		
+		if (!raceData?.entries) return skills;
+		
+		// Look for skill proficiencies in race entries
+		const extractFromEntries = (entries) => {
+			for (const entry of entries) {
+				if (entry.skillProficiencies) {
+					for (const skillProf of entry.skillProficiencies) {
+						Object.keys(skillProf).forEach(skill => {
+							if (skillProf[skill] === true && skill !== 'choose') {
+								skills.push(skill);
+							}
+						});
+					}
+				}
+				
+				// Check for known racial skill bonuses
+				if (entry.name === "Keen Senses" || entry.name?.includes("Keen Senses")) {
+					skills.push("perception");
+				}
+				
+				if (entry.entries) {
+					extractFromEntries(entry.entries);
+				}
+			}
+		};
+		
+		extractFromEntries(raceData.entries);
+		return skills;
+	}
+
+	/**
+	 * Extract natural armor data from race
+	 */
+	static _extractRaceNaturalArmor(raceData, dexMod, conMod) {
+		if (!raceData?.entries) return null;
+		
+		const raceName = raceData.name.toLowerCase();
+		
+		// Check race entries for natural armor
+		const checkEntries = (entries) => {
+			for (const entry of entries) {
+				if (entry.name && entry.entries) {
+					const entryName = entry.name.toLowerCase();
+					const entryText = entry.entries.join(" ").toLowerCase();
+					
+					// Look for natural armor patterns
+					if (entryName.includes("natural armor") || 
+						entryName.includes("shell") || 
+						entryName.includes("hide") ||
+						entryText.includes("natural armor") ||
+						entryText.includes("base ac")) {
+						
+						// Extract AC value from text
+						const acMatch = entryText.match(/(?:ac|armor class)\s*(?:of\s*)?(\d+)/i);
+						if (acMatch) {
+							const baseAc = parseInt(acMatch[1]);
+							return {
+								value: baseAc + (entryText.includes("dex") ? dexMod : 0) + (entryText.includes("con") ? conMod : 0),
+								source: `${raceData.name} ${entry.name}`,
+								type: entryName
+							};
+						}
+					}
+				}
+				
+				if (entry.entries) {
+					const result = checkEntries(entry.entries);
+					if (result) return result;
+				}
+			}
+		};
+		
+		return checkEntries(raceData.entries);
+	}
+
+	/**
+	 * Get race bonuses from data files
+	 */
+	static async _getRaceBonus(character) {
+		const race = character.race;
+		if (!race?.name) return { skills: [], naturalArmor: null, resistances: [] };
+		
+		const raceData = await this.getRaceData(race.name, race.source);
+		if (!raceData) return { skills: [], naturalArmor: null, resistances: [] };
+		
+		const dexMod = Parser.getAbilityModNumber(character.dex);
+		const conMod = Parser.getAbilityModNumber(character.con);
+		
+		return {
+			skills: this._extractRaceSkillProficiencies(raceData),
+			naturalArmor: this._extractRaceNaturalArmor(raceData, dexMod, conMod),
+			resistances: raceData.resist || [],
+			speedBonus: raceData.speed || {}
+		};
+	}
+
+	/**
+	 * Get background features from data files  
+	 */
+	static async _getBackgroundFeatures(character) {
+		const background = character.background;
+		if (!background?.name) return { skills: [], tools: [], languages: [] };
+		
+		const bgData = await this.getBackgroundData(background.name, background.source);
+		if (!bgData) return { skills: [], tools: [], languages: [] };
+		
+		const skills = [];
+		const tools = [];
+		const languages = [];
+		
+		// Extract skill proficiencies
+		if (bgData.skillProficiencies) {
+			for (const skillProf of bgData.skillProficiencies) {
+				Object.keys(skillProf).forEach(skill => {
+					if (skillProf[skill] === true) {
+						skills.push(skill);
+					}
+				});
+			}
+		}
+		
+		// Extract tool proficiencies
+		if (bgData.toolProficiencies) {
+			for (const toolProf of bgData.toolProficiencies) {
+				Object.keys(toolProf).forEach(tool => {
+					if (toolProf[tool] === true) {
+						tools.push(tool);
+					}
+				});
+			}
+		}
+		
+		// Extract language proficiencies
+		if (bgData.languageProficiencies) {
+			for (const langProf of bgData.languageProficiencies) {
+				if (langProf.anyStandard) {
+					languages.push(`Choose ${langProf.anyStandard} languages`);
+				} else {
+					Object.keys(langProf).forEach(lang => {
+						if (langProf[lang] === true) {
+							languages.push(lang);
+						}
+					});
+				}
+			}
+		}
+		
+		return { skills, tools, languages };
+	}
+
+	/**
+	 * Calculate spellcasting from class data
+	 */
+	static async _calculateSpellcasting(character) {
+		if (!character.class || !Array.isArray(character.class)) {
+			return { dc: null, attackBonus: null, ability: null };
+		}
+		
+		// Find the primary spellcasting class
+		let spellcastingClass = null;
+		for (const cls of character.class) {
+			const classData = await this.getClassData(cls.name, cls.source);
+			if (classData?.spellcastingAbility) {
+				spellcastingClass = { ...cls, data: classData };
+				break;
+			}
+		}
+		
+		if (!spellcastingClass) return { dc: null, attackBonus: null, ability: null };
+		
+		const ability = spellcastingClass.data.spellcastingAbility;
+		const abilityScore = character[ability] || 10;
+		const abilityMod = Parser.getAbilityModNumber(abilityScore);
+		const profBonus = parseInt(character.proficiencyBonus?.replace('+', '')) || 2;
+		
+		const dc = 8 + profBonus + abilityMod;
+		const attackBonus = profBonus + abilityMod;
+		
+		return {
+			dc,
+			attackBonus: attackBonus >= 0 ? `+${attackBonus}` : `${attackBonus}`,
+			ability: ability.charAt(0).toUpperCase() + ability.slice(1)
+		};
+	}
+	/**
 	 * Calculate total character level from class levels
 	 * @param {Object} character - The character data object
 	 * @returns {number} Total level
 	 */
-	static _getCharacterLevel(character) {
+	static _getCharacterLevel (character) {
 		if (!character || !character.class || !Array.isArray(character.class)) {
 			return 0;
 		}
@@ -8514,24 +8787,458 @@ Renderer.character = class {
 	}
 
 	/**
+	 * Calculate AC for character using D&D 5e rules when AC is missing from sheet
+	 * @param {Object} character - The character data object
+	 * @returns {Object|null} AC data with ac value and source, or null if can't calculate
+	 */
+	static _getCharacterAC (character) {
+		if (!character) return null;
+
+		// If character already has AC, use it
+		if (character.ac) {
+			const acValue = Array.isArray(character.ac) ? character.ac[0].ac : character.ac;
+			const acSource = Array.isArray(character.ac) && character.ac[0].from ? character.ac[0].from.join(", ") : "";
+			return { ac: acValue, source: acSource };
+		}
+
+		// Calculate AC using D&D 5e rules
+		const dexMod = Math.floor(((character.dex || 10) - 10) / 2);
+		const conMod = Math.floor(((character.con || 10) - 10) / 2);
+		const wisMod = Math.floor(((character.wis || 10) - 10) / 2);
+
+		// Check for class-specific unarmored defense
+		if (character.class && Array.isArray(character.class)) {
+			for (const cls of character.class) {
+				if (cls.name === "Barbarian") {
+					// Barbarian Unarmored Defense: 10 + Dex + Con
+					return { ac: 10 + dexMod + conMod, source: "Unarmored Defense (Barbarian)" };
+				}
+				if (cls.name === "Monk") {
+					// Monk Unarmored Defense: 10 + Dex + Wis
+					return { ac: 10 + dexMod + wisMod, source: "Unarmored Defense (Monk)" };
+				}
+			}
+		}
+
+		// Check for natural armor from race
+		if (character.race && character.race.name) {
+			const naturalArmorRaces = {
+				"Dragonborn": 13 + dexMod,
+				"Lizardfolk": 13 + dexMod,
+				"Tortle": 17,
+				"Warforged": 11 + dexMod,
+				"Loxodon": 12 + conMod,
+				"Centaur": 10 + dexMod // Same as unarmored but explicitly natural
+			};
+			
+			if (naturalArmorRaces[character.race.name]) {
+				const naturalAC = naturalArmorRaces[character.race.name];
+				const baseAC = 10 + dexMod;
+				if (naturalAC > baseAC) {
+					return { ac: naturalAC, source: "Natural Armor" };
+				}
+			}
+		}
+
+		// Check for common armor if items/equipment are listed
+		let bestArmorAC = { ac: 10 + dexMod, source: "Unarmored" };
+		let hasShield = false;
+		
+		// Look for armor in various possible locations
+		const armorSources = [
+			character.item || [],
+			character.items || [],
+			...(character.entries || []).filter(e => e.name === "Items" || e.name === "Equipment").flatMap(e => e.entries || [])
+		];
+
+		for (const items of armorSources) {
+			if (Array.isArray(items)) {
+				for (const item of items) {
+					const itemName = typeof item === 'string' ? item : item.name || '';
+					const armorAC = this._getArmorAC(itemName, dexMod);
+					if (armorAC) {
+						if (armorAC.isShield) {
+							hasShield = true;
+						} else if (armorAC.ac > bestArmorAC.ac) {
+							bestArmorAC = armorAC;
+						}
+					}
+				}
+			}
+		}
+
+		// Add shield bonus if present
+		if (hasShield) {
+			bestArmorAC.ac += 2;
+			bestArmorAC.source = bestArmorAC.source + ", Shield";
+		}
+
+		return bestArmorAC;
+	}
+
+	/**
+	 * Get AC calculation for common armor types
+	 * @param {string} itemName - Name of the armor item
+	 * @param {number} dexMod - Dexterity modifier
+	 * @returns {Object|null} AC data or null if not armor
+	 */
+	static _getArmorAC (itemName, dexMod) {
+		if (!itemName || typeof itemName !== 'string') return null;
+		
+		const item = itemName.toLowerCase().replace(/[{}@|]/g, ''); // Clean 5etools tags
+		
+		// Light Armor (AC = base + Dex mod)
+		if (item.includes('leather armor') || item.includes('padded armor')) {
+			return { ac: 11 + dexMod, source: "Leather Armor" };
+		}
+		if (item.includes('studded leather')) {
+			return { ac: 12 + dexMod, source: "Studded Leather" };
+		}
+		
+		// Medium Armor (AC = base + Dex mod, max 2)
+		const mediumDexMod = Math.min(dexMod, 2);
+		if (item.includes('hide armor')) {
+			return { ac: 12 + mediumDexMod, source: "Hide Armor" };
+		}
+		if (item.includes('chain shirt')) {
+			return { ac: 13 + mediumDexMod, source: "Chain Shirt" };
+		}
+		if (item.includes('scale mail')) {
+			return { ac: 14 + mediumDexMod, source: "Scale Mail" };
+		}
+		if (item.includes('breastplate')) {
+			return { ac: 14 + mediumDexMod, source: "Breastplate" };
+		}
+		if (item.includes('half plate')) {
+			return { ac: 15 + mediumDexMod, source: "Half Plate" };
+		}
+		
+		// Heavy Armor (AC = base, no Dex)
+		if (item.includes('ring mail')) {
+			return { ac: 14, source: "Ring Mail" };
+		}
+		if (item.includes('chain mail')) {
+			return { ac: 16, source: "Chain Mail" };
+		}
+		if (item.includes('splint armor') || item.includes('splint')) {
+			return { ac: 17, source: "Splint Armor" };
+		}
+		if (item.includes('plate armor') || item.includes('plate')) {
+			return { ac: 18, source: "Plate Armor" };
+		}
+		
+		// Shields (+2 AC)
+		if (item.includes('shield')) {
+			return { ac: 2, source: "Shield", isShield: true };
+		}
+		
+		return null;
+	}
+
+	/**
+	 * Enhanced AC calculation with comprehensive source tracking (data-driven version)
+	 * @param {Object} character - The character data object
+	 * @returns {Promise<Object>} AC data with total, sources array, and details
+	 */
+	static async _calculateEnhancedArmorClass (character) {
+		if (!character) return { total: 10, sources: ["Base AC (10)"], details: {} };
+
+		const classes = character.class || [];
+		const dexMod = Parser.getAbilityModNumber(character.dex);
+		const conMod = Parser.getAbilityModNumber(character.con);
+		const wisMod = Parser.getAbilityModNumber(character.wis);
+		
+		// Check for equipped armor
+		const equippedArmor = (character.item || []).find(item => 
+			item.equipped && item.type && 
+			["LA", "MA", "HA", "S"].includes(item.type)
+		);
+		
+		let baseAC = 10; // Default AC
+		let acSources = ["Base AC (10)"];
+		let acDetails = {
+			hasArmor: false,
+			hasShield: false,
+			hasNaturalArmor: false,
+			hasUnarmoredDefense: false,
+			dexterityModifier: dexMod
+		};
+		
+		// Get race-based natural armor from data files
+		try {
+			const raceBonus = await this._getRaceBonusFiltered(character, "ac");
+			if (raceBonus.naturalArmor && raceBonus.naturalArmor.value > baseAC) {
+				baseAC = raceBonus.naturalArmor.value;
+				acSources = [raceBonus.naturalArmor.source];
+				acDetails.hasNaturalArmor = true;
+				acDetails.naturalArmorType = raceBonus.naturalArmor.type;
+			}
+		} catch (error) {
+			console.warn("Failed to get race AC bonus:", error);
+		}
+		
+		// Class-based Unarmored Defense
+		const barbarianLevels = this._getClassLevels(classes, "Barbarian");
+		const monkLevels = this._getClassLevels(classes, "Monk");
+		
+		if (barbarianLevels > 0 && !equippedArmor) {
+			const unarmoredAC = 10 + dexMod + conMod;
+			if (unarmoredAC > baseAC) {
+				baseAC = unarmoredAC;
+				acSources = [`Barbarian Unarmored Defense (10 + Dex + Con = ${unarmoredAC})`];
+				acDetails.hasUnarmoredDefense = true;
+				acDetails.unarmoredDefenseType = "Barbarian";
+				acDetails.constitutionModifier = conMod;
+			}
+		}
+		
+		if (monkLevels > 0 && !equippedArmor) {
+			const unarmoredAC = 10 + dexMod + wisMod;
+			if (unarmoredAC > baseAC) {
+				baseAC = unarmoredAC;
+				acSources = [`Monk Unarmored Defense (10 + Dex + Wis = ${unarmoredAC})`];
+				acDetails.hasUnarmoredDefense = true;
+				acDetails.unarmoredDefenseType = "Monk";
+				acDetails.wisdomModifier = wisMod;
+			}
+		}
+		
+		// Draconic Resilience (Sorcerer)
+		const sorcererLevels = this._getClassLevels(classes, "Sorcerer");
+		if (sorcererLevels > 0 && !equippedArmor) {
+			const isDraconic = classes.some(cls => 
+				cls.name === "Sorcerer" && 
+				cls.subclass && cls.subclass.name === "Draconic Bloodline"
+			);
+			if (isDraconic) {
+				const draconicAC = 13 + dexMod;
+				if (draconicAC > baseAC) {
+					baseAC = draconicAC;
+					acSources = [`Draconic Resilience (13 + Dex = ${draconicAC})`];
+					acDetails.hasNaturalArmor = true;
+					acDetails.naturalArmorType = "Draconic Resilience";
+				}
+			}
+		}
+		
+		// Shield bonus
+		const shield = (character.item || []).find(item => 
+			item.equipped && item.type === "S"
+		);
+		if (shield) {
+			const shieldBonus = shield.ac || 2;
+			baseAC += shieldBonus;
+			acSources.push(`Shield (+${shieldBonus})`);
+			acDetails.hasShield = true;
+			acDetails.shieldBonus = shieldBonus;
+		}
+		
+		return {
+			total: baseAC,
+			sources: acSources,
+			details: acDetails
+		};
+	}
+	
+	/**
+	 * Get detailed natural armor information for races
+	 */
+	static _getRaceNaturalArmorDetails (raceName, dexMod, conMod) {
+		switch (raceName.toLowerCase()) {
+			case "dragonborn":
+				return {
+					value: 13 + dexMod,
+					source: `Dragonborn Natural Armor (13 + Dex = ${13 + dexMod})`,
+					type: "scales"
+				};
+			case "lizardfolk":
+				return {
+					value: 13 + dexMod,
+					source: `Lizardfolk Natural Armor (13 + Dex = ${13 + dexMod})`,
+					type: "scales"
+				};
+			case "tortle":
+				return {
+					value: 17,
+					source: "Tortle Shell (AC 17)",
+					type: "shell"
+				};
+			case "warforged":
+				return {
+					value: 11 + dexMod,
+					source: `Warforged Integrated Protection (11 + Dex = ${11 + dexMod})`,
+					type: "composite plating"
+				};
+			case "loxodon":
+				return {
+					value: 12 + conMod,
+					source: `Loxodon Natural Armor (12 + Con = ${12 + conMod})`,
+					type: "thick hide"
+				};
+			default:
+				return {
+					value: 10 + dexMod,
+					source: `Base AC (10 + Dex = ${10 + dexMod})`,
+					type: "none"
+				};
+		}
+	}
+
+	/**
 	 * Check if character has proficiency in a given skill
 	 * @param {Object} character - The character data object
 	 * @param {Object} skill - The skill definition with key and name properties
-	 * @returns {Object} { isProficient: boolean, bonus: string|number|undefined }
+	 * @returns {Object} { isProficient: boolean, bonus: string|number|undefined, expertise: boolean, jackOfAllTrades: boolean }
 	 */
-	static _getSkillProficiency(character, skill) {
-		if (!character.skill) {
-			return { isProficient: false, bonus: undefined };
+	static _getSkillProficiency (character, skill) {
+		// Use synchronous version for immediate results in skill rendering
+		return this._getSkillProficiencySync(character, skill);
+	}
+
+	/**
+	 * Async version with full race/background integration
+	 */
+	static async _getSkillProficiencyAsync (character, skill) {
+		let isProficient = false;
+		let baseBonus = 0;
+		
+		// Get base ability modifier
+		const abilityScore = character[skill.ability] || 10;
+		const abilityMod = Parser.getAbilityModifier(abilityScore);
+		const abilityModValue = typeof abilityMod === "number" ? abilityMod : parseInt(abilityMod) || 0;
+		
+		// Get proficiency bonus from character
+		let profBonus = 0;
+		if (character.proficiencyBonus) {
+			const profBonusStr = character.proficiencyBonus.toString().replace('+', '');
+			profBonus = parseInt(profBonusStr) || 0;
 		}
 
-		// Try multiple key formats to find skill bonus
-		const skillBonus = character.skill[skill.key] ||
-			character.skill[skill.name.toLowerCase().replace(/\s+/g, '')] ||
-			character.skill[skill.name.toLowerCase()];
-
+		const skillKey = skill.key || skill.name.toLowerCase().replace(/\s+/g, "_");
+		
+		// Check if proficient from various sources
+		let sourcesOfProficiency = [];
+		
+		// 1. Character skillProficiencies array (explicit)
+		if (character.skillProficiencies && Array.isArray(character.skillProficiencies)) {
+			if (character.skillProficiencies.includes(skillKey) || 
+			    character.skillProficiencies.includes(skill.name.toLowerCase().replace(/\s+/g, "_"))) {
+				isProficient = true;
+				sourcesOfProficiency.push("Character");
+			}
+		}
+		
+		// 2. Race bonuses from data files
+		try {
+			const raceBonus = await this._getRaceBonusFiltered(character, "skills");
+			if (raceBonus.skills && raceBonus.skills.includes(skillKey)) {
+				isProficient = true;
+				sourcesOfProficiency.push("Race");
+			}
+		} catch (error) {
+			// Silently handle - race bonuses are optional
+		}
+		
+		// 3. Background bonuses from data files
+		try {
+			const backgroundFeatures = await this._getBackgroundFeatures(character);
+			if (backgroundFeatures.skills && backgroundFeatures.skills.includes(skillKey)) {
+				isProficient = true;
+				sourcesOfProficiency.push("Background");
+			}
+		} catch (error) {
+			// Silently handle - background bonuses are optional
+		}
+		
+		// Set base bonus based on proficiency
+		if (isProficient) {
+			baseBonus = abilityModValue + profBonus;
+		} else {
+			baseBonus = abilityModValue;
+		}
+		
+		// Apply class skill bonuses (Jack of All Trades, Expertise, etc.)
+		const classBonus = this._getClassSkillBonus(character, skill, isProficient, profBonus, abilityModValue);
+		const finalBonus = baseBonus + classBonus.bonus;
+		
 		return {
-			isProficient: skillBonus !== undefined,
-			bonus: skillBonus
+			isProficient: isProficient || classBonus.jackOfAllTrades,
+			bonus: finalBonus >= 0 ? `+${finalBonus}` : `${finalBonus}`,
+			expertise: classBonus.expertise,
+			jackOfAllTrades: classBonus.jackOfAllTrades,
+			sources: sourcesOfProficiency,
+			classFeatures: classBonus.features || []
+		};
+	}
+
+	/**
+	 * Synchronous fallback for backward compatibility
+	 */
+	static _getSkillProficiencySync (character, skill) {
+		let isProficient = false;
+		let baseBonus = 0;
+		
+		// Get base ability modifier
+		const abilityScore = character[skill.ability] || 10;
+		const abilityMod = Parser.getAbilityModifier(abilityScore);
+		const abilityModValue = typeof abilityMod === "number" ? abilityMod : parseInt(abilityMod) || 0;
+		
+		// Get proficiency bonus from character
+		let profBonus = 0;
+		if (character.proficiencyBonus) {
+			const profBonusStr = character.proficiencyBonus.toString().replace('+', '');
+			profBonus = parseInt(profBonusStr) || 0;
+		}
+
+		// Prioritize new system: check skillProficiencies array first
+		if (character.skillProficiencies && Array.isArray(character.skillProficiencies)) {
+			// Create multiple possible skill keys to check for different naming conventions:
+			// 1. "sleight of hand" (spaces - from Parser.SKILL_TO_ATB_ABV)
+			// 2. "sleightofhand" (no spaces - common in arrays)  
+			// 3. "sleight_of_hand" (underscores - also used in some arrays)
+			const skillName = skill.name.toLowerCase();
+			const skillKey = skill.key || skillName.replace(/\s+/g, '');
+			const skillKeyUnderscore = skillName.replace(/\s+/g, '_');
+			
+			isProficient = character.skillProficiencies.some(profSkill => {
+				const profSkillLower = profSkill.toLowerCase();
+				return profSkillLower === skillName ||        // "sleight of hand"
+				       profSkillLower === skillKey ||         // "sleightofhand"
+				       profSkillLower === skillKeyUnderscore; // "sleight_of_hand"
+			});
+			
+			if (isProficient) {
+				baseBonus = abilityModValue + profBonus;
+			} else {
+				baseBonus = abilityModValue;
+			}
+		}
+		// Fallback to old system (pre-calculated bonuses in character.skill)
+		else if (character.skill) {
+			const skillBonus = character.skill[skill.key]
+				|| character.skill[skill.name.toLowerCase().replace(/\s+/g, "")]
+				|| character.skill[skill.name.toLowerCase()];
+			
+			if (skillBonus !== undefined) {
+				isProficient = true;
+				baseBonus = typeof skillBonus === "string" ? parseInt(skillBonus) || abilityModValue : skillBonus;
+			} else {
+				baseBonus = abilityModValue;
+			}
+		}
+		// No proficiency found - use base ability modifier
+		else {
+			baseBonus = abilityModValue;
+		}
+
+		// Apply class-specific bonuses (Jack of All Trades, Expertise, etc.)
+		const classBonus = Renderer.character._getClassSkillBonus(character, skill.name, baseBonus, isProficient);
+		
+		return {
+			isProficient: isProficient || classBonus.jackOfAllTrades, // Jack of All Trades counts as a form of proficiency
+			bonus: classBonus.bonus >= 0 ? `+${classBonus.bonus}` : `${classBonus.bonus}`,
+			expertise: classBonus.expertise,
+			jackOfAllTrades: classBonus.jackOfAllTrades,
 		};
 	}
 
@@ -8541,8 +9248,142 @@ Renderer.character = class {
 	 * @param {boolean} isProficient - Whether the skill is proficient
 	 * @returns {string} Formatted skill name
 	 */
-	static _formatSkillName(skillName, isProficient) {
-		return isProficient ? `<strong>${skillName}</strong> ◉` : skillName;
+	/**
+	 * Get race-specific bonuses and features (filtered by calculation type)
+	 * @param {Object} character - The character data object
+	 * @param {string} calculationType - Type of calculation ("skills", "ac", "speed", "resistance")
+	 * @returns {Promise<Object>} Race bonuses for the specified calculation type
+	 */
+	static async _getRaceBonusFiltered (character, calculationType) {
+		if (!character.race || !character.race.name) return {};
+		
+		try {
+			// Call the actual implementation that loads race data
+			const race = character.race;
+			if (!race?.name) return {};
+			
+			const raceData = await this.getRaceData(race.name, race.source);
+			if (!raceData) return {};
+			
+			const dexMod = Parser.getAbilityModNumber(character.dex);
+			const conMod = Parser.getAbilityModNumber(character.con);
+			
+			const raceBonus = {
+				skills: this._extractRaceSkillProficiencies(raceData),
+				naturalArmor: this._extractRaceNaturalArmor(raceData, dexMod, conMod),
+				resistances: raceData.resist || [],
+				speedBonus: raceData.speed || {}
+			};
+			
+			switch (calculationType) {
+				case "skills":
+					return { skills: raceBonus.skills };
+				case "ac":
+					return { naturalArmor: raceBonus.naturalArmor };
+				case "speed":
+					return { speedBonus: raceBonus.speedBonus };
+				case "resistance":
+					return { resistances: raceBonus.resistances };
+				default:
+					return raceBonus;
+			}
+		} catch (error) {
+			console.warn("Failed to get race bonus:", error);
+			return {};
+		}
+	}
+
+	/**
+	 * Get background-specific features (data-driven version)
+	 * @param {Object} character - The character data object
+	 * @returns {Promise<Object>} Background features
+	 */
+	static async _getBackgroundFeatures (character) {
+		if (!character.background || !character.background.name) return {};
+		
+		try {
+			return await Renderer.character._getBackgroundFeatures(character);
+		} catch (error) {
+			console.warn("Failed to get background features:", error);
+			return {};
+		}
+	}
+
+	/**
+	 * Calculate spell save DC and attack bonus based on class data (data-driven version)
+	 * @param {Object} character - The character data object
+	 * @returns {Promise<Object>} Spell save DC and attack bonus
+	 */
+	static async _calculateSpellcasting (character) {
+		if (!character.class || !Array.isArray(character.class)) return {};
+		
+		// If already calculated and in character data, use existing values
+		if (character.spells && (character.spells.dc || character.spells.attackBonus)) {
+			return {
+				dc: character.spells.dc,
+				attackBonus: character.spells.attackBonus,
+				ability: character.spells.ability || character.spells.spellcastingAbility,
+			};
+		}
+		
+		try {
+			return await Renderer.character._calculateSpellcasting(character);
+		} catch (error) {
+			console.warn("Failed to calculate spellcasting:", error);
+			return {};
+		}
+	}
+
+	/**
+	 * Get class-specific skill bonuses and features
+	 * @param {Object} character - The character data object
+	 * @param {string} skillName - Name of the skill
+	 * @returns {Object} Class-specific bonuses for the skill
+	 */
+	static _getClassSkillFeatures (character, skillName) {
+		if (!character.class || !Array.isArray(character.class)) return {};
+		
+		let features = {};
+		
+		for (const cls of character.class) {
+			const className = cls.name.toLowerCase();
+			const level = cls.level || 1;
+			
+			switch (className) {
+				case "ranger":
+					// Natural Explorer: double proficiency for Survival in favored terrain
+					if (skillName.toLowerCase() === "survival") {
+						features.naturalExplorer = true;
+					}
+					break;
+				case "rogue":
+					// Reliable Talent: treat d20 rolls of 9 or lower as 10
+					if (level >= 11) {
+						features.reliableTalent = true;
+					}
+					break;
+			}
+		}
+		
+		return features;
+	}
+	static _formatSkillName (skillName, isProficient, proficiencyType = "none") {
+		// If proficiencyType is not provided, fall back to old behavior
+		if (arguments.length === 2) {
+			return isProficient ? `<strong>${skillName}</strong> ◉` : skillName;
+		}
+
+		switch (proficiencyType) {
+			case "expertise":
+				return `<strong>${skillName}</strong> <span style="color: #d4af37;" title="Expertise (Double Proficiency)">★</span>`;
+			case "jack":
+				return `<span title="Jack of All Trades (Half Proficiency)">${skillName} ◐</span>`;
+			case "proficient":
+				return `<strong>${skillName}</strong> ◉`;
+			case "none":
+			default:
+				return skillName;
+		}
 	}
 
 	static getCompactRenderedString (character, {isStatic = false} = {}) {
@@ -8552,21 +9393,21 @@ Renderer.character = class {
 		// Header with basic character info
 		const ptLevel = Renderer.character._getCharacterLevel(character) || "?";
 		const ptRace = character.race?.name || "Unknown Race";
-		const ptClass = character.class?.map(c => `${c.name}${c.subclass ? ` (${c.subclass.name})` : ''} ${c.level || ''}`).join(", ") || "Unknown Class";
+		const ptClass = character.class?.map(c => `${c.name}${c.subclass ? ` (${c.subclass.name})` : ""} ${c.level || ""}`).join(", ") || "Unknown Class";
 		const ptBackground = character.background?.name || "Unknown Background";
 		const ptAlignment = character.alignment ? Parser.alignmentListToFull(character.alignment) : "Unknown";
 
 		renderStack.push(`
 			${Renderer.utils.getExcludedTr({entity: character, dataProp: "character", page: UrlUtil.PG_CHARACTERS})}
 			${Renderer.utils.getNameTr(character, {page: UrlUtil.PG_CHARACTERS})}
-			<tr><td colspan="6" class="pb-2 pt-0" data-character-name="${(character.name || 'Unknown').replace(/[^a-zA-Z0-9]/g, '-')}">
+			<tr><td colspan="6" class="pb-2 pt-0" data-character-name="${(character.name || "Unknown").replace(/[^a-zA-Z0-9]/g, "-")}">
 		`);
 
 		// Character header info - more compact inline format
 		const raceLink = character.race ? `{@race ${character.race.name}|${character.race.source || "PHB"}}` : ptRace;
 		const classLinks = character.class ? character.class.map(c => {
 			const classLink = `{@class ${c.name}|${c.source || "PHB"}}`;
-			let subclassText = '';
+			let subclassText = "";
 			if (c.subclass) {
 				// Use the proper subclass shortName if available, otherwise fall back to name
 				const subclassShortName = c.subclass.shortName || c.subclass.name;
@@ -8574,10 +9415,9 @@ Renderer.character = class {
 				// Correct format: {@class ClassName||SubclassName|SubclassShortName|SubclassSource}
 				subclassText = ` ({@class ${c.name}||${c.subclass.name}|${subclassShortName}|${c.subclass.source || "PHB"}})`;
 			}
-			return `${classLink}${subclassText} ${c.level || ''}`;
+			return `${classLink}${subclassText} ${c.level || ""}`;
 		}).join(", ") : ptClass;
 		const backgroundLink = character.background ? `{@background ${character.background.name}|${character.background.source || "PHB"}}` : ptBackground;
-
 
 		// Inline character summary
 		const inlineSummary = `<p><em>Level ${ptLevel} ${raceLink} ${classLinks}, ${backgroundLink}, ${ptAlignment}</em></p>`;
@@ -8588,10 +9428,10 @@ Renderer.character = class {
 		// Combat Stats - Compact inline format
 		const combatStats = [];
 
-		if (character.ac) {
-			const acValue = Array.isArray(character.ac) ? character.ac[0].ac : character.ac;
-			const acSource = Array.isArray(character.ac) && character.ac[0].from ? ` (${character.ac[0].from.join(', ')})` : '';
-			combatStats.push(`<strong>AC</strong>: ${acValue}${acSource}`);
+		// Always show AC - calculate it if missing from character sheet
+		const acData = Renderer.character._getCharacterAC(character);
+		if (acData) {
+			combatStats.push(`<strong>AC</strong>: ${acData.ac}${acData.source ? ` (${acData.source})` : ""}`);
 		}
 
 		if (character.hp) {
@@ -8605,33 +9445,33 @@ Renderer.character = class {
 				// Store character data in a global registry instead of embedding in HTML
 				const characterId = globalThis.CharacterManager
 					? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, '');
+					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
 				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
 				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
 
 				// Create click-to-edit HP display
 				const hpDisplay = `<span class="character-stat-display" data-stat-path="hp.current" data-character-id="${characterId}" data-current-value="${currentHp}" data-max-value="${maxHp}" title="Click to edit" style="cursor: pointer; border-bottom: 1px dashed #666;">${currentHp}</span>/<span>${maxHp}</span>`;
 
-				const tempHpDisplay = (typeof hp.temp === 'number') ? ` (+<span class="character-stat-display" data-stat-path="hp.temp" data-character-id="${characterId}" data-current-value="${hp.temp}" title="Click to edit Temporary HP" style="cursor: pointer; border-bottom: 1px dashed #666;">${hp.temp}</span> temp)` : '';
+				const tempHpDisplay = (typeof hp.temp === "number") ? ` (+<span class="character-stat-display" data-stat-path="hp.temp" data-character-id="${characterId}" data-current-value="${hp.temp}" title="Click to edit Temporary HP" style="cursor: pointer; border-bottom: 1px dashed #666;">${hp.temp}</span> temp)` : "";
 				combatStats.push(`<strong>HP</strong>: ${hpDisplay}${tempHpDisplay}`);
 			} else {
 				// Render static HP display
-				combatStats.push(`<strong>HP</strong>: ${currentHp}/${maxHp}${(typeof hp.temp === 'number') ? ` (+${hp.temp} temp)` : ''}`);
+				combatStats.push(`<strong>HP</strong>: ${currentHp}/${maxHp}${(typeof hp.temp === "number") ? ` (+${hp.temp} temp)` : ""}`);
 			}
 		}
 
 		if (character.speed) {
 			const speeds = [];
 			Object.entries(character.speed).forEach(([type, value]) => {
-				speeds.push(`${type === 'walk' ? '' : type + ' '}${value} ft.`);
+				speeds.push(`${type === "walk" ? "" : `${type} `}${value} ft.`);
 			});
-			combatStats.push(`<strong>Speed</strong>: ${speeds.join(', ')}`);
+			combatStats.push(`<strong>Speed</strong>: ${speeds.join(", ")}`);
 		}
 
 		// Add Initiative with dice rolling
 		const dexScore = character.dex || 10;
 		const dexMod = Parser.getAbilityModifier(dexScore);
-		const dexModValue = typeof dexMod === 'number' ? dexMod : parseInt(dexMod) || 0;
+		const dexModValue = typeof dexMod === "number" ? dexMod : parseInt(dexMod) || 0;
 		const initMod = character.initiative || dexModValue;
 		const initStr = initMod >= 0 ? `+${initMod}` : `${initMod}`;
 		combatStats.push(`<strong>Initiative</strong>: {@dice 1d20${initStr}|${initStr}|Initiative}`);
@@ -8640,12 +9480,19 @@ Renderer.character = class {
 		const additionalCombat = [];
 		const wisScore = character.wis || 10;
 		const wisMod = Parser.getAbilityModifier(wisScore);
-		const wisModValue = typeof wisMod === 'number' ? wisMod : parseInt(wisMod) || 0;
-		const perceptionSkill = character.skill?.perception || character.skill?.Perception || wisModValue;
-		const perceptionMod = typeof perceptionSkill === 'string' ? parseInt(perceptionSkill) || wisModValue : perceptionSkill;
+		const wisModValue = typeof wisMod === "number" ? wisMod : parseInt(wisMod) || 0;
+		
+		// Use the skill proficiency system to calculate perception modifier
+		const perceptionSkillDef = { key: "perception", name: "Perception", ability: "wis" };
+		const { isProficient, bonus } = Renderer.character._getSkillProficiency(character, perceptionSkillDef);
+		
+		let perceptionMod = wisModValue;
+		if (isProficient && bonus !== undefined) {
+			perceptionMod = typeof bonus === "string" ? parseInt(bonus) || wisModValue : bonus;
+		}
+		
 		const passivePerception = 10 + perceptionMod;
 		combatStats.push(`<strong>Passive Perception</strong>: ${passivePerception}`);
-
 
 		// Calculate and display proficiency bonus
 		let profBonus = character.proficiencyBonus;
@@ -8661,7 +9508,7 @@ Renderer.character = class {
 			const sizeFull = Parser.sizeAbvToFull(character.size) || character.size;
 			combatStats.push(`<strong>Size</strong>: ${sizeFull}`);
 		}
-		
+
 		if (character.age) {
 			combatStats.push(`<strong>Age</strong>: ${character.age}`);
 		}
@@ -8669,22 +9516,21 @@ Renderer.character = class {
 		if (character.senses) {
 			const sensesFull = Object.entries(character.senses)
 				.map(([type, value]) => `${value}`).filter(Boolean)
-				.join(', ');
+				.join(", ");
 			combatStats.push(`<strong>Senses</strong>: ${sensesFull}`);
 		}
 
 		if (character.resist) {
 			const sensesFull = Object.entries(character.resist)
 				.map(([type, value]) => `${value}`).filter(Boolean)
-				.join(', ');
+				.join(", ");
 			combatStats.push(`<strong>Resistant</strong>: ${sensesFull}`);
 		}
-
 
 		if (character.immune) {
 			const sensesFull = Object.entries(character.immune)
 				.map(([type, value]) => `${value}`).filter(Boolean)
-				.join(', ');
+				.join(", ");
 			combatStats.push(`<strong>Immune</strong>: ${sensesFull}`);
 		}
 
@@ -8692,18 +9538,18 @@ Renderer.character = class {
 		if (character.class?.length) {
 			// Map class names to their hit die types
 			const classHitDice = {
-				'barbarian': 'd12',
-				'fighter': 'd10',
-				'paladin': 'd10',
-				'ranger': 'd10',
-				'bard': 'd8',
-				'cleric': 'd8',
-				'druid': 'd8',
-				'monk': 'd8',
-				'rogue': 'd8',
-				'warlock': 'd8',
-				'sorcerer': 'd6',
-				'wizard': 'd6'
+				"barbarian": "d12",
+				"fighter": "d10",
+				"paladin": "d10",
+				"ranger": "d10",
+				"bard": "d8",
+				"cleric": "d8",
+				"druid": "d8",
+				"monk": "d8",
+				"rogue": "d8",
+				"warlock": "d8",
+				"sorcerer": "d6",
+				"wizard": "d6",
 			};
 
 			// Group classes by hit die type for display
@@ -8712,7 +9558,7 @@ Renderer.character = class {
 			character.class.forEach((cls, classIndex) => {
 				const className = cls.name.toLowerCase();
 				const level = cls.level || 1;
-				const hitDie = classHitDice[className] || 'd8'; // Default to d8 if unknown class
+				const hitDie = classHitDice[className] || "d8"; // Default to d8 if unknown class
 
 				// Initialize hit dice usage if not present - use simple currentHitDice property
 				if (cls.currentHitDice === undefined) {
@@ -8737,7 +9583,7 @@ Renderer.character = class {
 				if (hasEditAccess && !isStatic) {
 					characterId = globalThis.CharacterManager
 						? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-						: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, '');
+						: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
 					if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
 					globalThis._CHARACTER_EDIT_DATA[characterId] = character;
 				}
@@ -8745,7 +9591,7 @@ Renderer.character = class {
 				if (hasEditAccess && !isStatic && characterId) {
 					// For hit dice, we edit the available dice directly
 					// Store class information for proper updating
-					const classesData = classes.map(c => `${c.index}:${c.level}:${c.currentAvailable}`).join(',');
+					const classesData = classes.map(c => `${c.index}:${c.level}:${c.currentAvailable}`).join(",");
 					const clickableCount = `<span class="character-stat-display" data-stat-path="class.currentHitDice.${dieType}" data-character-id="${characterId}" data-current-value="${current}" data-max-value="${max}" data-classes-data="${classesData}" title="Click to edit ${dieType} hit dice available" style="cursor: pointer; border-bottom: 1px dashed #666;">${current}</span>`;
 					combatStats.push(`Hit Dice: ${clickableCount}/${max} {@dice 1${dieType}||${dieType} Hit Die}`);
 				} else {
@@ -8764,7 +9610,7 @@ Renderer.character = class {
 			if (hasEditAccess && !isStatic) {
 				characterId = globalThis.CharacterManager
 					? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, '');
+					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
 				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
 				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
 			}
@@ -8779,18 +9625,15 @@ Renderer.character = class {
 				// Static display
 				combatStats.push(`<strong>Successes</strong>: ${successes}/3, <strong>Failures</strong>: ${failures}/3`);
 			}
-
 		}
-
-
 
 		// Combat Statistics Section
 		if (combatStats.length > 0) {
 			// Convert combat stats array to a 2-column table format
 			const tableRows = [];
 			for (let i = 0; i < combatStats.length; i += 2) {
-				const leftCell = combatStats[i] || '';
-				const rightCell = combatStats[i + 1] || '';
+				const leftCell = combatStats[i] || "";
+				const rightCell = combatStats[i + 1] || "";
 				tableRows.push([leftCell, rightCell]);
 			}
 
@@ -8801,15 +9644,15 @@ Renderer.character = class {
 					{
 						type: "table",
 						colLabels: ["", ""],
-						rows: tableRows
-					}
-				]
+						rows: tableRows,
+					},
+				],
 			};
 			renderer.recursiveRender(combatInfo, renderStack, {depth: 1});
 		}
 
 		// Ability Scores Section
-		const abilities = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+		const abilities = ["str", "dex", "con", "int", "wis", "cha"];
 		const abilitySection = {
 			type: "entries",
 			name: "Ability Scores",
@@ -8823,34 +9666,33 @@ Renderer.character = class {
 							const modifier = Parser.getAbilityModifier(score);
 							// Create clickable dice roll for ability checks
 							return `{@ability ${ab} ${score}}`;
-						})
-					]
-				}
-			]
+						}),
+					],
+				},
+			],
 		};
 		renderer.recursiveRender(abilitySection, renderStack, {depth: 1});
 
-
 		// Skills Section (show all skills, highlight proficient ones)
 		const allSkills = [
-			{key: 'acrobatics', name: 'Acrobatics', ability: 'dex'},
-			{key: 'animal_handling', name: 'Animal Handling', ability: 'wis'},
-			{key: 'arcana', name: 'Arcana', ability: 'int'},
-			{key: 'athletics', name: 'Athletics', ability: 'str'},
-			{key: 'deception', name: 'Deception', ability: 'cha'},
-			{key: 'history', name: 'History', ability: 'int'},
-			{key: 'insight', name: 'Insight', ability: 'wis'},
-			{key: 'intimidation', name: 'Intimidation', ability: 'cha'},
-			{key: 'investigation', name: 'Investigation', ability: 'int'},
-			{key: 'medicine', name: 'Medicine', ability: 'wis'},
-			{key: 'nature', name: 'Nature', ability: 'int'},
-			{key: 'perception', name: 'Perception', ability: 'wis'},
-			{key: 'performance', name: 'Performance', ability: 'cha'},
-			{key: 'persuasion', name: 'Persuasion', ability: 'cha'},
-			{key: 'religion', name: 'Religion', ability: 'int'},
-			{key: 'sleight_of_hand', name: 'Sleight of Hand', ability: 'dex'},
-			{key: 'stealth', name: 'Stealth', ability: 'dex'},
-			{key: 'survival', name: 'Survival', ability: 'wis'}
+			{key: "acrobatics", name: "Acrobatics", ability: "dex"},
+			{key: "animal_handling", name: "Animal Handling", ability: "wis"},
+			{key: "arcana", name: "Arcana", ability: "int"},
+			{key: "athletics", name: "Athletics", ability: "str"},
+			{key: "deception", name: "Deception", ability: "cha"},
+			{key: "history", name: "History", ability: "int"},
+			{key: "insight", name: "Insight", ability: "wis"},
+			{key: "intimidation", name: "Intimidation", ability: "cha"},
+			{key: "investigation", name: "Investigation", ability: "int"},
+			{key: "medicine", name: "Medicine", ability: "wis"},
+			{key: "nature", name: "Nature", ability: "int"},
+			{key: "perception", name: "Perception", ability: "wis"},
+			{key: "performance", name: "Performance", ability: "cha"},
+			{key: "persuasion", name: "Persuasion", ability: "cha"},
+			{key: "religion", name: "Religion", ability: "int"},
+			{key: "sleight_of_hand", name: "Sleight of Hand", ability: "dex"},
+			{key: "stealth", name: "Stealth", ability: "dex"},
+			{key: "survival", name: "Survival", ability: "wis"},
 		];
 
 		const skillsSection = {
@@ -8863,37 +9705,48 @@ Renderer.character = class {
 					rows: allSkills.map(skill => {
 						const abilityScore = character[skill.ability] || 10;
 						const baseModifier = Parser.getAbilityModifier(abilityScore);
-						const baseModValue = typeof baseModifier === 'number' ? baseModifier : parseInt(baseModifier) || 0;
+						const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
 
-						// Get skill proficiency information
-						const { isProficient, bonus } = Renderer.character._getSkillProficiency(character, skill);
+						// Get enhanced skill proficiency information including class bonuses
+						const skillData = Renderer.character._getSkillProficiency(character, skill);
+						const { isProficient, bonus, expertise, jackOfAllTrades } = skillData;
 
-						// Calculate final modifier
-						const finalModifier = isProficient
-							? (typeof bonus === 'string' ? parseInt(bonus) || baseModValue : bonus)
-							: baseModValue;
-
+						// Parse the final modifier from the bonus string
+						const finalModifier = typeof bonus === "string" ? parseInt(bonus) || baseModValue : bonus;
 						const finalStr = finalModifier >= 0 ? `+${finalModifier}` : `${finalModifier}`;
 
-						// Create clickable dice roll with proficiency indicator in tooltip
-						const rollTooltip = isProficient ? `${skill.name} (Proficient)` : skill.name;
+						// Create clickable dice roll with enhanced proficiency information in tooltip
+						let rollTooltip = skill.name;
+						if (expertise) {
+							rollTooltip = `${skill.name} (Expertise - Double Proficiency)`;
+						} else if (jackOfAllTrades) {
+							rollTooltip = `${skill.name} (Jack of All Trades - Half Proficiency)`;
+						} else if (isProficient) {
+							rollTooltip = `${skill.name} (Proficient)`;
+						}
+
 						const rollableModifier = `{@skillCheck ${skill.key} ${finalStr}}`;
 
 						// Format skill name with visual proficiency indicator
-						const displayName = Renderer.character._formatSkillName(skill.name, isProficient);
+						let proficiencyType = "none";
+						if (expertise) proficiencyType = "expertise";
+						else if (jackOfAllTrades) proficiencyType = "jack";
+						else if (isProficient) proficiencyType = "proficient";
+
+						const displayName = Renderer.character._formatSkillName(skill.name, isProficient, proficiencyType);
 
 						return [
 							displayName,
 							skill.ability.toUpperCase(),
-							rollableModifier
+							rollableModifier,
 						];
-					})
-				}
-			]
+					}),
+				},
+			],
 		};
 		renderer.recursiveRender(skillsSection, renderStack, {depth: 1});
 
-				// Saving Throws Section (show all abilities, highlight proficient ones)
+		// Saving Throws Section (show all abilities, highlight proficient ones)
 		const savingThrowsSection = {
 			type: "entries",
 			name: "Saving Throws",
@@ -8904,15 +9757,37 @@ Renderer.character = class {
 					rows: abilities.map(ab => {
 						const score = character[ab] || 10;
 						const baseModifier = Parser.getAbilityModifier(score);
-						const baseModValue = typeof baseModifier === 'number' ? baseModifier : parseInt(baseModifier) || 0;
-						const saveBonus = character.save?.[ab];
-
+						const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
+						
 						let finalModifier = baseModValue;
 						let isProficient = false;
 
-						if (saveBonus) {
-							finalModifier = typeof saveBonus === 'string' ? parseInt(saveBonus) || baseModValue : saveBonus;
+						// Prioritize new system (saveProficiencies array)
+						if (character.saveProficiencies && Array.isArray(character.saveProficiencies)) {
+							isProficient = character.saveProficiencies.includes(ab);
+							if (isProficient) {
+								// Get proficiency bonus from character
+								let profBonus = 0;
+								if (character.proficiencyBonus) {
+									const profBonusStr = character.proficiencyBonus.toString().replace('+', '');
+									profBonus = parseInt(profBonusStr) || 0;
+								}
+								finalModifier = baseModValue + profBonus;
+							} else {
+								// Not proficient - just use ability modifier
+								finalModifier = baseModValue;
+							}
+						}
+						// Fallback to old system (pre-calculated bonuses in character.save)
+						else if (character.save?.[ab] !== undefined) {
+							const oldSaveBonus = character.save[ab];
+							finalModifier = typeof oldSaveBonus === "string" ? parseInt(oldSaveBonus) || baseModValue : oldSaveBonus;
 							isProficient = true;
+						}
+						// No save system - just use ability modifier
+						else {
+							finalModifier = baseModValue;
+							isProficient = false;
 						}
 
 						const finalStr = finalModifier >= 0 ? `+${finalModifier}` : `${finalModifier}`;
@@ -8925,28 +9800,27 @@ Renderer.character = class {
 
 						return [
 							displayName,
-							rollableModifier
+							rollableModifier,
 						];
-					})
-				}
-			]
+					}),
+				},
+			],
 		};
 		renderer.recursiveRender(savingThrowsSection, renderStack, {depth: 1});
-
 
 		// Actions - collapsible section
 		if (character.action?.length) {
 			const actionInfo = {
 				type: "entries",
 				name: "Actions",
-				entries: []
+				entries: [],
 			};
 
 			character.action.forEach(action => {
 				actionInfo.entries.push({
 					type: "entries",
 					name: action.name,
-					entries: action.entries
+					entries: action.entries,
 				});
 			});
 
@@ -8958,14 +9832,14 @@ Renderer.character = class {
 			const spellInfo = {
 				type: "entries",
 				name: "Spells",
-				entries: []
+				entries: [],
 			};
 
 			// Add spell save DC and attack bonus if provided
 			if (character.spells.dc || character.spells.attackBonus) {
-				const dcText = character.spells.dc ? `Spell Save DC: ${character.spells.dc}` : '';
-				const attackText = character.spells.attackBonus ? `Spell Attack Bonus: ${character.spells.attackBonus}` : '';
-				const separator = dcText && attackText ? ' | ' : '';
+				const dcText = character.spells.dc ? `Spell Save DC: ${character.spells.dc}` : "";
+				const attackText = character.spells.attackBonus ? `Spell Attack Bonus: ${character.spells.attackBonus}` : "";
+				const separator = dcText && attackText ? " | " : "";
 				spellInfo.entries.push(`${dcText}${separator}${attackText}`);
 			}
 
@@ -8984,11 +9858,11 @@ Renderer.character = class {
 
 					if (!levelData.spells || levelData.spells.length === 0) return; // Skip empty levels
 
-					let slotsHtml = '';
+					let slotsHtml = "";
 
 					// Only show slots if maxSlots > 0 and not cantrips
 					if (levelNum > 0 && levelData.maxSlots && levelData.maxSlots > 0) {
-						const characterId = character.id || `${character.name}_${character.source}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+						const characterId = character.id || `${character.name}_${character.source}`.toLowerCase().replace(/[^a-z0-9]/g, "");
 						const slotsUsed = levelData.slotsUsed != null ? levelData.slotsUsed : 0;
 
 						if (this._hasSourceAccess(character.source)) {
@@ -9002,16 +9876,16 @@ Renderer.character = class {
 
 					// Process spells for this level
 					const spellLinks = levelData.spells.map(spell => {
-						if (typeof spell === 'string') {
+						if (typeof spell === "string") {
 							return `{@spell ${spell}}`;
 						} else if (spell.name) {
-							const source = spell.source ? `|${spell.source}` : '';
+							const source = spell.source ? `|${spell.source}` : "";
 							return `{@spell ${spell.name}${source}}`;
 						}
 						return spell;
 					});
 
-					spellLevels.push(`{@color ${levelName}${slotsHtml}:|--rgb-name}: ${spellLinks.join(', ')}`);
+					spellLevels.push(`{@color ${levelName}${slotsHtml}:|--rgb-name}: ${spellLinks.join(", ")}`);
 				});
 
 				spellInfo.entries.push(...spellLevels);
@@ -9027,16 +9901,16 @@ Renderer.character = class {
 			if (hasEditAccess && !isStatic) {
 				characterId = globalThis.CharacterManager
 					? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, '');
+					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
 				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
 				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
 			}
 
 			character.customTrackers.forEach((tracker, index) => {
 				const trackerName = tracker.name || `Tracker ${index + 1}`;
-				const description = tracker.description ? ` - ${tracker.description}` : '';
+				const description = tracker.description ? ` - ${tracker.description}` : "";
 
-				if (tracker.type === 'counter') {
+				if (tracker.type === "counter") {
 					// Counter type tracker (current/max)
 					const current = tracker.current || 0;
 					const max = tracker.max || 1;
@@ -9049,11 +9923,11 @@ Renderer.character = class {
 						// Static display
 						trackerEntries.push(`<strong>${trackerName}:</strong>: ${current}/${max}${description}`);
 					}
-				} else if (tracker.type === 'condition') {
+				} else if (tracker.type === "condition") {
 					// Condition type tracker (active/inactive)
 					const active = tracker.active || false;
-					const duration = tracker.duration ? ` (${tracker.duration})` : '';
-					const status = active ? '✓ Active' : '✗ Inactive';
+					const duration = tracker.duration ? ` (${tracker.duration})` : "";
+					const status = active ? "✓ Active" : "✗ Inactive";
 
 					if (hasEditAccess && !isStatic && characterId) {
 						// Editable condition with click handlers
@@ -9070,7 +9944,7 @@ Renderer.character = class {
 				const trackerInfo = {
 					type: "entries",
 					name: "Custom Trackers",
-					entries: trackerEntries
+					entries: trackerEntries,
 				};
 				renderer.recursiveRender(trackerInfo, renderStack, {depth: 1});
 			}
@@ -9082,14 +9956,14 @@ Renderer.character = class {
 				type: "entries",
 				name: "Features & Traits",
 				collapsed: false,
-				entries: []
+				entries: [],
 			};
 
 			character.trait.forEach(trait => {
 				traitInfo.entries.push({
 					type: "entries",
 					name: trait.name,
-					entries: trait.entries
+					entries: trait.entries,
 				});
 			});
 
@@ -9102,10 +9976,10 @@ Renderer.character = class {
 				type: "entries",
 				name: "Equipment",
 				entries: character.equipment.map(item => {
-					const qty = item.quantity ? ` (${item.quantity})` : '';
-					const desc = item.description ? ` - ${item.description}` : '';
+					const qty = item.quantity ? ` (${item.quantity})` : "";
+					const desc = item.description ? ` - ${item.description}` : "";
 					return `**${item.name}${qty}**${desc}`;
-				})
+				}),
 			};
 			renderer.recursiveRender(equipInfo, renderStack, {depth: 1});
 		}
@@ -9114,12 +9988,11 @@ Renderer.character = class {
 			const langInfo = {
 				type: "entries",
 				name: "Languages",
-				entries: [character.languages.join(", ")]
+				entries: [character.languages.join(", ")],
 			};
 			renderer.recursiveRender(langInfo, renderStack, {depth: 1});
 		}
 		// Player notes from custom content instead of hardcoded forms
-
 
 		// Calculate carrying capacity for display
 		const strScore = character.str || 10;
@@ -9130,7 +10003,7 @@ Renderer.character = class {
 			const resourceInfo = {
 				type: "entries",
 				name: "Resources",
-				entries: character.resources.map(resource => `**${resource.name}:** ${resource.current}/${resource.max}`)
+				entries: character.resources.map(resource => `**${resource.name}:** ${resource.current}/${resource.max}`),
 			};
 			renderer.recursiveRender(resourceInfo, renderStack, {depth: 1});
 		}
@@ -9141,9 +10014,9 @@ Renderer.character = class {
 				type: "entries",
 				name: "Current Conditions",
 				entries: character.conditions.map(condition => {
-					const duration = condition.duration ? ` (${condition.duration})` : '';
+					const duration = condition.duration ? ` (${condition.duration})` : "";
 					return `**${condition.name}${duration}**`;
-				})
+				}),
 			};
 			renderer.recursiveRender(conditionInfo, renderStack, {depth: 1});
 		}
@@ -9156,7 +10029,6 @@ Renderer.character = class {
 		// 	};
 		// 	renderer.recursiveRender(customInfo, renderStack, {depth: 1});
 		// }
-
 
 		// // Fluff entries - inline background
 		// if (character.fluff?.entries?.length) {
@@ -9183,20 +10055,20 @@ Renderer.character = class {
 		// Setup enhanced persistence for new content
 		setTimeout(() => {
 			// Load notes and goals
-			const savedNotes = localStorage.getItem('character-notes');
+			const savedNotes = localStorage.getItem("character-notes");
 			if (savedNotes) {
-				const notesInput = document.querySelector('.character-notes');
+				const notesInput = document.querySelector(".character-notes");
 				if (notesInput) notesInput.value = savedNotes;
 			}
 
-			const savedGoals = localStorage.getItem('character-goals');
+			const savedGoals = localStorage.getItem("character-goals");
 			if (savedGoals) {
-				const goalsInput = document.querySelector('.character-goals');
+				const goalsInput = document.querySelector(".character-goals");
 				if (goalsInput) goalsInput.value = savedGoals;
 			}
 
 			// Load currency values
-			['pp', 'gp', 'ep', 'sp', 'cp'].forEach(coin => {
+			["pp", "gp", "ep", "sp", "cp"].forEach(coin => {
 				const saved = localStorage.getItem(`character-currency-${coin}`);
 				if (saved !== null) {
 					const input = document.querySelector(`.character-currency-${coin}`);
@@ -9205,12 +10077,12 @@ Renderer.character = class {
 			});
 
 			// Setup auto-save for notes, goals, and currency
-			document.addEventListener('input', (e) => {
-				if (e.target.matches('.character-notes')) {
-					localStorage.setItem('character-notes', e.target.value);
-				} else if (e.target.matches('.character-goals')) {
-					localStorage.setItem('character-goals', e.target.value);
-				} else if (e.target.matches('[class*="character-currency-"]')) {
+			document.addEventListener("input", (e) => {
+				if (e.target.matches(".character-notes")) {
+					localStorage.setItem("character-notes", e.target.value);
+				} else if (e.target.matches(".character-goals")) {
+					localStorage.setItem("character-goals", e.target.value);
+				} else if (e.target.matches("[class*=\"character-currency-\"]")) {
 					// Save currency values
 					const coinType = e.target.className.match(/character-currency-(\w+)/)?.[1];
 					if (coinType) {
@@ -9240,15 +10112,15 @@ Renderer.character = class {
 	static _bindCharacterSheetListeners (ele) {
 		const $ele = $(ele);
 
-		const statDisplays = $ele.find('.character-stat-display');
+		const statDisplays = $ele.find(".character-stat-display");
 
 		// Click-to-edit functionality for character stats
-		$ele.on('click', '.character-stat-display', function(e) {
+		$ele.on("click", ".character-stat-display", function (e) {
 			const $display = $(this);
-			const statPath = $display.attr('data-stat-path');
-			const characterId = $display.attr('data-character-id');
-			const currentValue = $display.attr('data-current-value');
-			const classesData = $display.attr('data-classes-data'); // For hit dice
+			const statPath = $display.attr("data-stat-path");
+			const characterId = $display.attr("data-character-id");
+			const currentValue = $display.attr("data-current-value");
+			const classesData = $display.attr("data-classes-data"); // For hit dice
 
 			// Get character data from global registry
 			if (!globalThis._CHARACTER_EDIT_DATA || !globalThis._CHARACTER_EDIT_DATA[characterId]) {
@@ -9262,41 +10134,41 @@ Renderer.character = class {
 			}
 
 			// Create input element
-			let inputType = 'number';
+			let inputType = "number";
 			let minValue = 0;
 			let maxValue = null;
 
-			if (statPath === 'hp.current') {
-				maxValue = $display.attr('data-max-value');
-			} else if (statPath.startsWith('class.currentHitDice.')) {
-				maxValue = $display.attr('data-max-value');
+			if (statPath === "hp.current") {
+				maxValue = $display.attr("data-max-value");
+			} else if (statPath.startsWith("class.currentHitDice.")) {
+				maxValue = $display.attr("data-max-value");
 			}
 
-			const $input = $(`<input type="${inputType}" class="character-stat-input-edit" value="${currentValue}" min="${minValue}" ${maxValue ? `max="${maxValue}"` : ''} style="width: ${Math.max(40, currentValue.toString().length * 8 + 10)}px;" data-stat-path="${statPath}" data-character-id="${characterId}" ${classesData ? `data-classes-data="${classesData}"` : ''} />`);
+			const $input = $(`<input type="${inputType}" class="character-stat-input-edit" value="${currentValue}" min="${minValue}" ${maxValue ? `max="${maxValue}"` : ""} style="width: ${Math.max(40, currentValue.toString().length * 8 + 10)}px;" data-stat-path="${statPath}" data-character-id="${characterId}" ${classesData ? `data-classes-data="${classesData}"` : ""} />`);
 
 			// Replace display with input
 			$display.replaceWith($input);
 			$input.focus().select();
 
 			// Handle save/cancel
-			$input.on('blur keydown', async function(e) {
-				if (e.type === 'keydown' && e.key !== 'Enter' && e.key !== 'Escape') {
+			$input.on("blur keydown", async function (e) {
+				if (e.type === "keydown" && e.key !== "Enter" && e.key !== "Escape") {
 					return;
 				}
 
-				const newValue = e.key === 'Escape' ? currentValue : $input.val();
+				const newValue = e.key === "Escape" ? currentValue : $input.val();
 
 				// Create new display span
-				const $newDisplay = $(`<span class="character-stat-display" data-stat-path="${statPath}" data-character-id="${characterId}" data-current-value="${newValue}" ${maxValue ? `data-max-value="${maxValue}"` : ''} ${classesData ? `data-classes-data="${classesData}"` : ''} title="Click to edit" style="cursor: pointer; border-bottom: 1px dashed #666;">${newValue}</span>`);
+				const $newDisplay = $(`<span class="character-stat-display" data-stat-path="${statPath}" data-character-id="${characterId}" data-current-value="${newValue}" ${maxValue ? `data-max-value="${maxValue}"` : ""} ${classesData ? `data-classes-data="${classesData}"` : ""} title="Click to edit" style="cursor: pointer; border-bottom: 1px dashed #666;">${newValue}</span>`);
 
 				// Replace input with display
 				$input.replaceWith($newDisplay);
 
 				// Update server if value changed and not escaped
-				if (e.key !== 'Escape' && newValue !== currentValue) {
+				if (e.key !== "Escape" && newValue !== currentValue) {
 					try {
 						// Handle hit dice updates specially
-						if (statPath.startsWith('class.currentHitDice.') && classesData) {
+						if (statPath.startsWith("class.currentHitDice.") && classesData) {
 							const success = await Renderer.character._updateHitDiceFromClasses(character, character.source, statPath, newValue, classesData);
 							if (!success) {
 								console.warn(`Failed to update character hit dice ${statPath} on server`);
@@ -9308,7 +10180,7 @@ Renderer.character = class {
 							}
 						}
 					} catch (error) {
-						console.error('Error updating character stat:', error);
+						console.error("Error updating character stat:", error);
 					}
 				}
 			});
@@ -9331,40 +10203,40 @@ Renderer.character = class {
 			const level = cls.level || 1;
 
 			switch (className) {
-				case 'barbarian':
+				case "barbarian":
 					features.push(...Renderer.character._getBarbarianFeatures(character, cls, level));
 					break;
-				case 'bard':
+				case "bard":
 					features.push(...Renderer.character._getBardFeatures(character, cls, level));
 					break;
-				case 'cleric':
+				case "cleric":
 					features.push(...Renderer.character._getClericFeatures(character, cls, level));
 					break;
-				case 'druid':
+				case "druid":
 					features.push(...Renderer.character._getDruidFeatures(character, cls, level));
 					break;
-				case 'fighter':
+				case "fighter":
 					features.push(...Renderer.character._getFighterFeatures(character, cls, level));
 					break;
-				case 'monk':
+				case "monk":
 					features.push(...Renderer.character._getMonkFeatures(character, cls, level));
 					break;
-				case 'paladin':
+				case "paladin":
 					features.push(...Renderer.character._getPaladinFeatures(character, cls, level));
 					break;
-				case 'ranger':
+				case "ranger":
 					features.push(...Renderer.character._getRangerFeatures(character, cls, level));
 					break;
-				case 'rogue':
+				case "rogue":
 					features.push(...Renderer.character._getRogueFeatures(character, cls, level));
 					break;
-				case 'sorcerer':
+				case "sorcerer":
 					features.push(...Renderer.character._getSorcererFeatures(character, cls, level));
 					break;
-				case 'warlock':
+				case "warlock":
 					features.push(...Renderer.character._getWarlockFeatures(character, cls, level));
 					break;
-				case 'wizard':
+				case "wizard":
 					features.push(...Renderer.character._getWizardFeatures(character, cls, level));
 					break;
 			}
@@ -9385,7 +10257,7 @@ Renderer.character = class {
 		else if (level >= 6) rageUses = 4;
 		else if (level >= 3) rageUses = 3;
 
-		const rageUsesText = rageUses === Infinity ? 'Unlimited' : rageUses;
+		const rageUsesText = rageUses === Infinity ? "Unlimited" : rageUses;
 		features.push(`**Rage** (<input type="number" class="character-input character-rage-uses" value="0" min="0" max="${rageUses === Infinity ? 999 : rageUses}" style="width: 40px;" title="Rage uses expended" />/${rageUsesText} per long rest)`);
 
 		// Rage damage bonus
@@ -9566,7 +10438,7 @@ Renderer.character = class {
 		// Wild Shape
 		if (level >= 2) {
 			let wildShapeUses = level >= 20 ? 999 : 2; // Unlimited at 20th level
-			const wildShapeUsesText = wildShapeUses === 999 ? 'Unlimited' : wildShapeUses;
+			const wildShapeUsesText = wildShapeUses === 999 ? "Unlimited" : wildShapeUses;
 			features.push(`**Wild Shape** (<input type="number" class="character-input character-wild-shape" value="0" min="0" max="${wildShapeUses}" style="width: 40px;" title="Wild Shape uses expended" />/${wildShapeUsesText} per short rest)`);
 		}
 
@@ -9622,21 +10494,21 @@ Renderer.character = class {
 	// Helper function to get condition effects
 	static _getConditionEffects (condition) {
 		const effects = {
-			'Blinded': ['Disadvantage on attack rolls', 'Attacks against have advantage'],
-			'Charmed': ['Cannot attack charmer', 'Charmer has advantage on social interactions'],
-			'Deafened': ['Automatic failure on hearing-based Perception checks'],
-			'Exhaustion': ['Various penalties based on level'],
-			'Frightened': ['Disadvantage on ability checks and attacks while source visible', 'Cannot move closer to source'],
-			'Grappled': ['Speed becomes 0', 'Cannot benefit from bonuses to speed'],
-			'Incapacitated': ['Cannot take actions or reactions'],
-			'Invisible': ['Advantage on attack rolls', 'Attacks against have disadvantage'],
-			'Paralyzed': ['Incapacitated', 'Auto-fail Strength and Dexterity saves', 'Attacks within 5ft are critical hits'],
-			'Petrified': ['Incapacitated', 'Auto-fail Strength and Dexterity saves', 'Resistance to all damage'],
-			'Poisoned': ['Disadvantage on attack rolls and ability checks'],
-			'Prone': ['Disadvantage on attack rolls', 'Attacks within 5ft have advantage', 'Ranged attacks have disadvantage'],
-			'Restrained': ['Speed becomes 0', 'Disadvantage on attack rolls and Dexterity saves', 'Attacks against have advantage'],
-			'Stunned': ['Incapacitated', 'Auto-fail Strength and Dexterity saves', 'Attacks against have advantage'],
-			'Unconscious': ['Incapacitated', 'Prone', 'Auto-fail Strength and Dexterity saves', 'Attacks within 5ft are critical hits']
+			"Blinded": ["Disadvantage on attack rolls", "Attacks against have advantage"],
+			"Charmed": ["Cannot attack charmer", "Charmer has advantage on social interactions"],
+			"Deafened": ["Automatic failure on hearing-based Perception checks"],
+			"Exhaustion": ["Various penalties based on level"],
+			"Frightened": ["Disadvantage on ability checks and attacks while source visible", "Cannot move closer to source"],
+			"Grappled": ["Speed becomes 0", "Cannot benefit from bonuses to speed"],
+			"Incapacitated": ["Cannot take actions or reactions"],
+			"Invisible": ["Advantage on attack rolls", "Attacks against have disadvantage"],
+			"Paralyzed": ["Incapacitated", "Auto-fail Strength and Dexterity saves", "Attacks within 5ft are critical hits"],
+			"Petrified": ["Incapacitated", "Auto-fail Strength and Dexterity saves", "Resistance to all damage"],
+			"Poisoned": ["Disadvantage on attack rolls and ability checks"],
+			"Prone": ["Disadvantage on attack rolls", "Attacks within 5ft have advantage", "Ranged attacks have disadvantage"],
+			"Restrained": ["Speed becomes 0", "Disadvantage on attack rolls and Dexterity saves", "Attacks against have advantage"],
+			"Stunned": ["Incapacitated", "Auto-fail Strength and Dexterity saves", "Attacks against have advantage"],
+			"Unconscious": ["Incapacitated", "Prone", "Auto-fail Strength and Dexterity saves", "Attacks within 5ft are critical hits"],
 		};
 
 		return effects[condition] || [];
@@ -9645,65 +10517,74 @@ Renderer.character = class {
 	// Helper function to apply/remove condition effects (visual indicators)
 	static _applyConditionEffects ($ele, condition, apply) {
 		// Add/remove visual indicators for condition effects
-		const $characterSheet = $ele.closest('[data-character-name]');
+		const $characterSheet = $ele.closest("[data-character-name]");
 
 		if (apply) {
 			// Add condition effect indicators
 			switch (condition) {
-				case 'Blinded':
-				case 'Poisoned':
+				case "Blinded":
+				case "Poisoned":
 					// Add disadvantage indicator to attack rolls and ability checks
-					$characterSheet.find('.rollable').addClass('condition-disadvantage');
+					$characterSheet.find(".rollable").addClass("condition-disadvantage");
 					break;
-				case 'Grappled':
-				case 'Restrained':
+				case "Grappled":
+				case "Restrained":
 					// Add speed reduction indicator
-					$characterSheet.find('.speed-indicator').addClass('condition-speed-zero');
+					$characterSheet.find(".speed-indicator").addClass("condition-speed-zero");
 					break;
-				case 'Incapacitated':
-				case 'Paralyzed':
-				case 'Petrified':
-				case 'Stunned':
-				case 'Unconscious':
+				case "Incapacitated":
+				case "Paralyzed":
+				case "Petrified":
+				case "Stunned":
+				case "Unconscious":
 					// Add action restriction indicator
-					$characterSheet.addClass('condition-no-actions');
+					$characterSheet.addClass("condition-no-actions");
 					break;
 			}
 		} else {
 			// Remove condition effect indicators (simplified - removes all)
-			$characterSheet.find('.rollable').removeClass('condition-disadvantage');
-			$characterSheet.find('.speed-indicator').removeClass('condition-speed-zero');
-			$characterSheet.removeClass('condition-no-actions');
+			$characterSheet.find(".rollable").removeClass("condition-disadvantage");
+			$characterSheet.find(".speed-indicator").removeClass("condition-speed-zero");
+			$characterSheet.removeClass("condition-no-actions");
 		}
 	}
 
 	// Handle class-specific short rest recovery
 	static _handleShortRestRecovery ($ele) {
 		// Reset short rest resources to 0 (unused)
-		$ele.find('.character-ki-points').val(0);
-		$ele.find('.character-bardic-inspiration').val(0);
-		$ele.find('.character-action-surge').val(0);
-		$ele.find('.character-second-wind').prop('checked', false);
-		$ele.find('.character-channel-divinity').val(0);
-		$ele.find('.character-wild-shape').val(0);
+		$ele.find(".character-ki-points").val(0);
+		$ele.find(".character-bardic-inspiration").val(0);
+		$ele.find(".character-action-surge").val(0);
+		$ele.find(".character-second-wind").prop("checked", false);
+		$ele.find(".character-channel-divinity").val(0);
+		$ele.find(".character-wild-shape").val(0);
 
 		// Warlock spell slots recharge on short rest
 		// Check if character has warlock levels by looking for warlock-specific features
-		const hasWarlockFeatures = $ele.find('.character-class-features:contains("Pact Magic")').length > 0;
+		const hasWarlockFeatures = $ele.find(".character-class-features:contains(\"Pact Magic\")").length > 0;
 		if (hasWarlockFeatures) {
-			$ele.find('.character-spell-slots-used').val(0);
+			$ele.find(".character-spell-slots-used").val(0);
 		}
 	}
 
 	// Handle class-specific long rest recovery
 	static _handleLongRestRecovery ($ele) {
 		// Reset long rest resources to 0 (unused)
-		$ele.find('.character-rage-uses').val(0);
-		$ele.find('.character-sorcery-points').val(0);
-		$ele.find('.character-lay-on-hands').val(0);
+		$ele.find(".character-rage-uses").val(0);
+		$ele.find(".character-sorcery-points").val(0);
+		$ele.find(".character-lay-on-hands").val(0);
 
 		// Also reset short rest resources since long rest includes short rest benefits
 		Renderer.character._handleShortRestRecovery($ele);
+	}
+
+	// Get skill definitions with ability mappings
+	static _getSkillDefinitions() {
+		return Object.keys(Parser.SKILL_TO_ATB_ABV).map(skillName => ({
+			name: skillName,
+			key: skillName.toLowerCase().replace(/\s+/g, ""),
+			ability: Parser.SKILL_TO_ATB_ABV[skillName]
+		}));
 	}
 
 	// Get class-specific skill bonuses
@@ -9711,52 +10592,95 @@ Renderer.character = class {
 		const result = {
 			bonus: currentBonus,
 			expertise: false,
-			jackOfAllTrades: false
+			jackOfAllTrades: false,
 		};
 
 		const classes = character.class || [];
-		const profBonus = parseInt(character.proficiencyBonus) || 2;
+		let profBonus = 0;
+		if (character.proficiencyBonus) {
+			const profBonusStr = character.proficiencyBonus.toString().replace('+', '');
+			profBonus = parseInt(profBonusStr) || 0;
+		}
+
+		// Get skill definition to find ability score
+		const skillKey = skillName.toLowerCase().replace(/\s+/g, "");
+		const skillDef = Renderer.character._getSkillDefinitions().find(s => 
+			s.name.toLowerCase().replace(/\s+/g, "") === skillKey ||
+			s.key === skillKey
+		);
+		
+		// Calculate base ability modifier
+		let abilityMod = 0;
+		if (skillDef && skillDef.ability) {
+			const abilityScore = character[skillDef.ability] || 10;
+			const abilityModValue = Parser.getAbilityModifier(abilityScore);
+			abilityMod = typeof abilityModValue === "number" ? abilityModValue : parseInt(abilityModValue) || 0;
+		}
 
 		classes.forEach(cls => {
 			const className = cls.name.toLowerCase();
 			const level = cls.level || 1;
 
-			// Bard: Jack of All Trades
-			if (className === 'bard' && level >= 2 && !isProficient) {
+			// Bard: Jack of All Trades - adds half proficiency to non-proficient ability checks
+			if (className === "bard" && level >= 2 && !isProficient) {
 				const halfProf = Math.floor(profBonus / 2);
-				const abilityMod = currentBonus; // This should be just the ability modifier for non-proficient skills
 				result.bonus = abilityMod + halfProf;
 				result.jackOfAllTrades = true;
 			}
 
-			// Rogue: Expertise (double proficiency on certain skills)
-			if (className === 'rogue' && level >= 1 && isProficient) {
-				// In a real implementation, you'd check if this specific skill has expertise
-				// For now, we'll assume some skills have expertise based on common choices
-				const expertiseSkills = ['Stealth', 'Sleight of Hand', 'Thieves\' Tools', 'Investigation'];
-				if (expertiseSkills.includes(skillName)) {
-					const abilityMod = currentBonus - profBonus; // Remove normal proficiency
-					result.bonus = abilityMod + (profBonus * 2); // Add double proficiency
+			// Check for expertise in this skill
+			// First check character.expertise array if it exists
+			if (character.expertise && Array.isArray(character.expertise)) {
+				// Create multiple possible skill keys to match against different formats
+				const skillNameLower = skillName.toLowerCase();
+				const skillKeyNoSpaces = skillNameLower.replace(/\s+/g, '');
+				const skillKeyUnderscores = skillNameLower.replace(/\s+/g, '_');
+				
+				const hasExpertise = character.expertise.some(expertSkill => {
+					const expertSkillLower = expertSkill.toLowerCase();
+					return expertSkillLower === skillNameLower ||      // "sleight of hand"
+					       expertSkillLower === skillKeyNoSpaces ||    // "sleightofhand"
+					       expertSkillLower === skillKeyUnderscores || // "sleight_of_hand"
+					       expertSkillLower === skillDef?.key;         // fallback to skill definition key
+				});
+				
+				if (hasExpertise && isProficient) {
+					result.bonus = abilityMod + (profBonus * 2);
 					result.expertise = true;
 				}
 			}
-
-			// Bard: Expertise at higher levels
-			if (className === 'bard' && level >= 3 && isProficient) {
-				const expertiseSkills = ['Persuasion', 'Deception', 'Performance']; // Common bard choices
-				if (expertiseSkills.includes(skillName)) {
-					const abilityMod = currentBonus - profBonus;
+			// Fallback: Class-specific expertise rules
+			else if (isProficient) {
+				let hasExpertise = false;
+				
+				// Rogue: Expertise at level 1 and 6
+				if (className === "rogue" && level >= 1) {
+					// Check if this skill is commonly chosen for rogue expertise
+					const commonRogueExpertise = ["stealth", "sleightofhand", "thieves' tools", "investigation", "perception"];
+					if (commonRogueExpertise.includes(skillKey)) {
+						hasExpertise = true;
+					}
+				}
+				
+				// Bard: Expertise at level 3 and 10
+				if (className === "bard" && level >= 3) {
+					// Check if this skill is commonly chosen for bard expertise
+					const commonBardExpertise = ["persuasion", "deception", "performance", "insight"];
+					if (commonBardExpertise.includes(skillKey)) {
+						hasExpertise = true;
+					}
+				}
+				
+				if (hasExpertise) {
 					result.bonus = abilityMod + (profBonus * 2);
 					result.expertise = true;
 				}
 			}
 
-			// Ranger: Favored Enemy/Natural Explorer bonuses
-			if (className === 'ranger') {
-				if (skillName === 'Survival') {
-					// Double proficiency in favored terrain (simplified)
-					result.bonus = currentBonus + profBonus;
-				}
+			// Ranger: Natural Explorer - double proficiency for Survival in favored terrain
+			if (className === "ranger" && skillKey === "survival" && isProficient) {
+				// This is a simplified implementation - in reality, this would depend on terrain
+				result.bonus = abilityMod + (profBonus * 2);
 			}
 		});
 
@@ -9765,19 +10689,19 @@ Renderer.character = class {
 
 	// Get tooltip text for skill proficiency icons
 	static _getSkillProficiencyTooltip (isProficient, classBonus) {
-		if (classBonus.expertise) return 'Expertise (Double Proficiency)';
-		if (classBonus.jackOfAllTrades) return 'Jack of All Trades (Half Proficiency)';
-		if (isProficient) return 'Proficient';
-		return 'Not Proficient';
+		if (classBonus && classBonus.expertise) return "Expertise (Double Proficiency)";
+		if (classBonus && classBonus.jackOfAllTrades) return "Jack of All Trades (Half Proficiency)";
+		if (isProficient) return "Proficient";
+		return "Not Proficient";
 	}
 
 	// Save conditions to localStorage
 	static _saveConditionsToStorage ($ele) {
-		const characterName = $ele.closest('[data-character-name]').attr('data-character-name') || 'default';
+		const characterName = $ele.closest("[data-character-name]").attr("data-character-name") || "default";
 		const conditions = [];
 
-		$ele.find('.character-condition-item').each(function() {
-			const condition = $(this).attr('data-condition');
+		$ele.find(".character-condition-item").each(function () {
+			const condition = $(this).attr("data-condition");
 			if (condition) {
 				conditions.push(condition);
 			}
@@ -9789,21 +10713,21 @@ Renderer.character = class {
 
 	// Load conditions from localStorage
 	static _loadConditionsFromStorage ($ele) {
-		const characterName = $ele.closest('[data-character-name]').attr('data-character-name') || 'default';
+		const characterName = $ele.closest("[data-character-name]").attr("data-character-name") || "default";
 		const key = `character-${characterName}-conditions`;
 		const savedConditions = localStorage.getItem(key);
 
 		if (savedConditions) {
 			try {
 				const conditions = JSON.parse(savedConditions);
-				const $conditionsList = $ele.find('.character-conditions-list');
+				const $conditionsList = $ele.find(".character-conditions-list");
 
 				conditions.forEach(condition => {
 					// Get condition effects
 					const effects = Renderer.character._getConditionEffects(condition);
-					const effectsText = effects.length ? ` (${effects.join(', ')})` : '';
+					const effectsText = effects.length ? ` (${effects.join(", ")})` : "";
 
-					const conditionHtml = `<span class="character-condition-item" title="Click to remove. Effects: ${effects.join(', ')}" data-condition="${condition}">
+					const conditionHtml = `<span class="character-condition-item" title="Click to remove. Effects: ${effects.join(", ")}" data-condition="${condition}">
 						${condition}${effectsText} <span class="character-condition-remove">×</span>
 					</span>`;
 					$conditionsList.append(conditionHtml);
@@ -9812,19 +10736,19 @@ Renderer.character = class {
 					Renderer.character._applyConditionEffects($ele, condition, true);
 				});
 			} catch (e) {
-				console.warn('Failed to load saved conditions:', e);
+				console.warn("Failed to load saved conditions:", e);
 			}
 		}
 	}
 
 	// Equipment Management Methods
-	static async _searchItems() {
-		const searchTerm = document.getElementById('item-search').value.toLowerCase().trim();
+	static async _searchItems () {
+		const searchTerm = document.getElementById("item-search").value.toLowerCase().trim();
 		if (!searchTerm) return;
 
-		const resultsDiv = document.getElementById('item-search-results');
-		resultsDiv.style.display = 'block';
-		resultsDiv.innerHTML = '<div style="padding: 10px;">Searching items...</div>';
+		const resultsDiv = document.getElementById("item-search-results");
+		resultsDiv.style.display = "block";
+		resultsDiv.innerHTML = "<div style=\"padding: 10px;\">Searching items...</div>";
 
 		try {
 			// Load items data if not already loaded
@@ -9837,80 +10761,80 @@ Renderer.character = class {
 
 			// Filter items based on search term
 			const filteredItems = allItems.filter(item => {
-				const name = (item.name || '').toLowerCase();
-				const type = (item.type || '').toLowerCase();
-				const typeHtml = (item._typeHtml || '').toLowerCase();
+				const name = (item.name || "").toLowerCase();
+				const type = (item.type || "").toLowerCase();
+				const typeHtml = (item._typeHtml || "").toLowerCase();
 
-				return name.includes(searchTerm) ||
-					   type.includes(searchTerm) ||
-					   typeHtml.includes(searchTerm);
+				return name.includes(searchTerm)
+					   || type.includes(searchTerm)
+					   || typeHtml.includes(searchTerm);
 			}).slice(0, 20); // Limit to 20 results
 
 			if (filteredItems.length === 0) {
-				resultsDiv.innerHTML = '<div style="padding: 10px;">No items found matching your search.</div>';
+				resultsDiv.innerHTML = "<div style=\"padding: 10px;\">No items found matching your search.</div>";
 				return;
 			}
 
 			const resultsHtml = filteredItems.map(item => {
-				const name = item.name || 'Unknown Item';
-				const type = item.type || 'misc';
-				const rarity = item.rarity || '';
-				const weight = item.weight ? `${item.weight} lb.` : '';
-				const value = item.value ? Parser.itemValueToFull(item) : '';
-				const source = item.source || '';
+				const name = item.name || "Unknown Item";
+				const type = item.type || "misc";
+				const rarity = item.rarity || "";
+				const weight = item.weight ? `${item.weight} lb.` : "";
+				const value = item.value ? Parser.itemValueToFull(item) : "";
+				const source = item.source || "";
 
 				// Get basic item properties for display
 				let itemDesc = [];
-				if (item.ac) itemDesc.push(`AC ${typeof item.ac === 'object' ? item.ac.ac : item.ac}`);
+				if (item.ac) itemDesc.push(`AC ${typeof item.ac === "object" ? item.ac.ac : item.ac}`);
 				if (item.dmg1) itemDesc.push(`${item.dmg1} damage`);
 				if (item.range) itemDesc.push(`Range: ${item.range}`);
-				if (rarity && rarity !== 'none' && rarity !== 'unknown') itemDesc.push(rarity);
+				if (rarity && rarity !== "none" && rarity !== "unknown") itemDesc.push(rarity);
 				if (weight) itemDesc.push(weight);
 				if (value) itemDesc.push(value);
 
-				const descText = itemDesc.length ? itemDesc.join(' • ') : '';
+				const descText = itemDesc.length ? itemDesc.join(" • ") : "";
 
 				return `
 					<div style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer;"
-						 onclick="Renderer.character._addItemToInventory('${name.replace(/'/g, "\\'")}', '${type}', 1, false, ${JSON.stringify(item).replace(/"/g, '&quot;')})"
+						 onclick="Renderer.character._addItemToInventory('${name.replace(/'/g, "\\'")}', '${type}', 1, false, ${JSON.stringify(item).replace(/"/g, "&quot;")})"
 						 onmouseover="this.style.backgroundColor='#f0f0f0'"
 						 onmouseout="this.style.backgroundColor='white'">
 						<div style="display: flex; justify-content: space-between; align-items: flex-start;">
 							<div style="flex: 1;">
 								<strong>${name}</strong>: <small>(${type})</small>
-								${source ? `<small class="text-muted"> [${source}]</small>` : ''}
-								${descText ? `<br><small class="text-muted">${descText}</small>` : ''}
+								${source ? `<small class="text-muted"> [${source}]</small>` : ""}
+								${descText ? `<br><small class="text-muted">${descText}</small>` : ""}
 							</div>
 						</div>
 					</div>
 				`;
-			}).join('');
+			}).join("");
 
 			resultsDiv.innerHTML = resultsHtml;
 		} catch (error) {
-			console.error('Error loading items data:', error);
-			resultsDiv.innerHTML = '<div style="padding: 10px; color: red;">Error loading items data. Please try again.</div>';
+			console.error("Error loading items data:", error);
+			resultsDiv.innerHTML = "<div style=\"padding: 10px; color: red;\">Error loading items data. Please try again.</div>";
 		}
 	}
 
-	static _addCustomItem() {
-		const itemName = prompt('Enter item name:');
+	static _addCustomItem () {
+		const itemName = prompt("Enter item name:");
 		if (!itemName) return;
 
-		const itemType = prompt('Enter item type (weapon/armor/gear/consumable):') || 'gear';
-		const quantity = parseInt(prompt('Enter quantity:') || '1');
+		const itemType = prompt("Enter item type (weapon/armor/gear/consumable):") || "gear";
+		const quantity = parseInt(prompt("Enter quantity:") || "1");
 
 		Renderer.character._addItemToInventory(itemName, itemType, quantity, true, null);
 	}
 
-	static _addItemToInventory(itemName, itemType, quantity = 1, isCustom = false, fullItemData = null) {
+	static _addItemToInventory (itemName, itemType, quantity = 1, isCustom = false, fullItemData = null) {
 		// Create new item object
 		const newItem = {
 			name: itemName,
 			type: itemType,
 			quantity: quantity,
 			equipped: false,
-			isCustom: isCustom
+			isCustom: isCustom,
 		};
 
 		// If we have full item data, add additional properties
@@ -9932,7 +10856,7 @@ Renderer.character = class {
 		}
 
 		// Get current character data (this would need to be adapted based on your data structure)
-		let currentEquipment = JSON.parse(localStorage.getItem('character-equipment')) || [];
+		let currentEquipment = JSON.parse(localStorage.getItem("character-equipment")) || [];
 
 		// Check if item already exists
 		const existingIndex = currentEquipment.findIndex(item => item.name === itemName);
@@ -9943,11 +10867,11 @@ Renderer.character = class {
 		}
 
 		// Save updated equipment
-		localStorage.setItem('character-equipment', JSON.stringify(currentEquipment));
+		localStorage.setItem("character-equipment", JSON.stringify(currentEquipment));
 
 		// Hide search results
-		document.getElementById('item-search-results').style.display = 'none';
-		document.getElementById('item-search').value = '';
+		document.getElementById("item-search-results").style.display = "none";
+		document.getElementById("item-search").value = "";
 
 		// Refresh the equipment display
 		Renderer.character._refreshEquipmentDisplay();
@@ -9955,43 +10879,43 @@ Renderer.character = class {
 		alert(`Added ${quantity} ${itemName}(s) to inventory!`);
 	}
 
-	static _removeItem(itemIndex) {
-		if (!confirm('Remove this item from inventory?')) return;
+	static _removeItem (itemIndex) {
+		if (!confirm("Remove this item from inventory?")) return;
 
-		let currentEquipment = JSON.parse(localStorage.getItem('character-equipment')) || [];
+		let currentEquipment = JSON.parse(localStorage.getItem("character-equipment")) || [];
 		currentEquipment.splice(itemIndex, 1);
-		localStorage.setItem('character-equipment', JSON.stringify(currentEquipment));
+		localStorage.setItem("character-equipment", JSON.stringify(currentEquipment));
 
 		Renderer.character._refreshEquipmentDisplay();
 	}
 
-	static _refreshEquipmentDisplay() {
+	static _refreshEquipmentDisplay () {
 		// This would need to be adapted to properly refresh the character sheet
 		// For now, just suggest a page reload
-		if (confirm('Equipment updated! Reload the page to see changes?')) {
+		if (confirm("Equipment updated! Reload the page to see changes?")) {
 			location.reload();
 		}
 	}
 
 	// Check if user has edit access to character's source based on cached passwords
-	static _hasSourceAccess(source) {
+	static _hasSourceAccess (source) {
 		if (!source) return false;
 
 		// Check if we have a cached password for this source
 		try {
-			const cachedPasswords = localStorage.getItem('sourcePasswords');
+			const cachedPasswords = localStorage.getItem("sourcePasswords");
 			if (!cachedPasswords) return false;
 
 			const passwords = JSON.parse(cachedPasswords);
 			return passwords.hasOwnProperty(source);
 		} catch (e) {
-			console.error('Error checking source access:', e);
+			console.error("Error checking source access:", e);
 			return false;
 		}
 	}
 
 	// Update character stat using centralized CharacterManager
-	static async _updateCharacterStat(characterData, characterSource, statPath, newValue) {
+	static async _updateCharacterStat (characterData, characterSource, statPath, newValue) {
 		if (!characterData || !characterSource || !statPath) return false;
 
 		// All character updates now go through CharacterManager
@@ -10000,20 +10924,20 @@ Renderer.character = class {
 			return await globalThis.CharacterManager.updateCharacterStat(characterId, statPath, newValue);
 		}
 
-		console.warn('CharacterManager not available for stat update');
+		console.warn("CharacterManager not available for stat update");
 		return false;
 	}
 
 	// Special handler for hit dice updates that need to be distributed across classes
-	static async _updateHitDiceFromClasses(characterData, characterSource, statPath, newValue, classesData) {
+	static async _updateHitDiceFromClasses (characterData, characterSource, statPath, newValue, classesData) {
 		if (!characterData || !characterSource || !statPath || !classesData) return false;
 
 		// Parse the die type from the stat path (e.g., "class.currentHitDice.d8" -> "d8")
-		const dieType = statPath.replace('class.currentHitDice.', '');
+		const dieType = statPath.replace("class.currentHitDice.", "");
 
 		// Parse classes data: "0:6:4,1:2:1" means [classIndex:level:currentAvailable]
-		const classes = classesData.split(',').map(classStr => {
-			const [index, level, currentAvailable] = classStr.split(':').map(Number);
+		const classes = classesData.split(",").map(classStr => {
+			const [index, level, currentAvailable] = classStr.split(":").map(Number);
 			return { index, level, currentAvailable };
 		});
 
@@ -10068,18 +10992,18 @@ Renderer.character = class {
 			if (success) {
 				return true;
 			} else {
-				console.warn('CharacterManager: Server update failed for hit dice');
+				console.warn("CharacterManager: Server update failed for hit dice");
 				return false;
 			}
 		}
 
-		console.warn('CharacterManager not available for hit dice update');
+		console.warn("CharacterManager not available for hit dice update");
 		return false;
 	}
 
 	// Helper method to generate character ID (kept for backward compatibility)
-	static _generateCharacterId(name) {
-		return name.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 20) + '_' + Date.now();
+	static _generateCharacterId (name) {
+		return `${name.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 20)}_${Date.now()}`;
 	}
 
 	static pGetFluff (character) {
@@ -17057,7 +17981,6 @@ Renderer.hover = class {
 			case UrlUtil.PG_BESTIARY: return Renderer.monster.bindListenersCompact.bind(Renderer.monster);
 			case UrlUtil.PG_RACES: return Renderer.race.bindListenersCompact.bind(Renderer.race);
 			case UrlUtil.PG_CHARACTERS: return Renderer.character.bindListenersCompact.bind(Renderer.character);
-			case UrlUtil.PG_SPELLS: return Renderer.spell.bindListenersCompact.bind(Renderer.spell);
 			default: return null;
 		}
 	}
