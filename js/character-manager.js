@@ -1029,7 +1029,7 @@ class CharacterManager {
 	static _STORAGE_KEY = "VeTool_CharacterManager_Cache";
 	// Client-side cache for the blob list (metadata returned by /api/characters/load)
 	static _LIST_CACHE_KEY = "VeTool_CharacterManager_ListCache";
-	static _LIST_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+	static _LIST_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours - extended since WebSockets handle updates
 	// Version tracking and offline sync
 	static _offlineQueue = []; // Queue for changes made while offline
 	static _OFFLINE_QUEUE_KEY = "VeTool_CharacterManager_OfflineQueue";
@@ -1292,9 +1292,10 @@ class CharacterManager {
 				this._isLoaded = true;
 				
 				// Check for stale data in background (non-blocking)
+				// With longer list cache TTL and WebSocket updates, be less aggressive about background checks
 				setTimeout(() => {
 					this._checkForStaleCharactersInBackground(sources);
-				}, 100);
+				}, 5000); // Increased delay from 100ms to 5 seconds
 				
 				return processed;
 			}
@@ -1343,6 +1344,59 @@ class CharacterManager {
 			} catch (e) {
 				console.warn("CharacterManager: Server unavailable, using localStorage only:", e.message);
 				return this._processAndStoreCharacters(localStorageCharacters, false);
+			}
+
+			// Check for characters that exist in localStorage but not in server blob list
+			// These are considered deleted and should be removed from local storage
+			if (blobs && blobs.length >= 0 && localStorageCharacters.length > 0) {
+				const serverCharacterIds = new Set(blobs.map(blob => blob.id));
+				const charactersToDelete = [];
+				
+				for (const localChar of localStorageCharacters) {
+					if (localChar && localChar.id && !serverCharacterIds.has(localChar.id)) {
+						// Character exists locally but not on server - it was deleted elsewhere
+						charactersToDelete.push(localChar.id);
+					}
+				}
+				
+				// Remove deleted characters from local storage and in-memory cache
+				if (charactersToDelete.length > 0) {
+					console.log(`CharacterManager: Removing ${charactersToDelete.length} deleted characters:`, charactersToDelete);
+					
+					// Remove from localStorage
+					const updatedLocalStorage = localStorageCharacters.filter(char => 
+						!char || !char.id || !charactersToDelete.includes(char.id)
+					);
+					this._saveToLocalStorage(updatedLocalStorage);
+					
+					// Remove from in-memory caches
+					for (const charId of charactersToDelete) {
+						this._characters.delete(charId);
+						this._blobCache.delete(charId);
+						
+						// Remove from array
+						const arrayIndex = this._charactersArray.findIndex(c => c && c.id === charId);
+						if (arrayIndex >= 0) {
+							this._charactersArray.splice(arrayIndex, 1);
+						}
+					}
+					
+					// Update localStorageCharacters array for the rest of this function
+					localStorageCharacters.splice(0, localStorageCharacters.length, ...updatedLocalStorage);
+					
+					// Update localCharMap
+					localCharMap.clear();
+					for (const character of updatedLocalStorage) {
+						if (character && character.id) {
+							localCharMap.set(character.id, character);
+						}
+					}
+					
+					// Broadcast the deletions to other tabs
+					for (const charId of charactersToDelete) {
+						this._broadcastSync("CHARACTER_DELETED", { characterId: charId });
+					}
+				}
 			}
 
 			if (!blobs || blobs.length === 0) {
@@ -1923,6 +1977,9 @@ class CharacterManager {
 		// Update DataLoader cache to maintain consistency
 		this._updateDataLoaderCache();
 
+		// Always update localStorage cache to persist character changes
+		this._updateLocalStorageCache(processed);
+
 		// Notify listeners
 		this._notifyListeners();
 	}
@@ -2409,9 +2466,9 @@ class CharacterManager {
 
 	/**
 	 * Start automatic refresh of character data (like existing system)
-	 * @param {number} intervalMs - Refresh interval in milliseconds (default 5 minutes)
+	 * @param {number} intervalMs - Refresh interval in milliseconds (default 15 minutes - extended due to WebSocket updates)
 	 */
-	static startAutoRefresh (intervalMs = 5 * 60 * 1000) {
+	static startAutoRefresh (intervalMs = 15 * 60 * 1000) {
 		if (this._refreshInterval) {
 			clearInterval(this._refreshInterval);
 		}
@@ -2866,11 +2923,18 @@ class CharacterManager {
 			switch (type) {
 				case "CHARACTER_UPDATED":
 					if (character && character.id) {
-						this.addOrUpdateCharacter(character);
+						// Mark as remote update to ensure proper localStorage persistence
+						// WebSocket already contains all needed character data, no need to hit server
+						this.addOrUpdateCharacter(character, true);
 					}
 					break;
 				case "CHARACTER_DELETED":
-					if (characterId) this.removeCharacter(characterId);
+					if (characterId) {
+						this.removeCharacter(characterId);
+						// Character deletions might indicate server state changes, so invalidate list cache
+						console.log("CharacterManager: Character deletion detected via WebSocket, invalidating list cache");
+						this._invalidateBlobListCache();
+					}
 					break;
 				case "CHARACTERS_RELOADED":
 					this.forceRefreshCharacters();
@@ -2879,6 +2943,18 @@ class CharacterManager {
 			}
 		} catch (e) {
 			console.warn("CharacterManager: _handleP2PSync failed", e);
+		}
+	}
+
+	/**
+	 * Invalidate the blob list cache to force a fresh fetch on next load
+	 * Use this when WebSocket events suggest the server character list may have changed
+	 */
+	static _invalidateBlobListCache () {
+		try {
+			localStorage.removeItem(this._LIST_CACHE_KEY);
+		} catch (e) {
+			console.warn("CharacterManager: Error invalidating blob list cache:", e);
 		}
 	}
 }
