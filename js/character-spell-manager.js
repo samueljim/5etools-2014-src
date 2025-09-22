@@ -290,18 +290,29 @@ class CharacterSpellManager extends ListPage {
 		}
 		
 		const f = this._filterBox.getValues();
-		console.log(`🔄 Applying filters to ${this._dataList.length} spells...`);
-		
+		console.log(`🔄 Applying filters to ${this._dataList?.length ?? 0} spells...`, f);
+
 		const beforeCount = this._list.visibleItems.length;
 		this._list.filter(item => {
-			if (!item || item.ix === undefined || !this._dataList[item.ix]) {
-				console.warn(`⚠️ Invalid item in filter:`, item);
+			if (!item) return false;
+
+			// Prefer using the stored entity on the ListItem if available. This avoids index-mismatch
+			// bugs where item.ix no longer references the original data array index.
+			const ent = item.data && item.data.entity ? item.data.entity : (this._dataList && this._dataList[item.ix]);
+			if (!ent) {
+				console.warn(`⚠️ Invalid item/entity in filter:`, item);
 				return false;
 			}
-			return this._pageFilter.toDisplay(f, this._dataList[item.ix]);
+
+			// Debug: occasionally log mismatches for investigation
+			if ((item.ix !== undefined) && this._dataList && this._dataList[item.ix] && this._dataList[item.ix] !== ent) {
+				console.debug(`ℹ️ Filter: using item.data.entity rather than this._dataList[item.ix] (ix=${item.ix})`);
+			}
+
+			return this._pageFilter.toDisplay(f, ent);
 		});
 		const afterCount = this._list.visibleItems.length;
-		
+
 		console.log(`🎯 Filter applied: ${beforeCount} -> ${afterCount} visible spells`);
 		
 		FilterBox.selectFirstVisible(this._dataList);
@@ -349,6 +360,7 @@ class CharacterSpellManager extends ListPage {
 
 	_renderStats_doBuildStatsTab_spell({ent}) {
 		try {
+			let classesFilterValues;
 			this._$pgContent = this._$modalInner.find("#pagecontent");
 			// Use basic spell rendering for modal context
 			this._renderBasicSpellPreview(ent);
@@ -574,9 +586,22 @@ class CharacterSpellManager extends ListPage {
 
 		// Store spell data
 		this._dataList = data.spell;
-		
-		// Use the seenHashes system from parent class
-		this._seenHashes = this._seenHashes || new Set();
+
+		// Reset seen hashes so we can rebuild the list each time the modal opens
+		this._seenHashes = new Set();
+
+		// Clear any previous list items and DOM (handle re-open of modal using same manager)
+		if (this._list) {
+			try {
+				this._list.removeAllItems();
+			} catch (e) {
+				// ignore
+			}
+		}
+		if (this._$modalInner) {
+			const $lc = this._$modalInner.find('#list');
+			if ($lc.length) $lc.empty();
+		}
 
 		// Process each spell with proper filtering integration
 		let addedCount = 0;
@@ -600,7 +625,9 @@ class CharacterSpellManager extends ListPage {
 		console.log(`📊 Successfully added ${addedCount} spells to list`);
 
 		// Initialize and update the list so it can perform its search/filter/render
-		if (!this._list._isInit) this._list.init();
+		// If the list was initialized during a previous modal open, force re-init so it rebinds to the new DOM
+		if (this._list) this._list._isInit = false;
+		this._list.init();
 		this._list.update();
 		console.log(`🔄 List updated. Items: ${this._list.items.length}, Visible: ${this._list.visibleItems.length}`);
 		
@@ -769,21 +796,70 @@ class CharacterSpellManager extends ListPage {
 			
 			// Set up character-appropriate class filters
 			const characterClasses = this._characterData.class || [];
+			let classesFilterValues = {};
 			if (characterClasses.length > 0) {
 				const classNames = characterClasses.map(cls => cls.name).filter(Boolean);
 				console.log(`🏛️ Character classes: ${classNames.join(', ')}`);
-				
-				// The PageFilterSpells will handle the complex class filtering
-				// We just need to make sure the filter is set to show relevant spells
+				// Build filter values for the "Classes" filter (select all of the character's classes)
+				classesFilterValues = {};
+				characterClasses.forEach(cls => {
+					try {
+						const classSource = cls.source || Parser.SRC_PHB;
+						// Use PageFilterSpells helper to construct the display string used in the filter items
+						const fi = PageFilterSpells._getClassFilterItem({
+							className: cls.name,
+							classSource: classSource,
+							isVariantClass: false,
+							definedInSource: classSource,
+						});
+						if (fi && fi.item) classesFilterValues[fi.item] = 1;
+					} catch (e) {
+						console.warn(`Could not map class for filter: ${cls.name}`, e);
+					}
+				});
+
+				// Apply the classes selection to the filter box along with level below
 			}
 			
-			// Set level range based on character level
-			const characterLevel = Math.max(...characterClasses.map(cls => cls.level || 1));
-			let maxSpellLevel = Math.min(9, Math.ceil(characterLevel / 2));
-			if (characterLevel < 2) maxSpellLevel = 1;
-			
-			console.log(`🎚️ Character level ${characterLevel}, max spell level ${maxSpellLevel}`);
-			
+			// Determine allowed spell levels per-class and build filter values
+			const levelsAllowed = new Set();
+			const characterLevel = characterClasses.length ? Math.max(...characterClasses.map(cls => cls.level || 1)) : 1;
+			// Helper: caster progression
+			const fullCasters = new Set(['Bard','Cleric','Druid','Sorcerer','Wizard','Warlock']);
+			const halfCasters = new Set(['Paladin','Ranger']);
+			// Eldritch Knight and Arcane Trickster act as one-third casters
+			characterClasses.forEach(cls => {
+				const name = cls.name;
+				const lvl = cls.level || 1;
+				let maxForClass = 0;
+				if (fullCasters.has(name)) maxForClass = Math.min(9, Math.floor(lvl));
+				else if (halfCasters.has(name)) maxForClass = Math.min(9, Math.floor(lvl / 2));
+				else if (name === 'Fighter' && cls.subclass?.name === 'Eldritch Knight') maxForClass = Math.min(9, Math.floor(lvl / 3));
+				else if (name === 'Rogue' && cls.subclass?.name === 'Arcane Trickster') maxForClass = Math.min(9, Math.floor(lvl / 3));
+				else maxForClass = Math.min(9, Math.floor(lvl / 2)); // Conservative default: treat as half-caster
+				if (maxForClass < 1) maxForClass = 1; // show at least 1st-level spells for low-level casters
+				for (let L = 0; L <= maxForClass; ++L) levelsAllowed.add(L);
+			});
+
+			console.log(`🎚️ Character level ${characterLevel}, per-class allowed max levels: ${[...levelsAllowed].sort((a,b)=>a-b).join(',')}`);
+
+			// Build the values object for FilterBox.setFromValues
+			const values = {};
+			// Level filter: include all allowed levels
+			values.Level = {};
+			[...levelsAllowed].forEach(l => values.Level[l] = 1);
+			// Classes filter: pick the character's classes (if computed above)
+			if (typeof classesFilterValues !== 'undefined' && Object.keys(classesFilterValues).length) values.Classes = classesFilterValues;
+
+			if (Object.keys(values).length) {
+				console.log(`🔧 Applying filter defaults:`, values);
+				this._filterBox.setFromValues(values);
+				// Ensure filter UI renders (so class pills are visible)
+				try { this._filterBox.render(); } catch (e) { /* ignore if not present */ }
+				// Trigger filter application
+				this.handleFilterChange();
+			}
+
 			console.log("✅ Filters configured for character spell selection");
 			
 		} catch (error) {
