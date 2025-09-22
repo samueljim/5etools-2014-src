@@ -100,6 +100,7 @@ class CharacterEditorPage {
 	constructor() {
 		this.ace = null;
 		this._classDataCache = new Map(); // Cache for loaded class JSON data
+		this.spellManager = null; // Spell manager instance
 		this.initOnLoad();
 		
 		// Make simplified fix methods available globally for console use
@@ -159,6 +160,13 @@ class CharacterEditorPage {
 			this.updateSourceDisplay();
 			this.renderCharacter();
 		}, 500);
+	}
+
+	// Helper method to safely update ACE editor without triggering change events
+	_safeSetAceValue(content, cursorPos = 1) {
+		this._isUpdatingAceEditor = true;
+		this.ace.setValue(content, cursorPos);
+		this._isUpdatingAceEditor = false;
 	}
 
 	async loadCharacterForEdit() {
@@ -1791,7 +1799,7 @@ class CharacterEditorPage {
 		} else if (featureName.includes('pact boon')) {
 			await this.showPactBoonChoiceModal(feature, featureData);
 		} else if (featureName.includes('cantrip') || featureName.includes('spell')) {
-			await this.showFeatureSpellChoiceModal(feature, featureData);
+			await this.showSpellChoiceModal(feature, featureData);
 		} else {
 			// Generic choice modal for other features
 			await this.showGenericFeatureChoiceModal(feature, featureData);
@@ -2286,16 +2294,14 @@ class CharacterEditorPage {
 					if (classInfo.preparedSpells) {
 						characterTemplate.spells.spellsPrepared = classInfo.preparedSpells;
 					}
-					if (classInfo.spellsKnownProgressionFixed) {
-						const spellsKnown = classInfo.spellsKnownProgressionFixed[Math.min(classLevel - 1, classInfo.spellsKnownProgressionFixed.length - 1)];
-						characterTemplate.spells.spellsKnown = spellsKnown;
-					}
-
-					// Add actual spells for the class
-					await this.addClassSpells(classEntry.name, classLevel, characterTemplate);
+				if (classInfo.spellsKnownProgressionFixed) {
+					const spellsKnown = classInfo.spellsKnownProgressionFixed[Math.min(classLevel - 1, classInfo.spellsKnownProgressionFixed.length - 1)];
+					characterTemplate.spells.spellsKnown = spellsKnown;
 				}
 
-				// Apply subclass spellcasting if it exists (subclass info already in class object)
+				// Spells are now ONLY added through the new CharacterSpellManager UI
+				// No automatic spell selection to avoid wrong spells being added
+			}				// Apply subclass spellcasting if it exists (subclass info already in class object)
 				if (classEntry.subclass && classLevel >= 3) {
 					const subclass = subclasses.find(sc =>
 						sc.name === classEntry.subclass.name ||
@@ -2565,172 +2571,11 @@ class CharacterEditorPage {
 		return Object.values(spellData).filter(spell => spell.level === level);
 	}
 
-	async getSpellsForClass(className, subclass = null) {
-		// Load all spells
-		const spellData = await this.loadSpellData();
-		const allSpells = Object.values(spellData);
+	// Old automatic spell selection methods removed - spells are now only added via CharacterSpellManager UI
 
-		// Basic filtering - ensure spells have required fields
-		let filteredSpells = allSpells.filter(spell => {
-			return spell.level !== undefined &&
-				   spell.level >= 0 &&
-				   spell.level <= 9 &&
-				   spell.name &&
-				   spell.school;
-		});
 
-		// Apply subclass restrictions for arcane subclasses
-		if (subclass && this.isSubclassCaster(className, subclass)) {
-			filteredSpells = this.filterSpellsForSubclass(filteredSpells, className, subclass);
-		} else {
-			// Filter by class spell list
-			filteredSpells = filteredSpells.filter(spell => {
-				if (!spell.classes || !spell.classes.fromClassList) return false;
-				return spell.classes.fromClassList.some(cls => 
-					cls.name === className ||
-					(className === 'Bard' && cls.name === 'Bard') ||
-					(className === 'Cleric' && cls.name === 'Cleric') ||
-					(className === 'Druid' && cls.name === 'Druid') ||
-					(className === 'Paladin' && cls.name === 'Paladin') ||
-					(className === 'Ranger' && cls.name === 'Ranger') ||
-					(className === 'Sorcerer' && cls.name === 'Sorcerer') ||
-					(className === 'Warlock' && cls.name === 'Warlock') ||
-					(className === 'Wizard' && cls.name === 'Wizard')
-				);
-			});
-		}
 
-		return filteredSpells;
-	}
 
-	filterSpellsForSubclass(spells, className, subclass) {
-		// Subclass casters typically use wizard spells with school restrictions
-		const wizardSpells = spells.filter(spell =>
-			spell.classes &&
-			spell.classes.fromClassList &&
-			spell.classes.fromClassList.some(cls => cls.name === 'Wizard')
-		);
-
-		if (className === 'Fighter' && subclass === 'Eldritch Knight') {
-			// Eldritch Knights focus on abjuration and evocation
-			// But can learn any school at levels 8, 14, and 20
-			return wizardSpells.filter(spell =>
-				spell.school === 'A' || // Abjuration
-				spell.school === 'V' || // Evocation
-				spell.level === 0       // All cantrips are allowed
-			);
-		}
-
-		if (className === 'Rogue' && subclass === 'Arcane Trickster') {
-			// Arcane Tricksters focus on enchantment and illusion
-			// But can learn any school at levels 8, 14, and 20
-			return wizardSpells.filter(spell =>
-				spell.school === 'E' || // Enchantment
-				spell.school === 'I' || // Illusion
-				spell.level === 0       // All cantrips are allowed
-			);
-		}
-
-		// Fallback to all wizard spells for other subclasses
-		return wizardSpells;
-	}
-
-	async addClassSpells(className, classLevel, characterTemplate) {
-		if (!characterTemplate.spells) characterTemplate.spells = {};
-		if (!characterTemplate.spells.levels) characterTemplate.spells.levels = {};
-
-		// For now, auto-select some basic spells, but this could be enhanced to show the spell selection modal
-		// For level 0 character creation, we might want to show the modal
-		const isLevel0Creation = this.levelUpState && this.levelUpState.currentLevel === 0;
-
-		// Spell selection is now handled during the level up process, not here
-
-		// Auto-select some basic spells for now
-		const availableSpells = await this.getSpellsForClass(className);
-		const spellsToAdd = await this.selectSpellsForClassLevel(className, classLevel, availableSpells);
-
-		// Add the selected spells to the character using enhanced 5etools format
-		for (const [spellLevel, spellObjects] of Object.entries(spellsToAdd)) {
-			if (!characterTemplate.spells.levels[spellLevel]) {
-				characterTemplate.spells.levels[spellLevel] = {
-					maxSlots: spellLevel === '0' ? 0 : 0, // Will be set by class progression
-					slotsUsed: 0,
-					spells: []
-				};
-			}
-
-			spellObjects.forEach(spellData => {
-				// Check if spell already exists by name to avoid duplicates
-				const spellName = typeof spellData === 'string' ? spellData : spellData.name;
-				const existingSpell = characterTemplate.spells.levels[spellLevel].spells.find(s =>
-					(typeof s === 'string' ? s : s.name) === spellName
-				);
-
-				if (!existingSpell) {
-					console.log(`✨ Adding spell: ${spellName} (Level ${spellLevel})`);
-					// Store spell with source for 5etools compatibility
-					const spellEntry = {
-						name: spellName,
-						source: (typeof spellData === 'object' && spellData.source) ? spellData.source : "PHB"
-					};
-					characterTemplate.spells.levels[spellLevel].spells.push(spellEntry);
-				}
-			});
-		}
-	}
-
-	async selectSpellsForClassLevel(className, classLevel, availableSpells) {
-		const selectedSpells = {};
-
-		// Enhanced spell selection logic with full spell data
-		const spellsByLevel = {};
-		availableSpells.forEach(spell => {
-			const level = spell.level.toString();
-			if (!spellsByLevel[level]) spellsByLevel[level] = [];
-			spellsByLevel[level].push(spell); // Store full spell object, not just name
-		});
-
-		// Add cantrips for all spellcasters (with source for 5etools compatibility)
-		if (spellsByLevel['0'] && spellsByLevel['0'].length > 0) {
-			selectedSpells['0'] = [];
-			const cantripCount = Math.min(3, spellsByLevel['0'].length);
-			for (let i = 0; i < cantripCount; i++) {
-				const spell = spellsByLevel['0'][i];
-				selectedSpells['0'].push({
-					name: spell.name,
-					source: spell.source || "PHB"
-				});
-			}
-		}
-
-		// Add 1st level spells for level 1+ casters (with source for 5etools compatibility)
-		if (classLevel >= 1 && spellsByLevel['1'] && spellsByLevel['1'].length > 0) {
-			selectedSpells['1'] = [];
-			const spellCount = Math.min(4, spellsByLevel['1'].length);
-			for (let i = 0; i < spellCount; i++) {
-				const spell = spellsByLevel['1'][i];
-				selectedSpells['1'].push({
-					name: spell.name,
-					source: spell.source || "PHB"
-				});
-			}
-		}
-
-		// Add 2nd level spells for level 3+ casters (with source for 5etools compatibility)
-		if (classLevel >= 3 && spellsByLevel['2'] && spellsByLevel['2'].length > 0) {
-			selectedSpells['2'] = [];
-			const spellCount = Math.min(2, spellsByLevel['2'].length);
-			for (let i = 0; i < spellCount; i++) {
-				const spell = spellsByLevel['2'][i];
-				selectedSpells['2'].push({
-					name: spell.name,
-					source: spell.source || "PHB"
-				});
-			}
-		}
-
-		return selectedSpells;
-	}
 
 	async createStructuredSpellData(spellData) {
 		console.log('🔮 Creating structured spell data for:', spellData.name);
@@ -2854,415 +2699,19 @@ class CharacterEditorPage {
 	}
 
 	async showSpellSelectionModal(className, classLevel, characterTemplate, subclass = null) {
-		const availableSpells = await this.getSpellsForClass(className, subclass);
-		const spellsByLevel = {};
+		// Use the new CharacterSpellManager with 5etools UI
+		if (!this.spellManager) {
+			this.spellManager = new CharacterSpellManager();
+		}
 
-		// Organize spells by level
-		availableSpells.forEach(spell => {
-			const level = spell.level.toString();
-			if (!spellsByLevel[level]) spellsByLevel[level] = [];
-			spellsByLevel[level].push(spell);
+		// Use spell manager for spell selection
+		await this.spellManager.openSpellManager(characterTemplate, (selectedSpells) => {
+			console.log('Spells selected:', selectedSpells);
+			this.applySelectedSpellsFromManager(selectedSpells, characterTemplate);
 		});
-
-		// Calculate how many spells the character can know at this level
-		const maxSpells = await this.getMaxSpellsForClassLevel(className, classLevel, subclass);
-
-		const modalContent = `
-			<div class="text-center mb-3">
-				<h4>Select Spells for ${className}</h4>
-				<p>Level ${classLevel} - Choose your spells</p>
-				<div class="alert alert-info">
-					Select spells from the lists below. You can change these during level up.
-				</div>
-			</div>
-
-			<div class="row">
-				${Object.entries(spellsByLevel).map(([level, spells]) => {
-					const spellLevelInt = parseInt(level);
-					
-					// More flexible spell level access based on class type
-					let maxSpellLevel;
-					if (['Wizard', 'Sorcerer', 'Bard', 'Cleric', 'Druid', 'Warlock'].includes(className)) {
-						// Full casters get spell levels based on character level
-						maxSpellLevel = Math.ceil(classLevel / 2);
-					} else {
-						// Half and third casters have different progressions
-						maxSpellLevel = Math.floor((classLevel - 1) / 4) + 1;
-					}
-					
-					// Always show cantrips, but limit other spell levels appropriately
-					if (spellLevelInt > 0 && spellLevelInt > maxSpellLevel) return '';
-
-					const levelName = level === '0' ? 'Cantrips' : `Level ${level}`;
-					const maxForLevel = maxSpells[level] || 0;
-
-					if (maxForLevel === 0) return '';
-
-					return `
-						<div class="col-md-6 mb-4">
-							<div class="card">
-								<div class="card-header">
-									<h6 class="mb-0">${levelName} (Choose ${maxForLevel})</h6>
-								</div>
-								<div class="card-body">
-									${spells.slice(0, 15).map(spell => `
-										<div class="form-check">
-											<input class="form-check-input spell-checkbox"
-												type="checkbox"
-												value="${spell.name}"
-												data-spell-level="${level}"
-												data-spell-name="${spell.name}"
-												data-spell-source="${spell.source || 'PHB'}"
-												data-max-for-level="${maxForLevel}"
-												id="spell-${spell.name.replace(/\s+/g, '-')}">
-											<label class="form-check-label" for="spell-${spell.name.replace(/\s+/g, '-')}">
-												<strong>${spell.name}</strong>
-												<br><small class="text-muted">${this.getSpellSchoolName(spell.school)} • ${this.getSpellDescription(spell)}</small>
-											</label>
-										</div>
-									`).join('')}
-								</div>
-							</div>
-						</div>
-					`;
-				}).join('')}
-			</div>
-		`;
-
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Spell Selection",
-			hasFooter: true,
-			isWidth100: true,
-			isUncappedHeight: true,
-			isHeaderBorder: true
-		});
-
-		$modalInner.html(modalContent);
-
-		// Fix scrolling for spell selection modal
-		$modalInner.css({
-			'max-height': '70vh',
-			'overflow-y': 'auto'
-		});
-
-		// Add footer buttons
-		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary" id="confirm-spell-selection">Confirm Spell Selection</button>`)
-			.click(() => {
-				const selectedSpells = this.collectSelectedSpells();
-				this.applySelectedSpells(selectedSpells, characterTemplate);
-				doClose();
-			});
-
-		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`)
-			.click(() => doClose());
-
-		$modalFooter.append($btnCancel, $btnConfirm);
-
-		// Set up event handlers for spell selection
-		this.setupSpellSelectionHandlers($modalInner);
-
-		// Pre-select existing spells if this is a level up scenario
-		this.preselectExistingSpells($modalInner, characterTemplate);
 	}
 
-	async getMaxSpellsForClassLevel(className, level, subclass = null) {
-		// Load actual class data to get spell progression
-		try {
-			const classData = await this.loadClassData(className);
-			if (!classData) {
-				return this.getDefaultSpellProgression(level);
-			}
-
-			// Check if this is a subclass that provides spellcasting
-			if (subclass && this.isSubclassCaster(className, subclass)) {
-				return await this.getSubclassSpellProgression(className, subclass, level);
-			}
-
-			const spellProgression = {};
-
-			// Get cantrip progression
-			if (classData.cantripProgression) {
-				const cantripIndex = Math.min(level - 1, classData.cantripProgression.length - 1);
-				spellProgression['0'] = cantripIndex >= 0 ? classData.cantripProgression[cantripIndex] : 0;
-			}
-
-			// Get spells known progression for known-spells classes
-			if (classData.spellsKnownProgressionFixed) {
-				const spellsKnownIndex = Math.min(level - 1, classData.spellsKnownProgressionFixed.length - 1);
-				const totalSpellsKnown = spellsKnownIndex >= 0 ? classData.spellsKnownProgressionFixed[spellsKnownIndex] : 0;
-
-				// For known-spells casters, distribute total spells across levels
-				// This is more accurate than using spell slots
-				this.distributeKnownSpellsForSelection(totalSpellsKnown, level, className, spellProgression);
-			} else {
-				// For prepared casters (like Wizard, Cleric), base on class level + modifier
-				// But allow generous selection since they can change spells
-				const casterProgression = this.getCasterType(className);
-				const spellSlots = this.calculateSpellSlots(level, casterProgression);
-				
-				// For prepared casters, allow knowing more spells than they can prepare
-				for (let spellLevel = 1; spellLevel <= 9; spellLevel++) {
-					const slots = spellSlots[`level${spellLevel}`] || 0;
-					if (slots > 0) {
-						// Allow knowing more spells than slots for flexibility
-						spellProgression[spellLevel] = Math.max(slots, Math.min(slots * 2, 8));
-					}
-				}
-			}
-
-			return spellProgression;
-		} catch (error) {
-			console.error('Error loading class spell progression:', error);
-			return this.getDefaultSpellProgression(level);
-		}
-	}
-
-	isSubclassCaster(className, subclass) {
-		const subclassCasters = {
-			'Fighter': ['Eldritch Knight'],
-			'Rogue': ['Arcane Trickster']
-		};
-		return subclassCasters[className]?.includes(subclass) || false;
-	}
-
-	async getSubclassSpellProgression(className, subclass, level) {
-		try {
-			const classData = await this.loadClassData(className);
-			if (!classData || !classData.subclassTableGroups) {
-				return this.getDefaultSpellProgression(level);
-			}
-
-			const spellProgression = {};
-
-			// Find the relevant subclass table groups
-			for (const tableGroup of classData.subclassTableGroups) {
-				const matchingSubclass = tableGroup.subclasses?.find(sc =>
-					sc.name === subclass || sc.shortName === subclass
-				);
-
-				if (!matchingSubclass) continue;
-
-				// Handle cantrips and spells known table
-				if (tableGroup.colLabels && tableGroup.rows) {
-					const cantripCol = tableGroup.colLabels.findIndex(label =>
-						label.toLowerCase().includes('cantrips known')
-					);
-					const spellsCol = tableGroup.colLabels.findIndex(label =>
-						label.toLowerCase().includes('spells known')
-					);
-
-					const rowIndex = Math.min(level - 1, tableGroup.rows.length - 1);
-					if (rowIndex >= 0 && tableGroup.rows[rowIndex]) {
-						const row = tableGroup.rows[rowIndex];
-
-						if (cantripCol >= 0 && cantripCol < row.length) {
-							spellProgression['0'] = row[cantripCol] || 0;
-						}
-
-						if (spellsCol >= 0 && spellsCol < row.length) {
-							const totalSpellsKnown = row[spellsCol] || 0;
-							// For subclass casters, they typically learn fewer spells across more levels
-							// Distribute based on available spell slots
-							const spellSlots = this.getSubclassSpellSlots(className, subclass, level);
-							this.distributeKnownSpells(totalSpellsKnown, spellSlots, spellProgression);
-						}
-					}
-				}
-
-				// Handle spell slots table if it exists
-				if (tableGroup.title?.includes('Spell Slots') && tableGroup.rowsSpellProgression) {
-					const rowIndex = Math.min(level - 1, tableGroup.rowsSpellProgression.length - 1);
-					if (rowIndex >= 0 && tableGroup.rowsSpellProgression[rowIndex]) {
-						const slotsRow = tableGroup.rowsSpellProgression[rowIndex];
-
-						// Map spell slots to spell levels
-						for (let i = 0; i < slotsRow.length && i < 4; i++) {
-							const spellLevel = (i + 1).toString();
-							const slots = slotsRow[i] || 0;
-							if (slots > 0) {
-								// Don't override spell counts, but ensure we have slots
-								if (!spellProgression[spellLevel]) {
-									spellProgression[spellLevel] = Math.min(slots, 3); // Conservative for subclass casters
-								}
-							}
-						}
-					}
-				}
-			}
-
-			return Object.keys(spellProgression).length > 0 ? spellProgression : this.getDefaultSpellProgression(level);
-		} catch (error) {
-			console.error('Error loading subclass spell progression:', error);
-			return this.getDefaultSpellProgression(level);
-		}
-	}
-
-	getSubclassSpellSlots(className, subclass, level) {
-		// Subclass casters (like Eldritch Knight, Arcane Trickster) start at level 3
-		if (level < 3) return {};
-
-		// They are 1/3 casters - their spell slot progression is slower
-		const effectiveLevel = Math.floor((level - 2) / 3);
-
-		const spellSlots = {};
-
-		if (effectiveLevel >= 1) spellSlots["1"] = Math.min(effectiveLevel + 1, 4);
-		if (effectiveLevel >= 3) spellSlots["2"] = Math.min(effectiveLevel - 2, 3);
-		if (effectiveLevel >= 5) spellSlots["3"] = Math.min(effectiveLevel - 4, 3);
-		if (effectiveLevel >= 7) spellSlots["4"] = Math.min(effectiveLevel - 6, 1);
-
-		return spellSlots;
-	}
-
-	getDefaultSpellProgression(level) {
-		// Fallback basic spell progression
-		return {
-			'0': Math.min(4, 2 + Math.floor(level / 4)), // Cantrips
-			'1': Math.min(6, 2 + Math.floor(level / 2)), // 1st level spells
-			'2': level >= 3 ? Math.min(4, 1 + Math.floor((level - 3) / 2)) : 0, // 2nd level spells
-			'3': level >= 5 ? Math.min(3, 1 + Math.floor((level - 5) / 3)) : 0, // 3rd level spells
-		};
-	}
-
-	async getSpellLearningRestrictions(primaryClass, characterLevel, currentSpells) {
-		// Get data-driven spell learning restrictions based on class progression
-		try {
-			const classData = await this.loadClassData(primaryClass);
-			if (!classData || !classData.class || !classData.class[0]) {
-				return this.getDefaultSpellLearningRestrictions(characterLevel);
-			}
-
-			const classInfo = classData.class[0];
-			const restrictions = {
-				cantripsToLearn: 0,
-				spellsPerLevel: {}, // e.g., { '1': 2, '2': 1 }
-				maxSpellLevel: this.getMaxSpellLevelForCharacterLevel(characterLevel, primaryClass),
-				allowedSchools: null, // For restricted casters like Eldritch Knight
-				spellList: primaryClass.toLowerCase()
-			};
-
-			// Calculate cantrip learning
-			if (classInfo.cantripProgression && characterLevel <= classInfo.cantripProgression.length) {
-				const currentCantrips = classInfo.cantripProgression[characterLevel - 1] || 0;
-				const previousCantrips = characterLevel > 1 ? (classInfo.cantripProgression[characterLevel - 2] || 0) : 0;
-				restrictions.cantripsToLearn = Math.max(0, currentCantrips - previousCantrips);
-			}
-
-			// Calculate spell learning per level
-			if (classInfo.spellsKnownProgressionFixed) {
-				// For classes with fixed spells known (Sorcerer, Bard, Warlock, etc.)
-				const currentTotal = classInfo.spellsKnownProgressionFixed[characterLevel - 1] || 0;
-				const previousTotal = characterLevel > 1 ? (classInfo.spellsKnownProgressionFixed[characterLevel - 2] || 0) : 0;
-				const newSpellsToLearn = Math.max(0, currentTotal - previousTotal);
-
-				if (newSpellsToLearn > 0) {
-					// Distribute new spells across available spell levels
-					// Allow learning spells of any level up to max castable level
-					for (let spellLevel = 1; spellLevel <= restrictions.maxSpellLevel; spellLevel++) {
-						// Allow some flexibility in spell level choices
-						const currentAtLevel = currentSpells && currentSpells[spellLevel.toString()] ? currentSpells[spellLevel.toString()].length : 0;
-						restrictions.spellsPerLevel[spellLevel.toString()] = Math.min(newSpellsToLearn, 6 - currentAtLevel);
-					}
-				}
-			} else if (classInfo.preparedSpells || classInfo.spellcastingAbility) {
-				// For prepared casters (Cleric, Druid, Wizard, Paladin, Ranger)
-				if (characterLevel === 1) {
-					if (primaryClass.toLowerCase() === 'wizard') {
-						restrictions.spellsPerLevel['1'] = 6; // Wizards start with 6 1st level spells
-					} else {
-						restrictions.spellsPerLevel['1'] = 2; // Other prepared casters start with fewer
-					}
-				} else if (primaryClass.toLowerCase() === 'wizard') {
-					restrictions.spellsPerLevel['1'] = 2; // Wizards learn 2 spells per level
-				}
-			}
-
-			return restrictions;
-		} catch (error) {
-			console.error('Error getting spell learning restrictions:', error);
-			return this.getDefaultSpellLearningRestrictions(characterLevel);
-		}
-	}
-
-	getDefaultSpellLearningRestrictions(characterLevel) {
-		// Fallback restrictions
-		return {
-			cantripsToLearn: characterLevel === 1 ? 2 : 0,
-			spellsPerLevel: characterLevel === 1 ? { '1': 2 } : {},
-			maxSpellLevel: Math.ceil(characterLevel / 2),
-			allowedSchools: null,
-			spellList: 'wizard'
-		};
-	}
-
-	distributeKnownSpells(totalSpellsKnown, spellSlots, spellProgression) {
-		// Distribute known spells across levels based on available spell slots
-		const availableLevels = Object.keys(spellSlots).map(k => parseInt(k.replace('level', ''))).filter(l => l > 0);
-
-		if (availableLevels.length === 0) return;
-
-		// Start with 1st level spells, then distribute to higher levels
-		let remainingSpells = totalSpellsKnown;
-
-		for (const spellLevel of availableLevels.sort((a, b) => a - b)) {
-			if (remainingSpells <= 0) break;
-
-			// Allocate more spells to lower levels, but ensure all levels get some
-			const baseAllocation = Math.floor(remainingSpells / (availableLevels.length - availableLevels.indexOf(spellLevel)));
-			const allocation = Math.max(1, Math.min(baseAllocation, Math.ceil(remainingSpells * 0.4)));
-
-			spellProgression[spellLevel.toString()] = allocation;
-			remainingSpells -= allocation;
-		}
-	}
-
-	distributeKnownSpellsForSelection(totalSpellsKnown, characterLevel, className, spellProgression) {
-		// More accurate distribution for spell selection based on D&D 5e principles
-		const casterProgression = this.getCasterType(className);
-		const spellSlots = this.calculateSpellSlots(characterLevel, casterProgression);
-		
-		// Get available spell levels
-		const availableLevels = [];
-		for (let level = 1; level <= 9; level++) {
-			if (spellSlots[`level${level}`] > 0) {
-				availableLevels.push(level);
-			}
-		}
-		
-		if (availableLevels.length === 0) {
-			return; // No spell levels available
-		}
-		
-		// Distribute spells with preference for lower levels
-		let remainingSpells = totalSpellsKnown;
-		
-		for (const level of availableLevels) {
-			if (remainingSpells <= 0) break;
-			
-			// Allocate spells based on level preference
-			let allocation;
-			if (level === 1) {
-				// Most spells should be level 1
-				allocation = Math.min(remainingSpells, Math.ceil(totalSpellsKnown * 0.6));
-			} else if (level === 2) {
-				// Moderate allocation for level 2
-				allocation = Math.min(remainingSpells, Math.ceil(totalSpellsKnown * 0.3));
-			} else {
-				// Smaller allocation for higher levels
-				allocation = Math.min(remainingSpells, Math.max(1, Math.floor(remainingSpells / (availableLevels.length - availableLevels.indexOf(level)))));
-			}
-			
-			if (allocation > 0) {
-				spellProgression[level] = allocation;
-				remainingSpells -= allocation;
-			}
-		}
-		
-		// If there are remaining spells, distribute them to level 1
-		if (remainingSpells > 0 && spellProgression[1]) {
-			spellProgression[1] += remainingSpells;
-		}
-	}
+	// All automatic spell selection logic removed - spells are now only added via CharacterSpellManager UI
 
 	getSpellSchoolName(schoolCode) {
 		const schools = {
@@ -3288,60 +2737,207 @@ class CharacterEditorPage {
 		return 'A spell.';
 	}
 
-	setupSpellSelectionHandlers($modal) {
-		// Handle checkbox changes to enforce limits
-		$modal.on('change', '.spell-checkbox', function() {
-			const $checkbox = $(this);
-			const spellLevel = $checkbox.data('spell-level');
-			const maxForLevel = parseInt($checkbox.data('max-for-level'));
+	applySelectedSpellsFromManager(selectedSpells, characterTemplate) {
+		console.log("🔮 Applying selected spells from manager:", selectedSpells);
+		
+		// Initialize spell structure if needed
+		if (!characterTemplate.spells) characterTemplate.spells = {};
+		if (!characterTemplate.spells.levels) characterTemplate.spells.levels = {};
 
-			const $levelCheckboxes = $modal.find(`.spell-checkbox[data-spell-level="${spellLevel}"]`);
-			const checkedCount = $levelCheckboxes.filter(':checked').length;
-
-			if (checkedCount > maxForLevel) {
-				// Uncheck this one if we're over the limit
-				$checkbox.prop('checked', false);
-				alert(`You can only select ${maxForLevel} spells of this level.`);
+		// Clear existing spells - we're replacing them entirely with the new selection
+		Object.keys(characterTemplate.spells.levels).forEach(level => {
+			if (characterTemplate.spells.levels[level].spells) {
+				characterTemplate.spells.levels[level].spells = [];
 			}
 		});
-	}
 
-	preselectExistingSpells($modal, character) {
-		// If character already has spells, pre-select them in the modal
-		if (!character.spells || !character.spells.levels) return;
-
-		Object.entries(character.spells.levels).forEach(([level, levelData]) => {
-			if (levelData.spells && Array.isArray(levelData.spells)) {
-				levelData.spells.forEach(spell => {
-					// Handle both string and object spell formats
-					const spellName = typeof spell === 'string' ? spell : spell.name;
-					if (spellName) {
-						// Find and check the corresponding checkbox
-						$modal.find(`.spell-checkbox[value="${spellName}"]`).prop('checked', true);
-					}
-				});
+		// Remove any old level1/level2 format entries  
+		Object.keys(characterTemplate.spells.levels).forEach(key => {
+			if (key.startsWith('level')) {
+				console.log(`🗑️ Removing old level format: ${key}`);
+				delete characterTemplate.spells.levels[key];
 			}
 		});
-	}
 
-	collectSelectedSpells() {
-		const selectedSpells = {};
-		$('.spell-checkbox:checked').each(function() {
-			const $checkbox = $(this);
-			const spellLevel = $checkbox.data('spell-level');
-			const spellName = $checkbox.val(); // Get spell name from value attribute
+		// Group spells by level and format them with source
+		selectedSpells.forEach(spell => {
+			const level = spell.level.toString();
 			
-			// Ensure we have a spell name
-			if (!spellName) {
-				console.warn('Spell checkbox missing name:', $checkbox);
-				return;
+			// Initialize level if it doesn't exist
+			if (!characterTemplate.spells.levels[level]) {
+				characterTemplate.spells.levels[level] = {
+					maxSlots: 0, // Will be set correctly by spell slot progression
+					slotsUsed: 0, // Will be set correctly by spell slot progression  
+					spells: []
+				};
 			}
 
-			if (!selectedSpells[spellLevel]) selectedSpells[spellLevel] = [];
-			// Store as consistent string format only
-			selectedSpells[spellLevel].push(spellName);
+			// Format spell name with source (e.g., "Aganazzar's Scorcher|XGE")  
+			const spellNameWithSource = spell.source && spell.source !== 'PHB' 
+				? `${spell.name}|${spell.source}`
+				: spell.name;
+
+			// Add spell (we've already cleared the arrays above)
+			characterTemplate.spells.levels[level].spells.push(spellNameWithSource);
+			console.log(`✅ Added ${spellNameWithSource} to level ${level}`);
 		});
-		return selectedSpells;
+
+		// Update spell slot progression based on character level and classes
+		this.updateSpellSlotProgression(characterTemplate);
+
+		// Update the character sheet
+		this.ace.setValue(JSON.stringify(characterTemplate, null, 2), 1);
+		this.renderCharacter();
+		
+		console.log("📋 Spell structure after applying spells:", characterTemplate.spells);
+	}
+
+	updateSpellSlotProgression(characterTemplate) {
+		if (!characterTemplate.spells || !characterTemplate.class) return;
+
+		// Calculate total caster level for spell slot progression
+		let fullCasterLevel = 0;
+		let halfCasterLevel = 0;
+		let thirdCasterLevel = 0;
+		let warlockLevel = 0;
+
+		characterTemplate.class.forEach(cls => {
+			const classLevel = cls.level || 1;
+			const className = cls.name;
+
+			if (['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Wizard'].includes(className)) {
+				fullCasterLevel += classLevel;
+			} else if (['Paladin', 'Ranger'].includes(className)) {
+				halfCasterLevel += Math.max(0, classLevel - 1); // Start at level 2
+			} else if (className === 'Warlock') {
+				warlockLevel += classLevel; // Handle Warlock separately with Pact Magic
+			} else if ((className === 'Fighter' && cls.subclass?.name === 'Eldritch Knight') ||
+					   (className === 'Rogue' && cls.subclass?.name === 'Arcane Trickster')) {
+				thirdCasterLevel += Math.max(0, classLevel - 2); // Start at level 3
+			}
+		});
+
+		// Handle Warlock (Pact Magic) separately
+		if (warlockLevel > 0) {
+			this._updateWarlockSpellSlots(characterTemplate, warlockLevel);
+		}
+
+		// Calculate effective caster level for standard spellcasters
+		const effectiveCasterLevel = fullCasterLevel + Math.floor(halfCasterLevel / 2) + Math.floor(thirdCasterLevel / 3);
+		
+		if (effectiveCasterLevel > 0) {
+			this._updateStandardSpellSlots(characterTemplate, effectiveCasterLevel);
+		}
+
+		// Ensure cantrips (level 0) never have spell slots
+		if (characterTemplate.spells.levels['0']) {
+			delete characterTemplate.spells.levels['0'].maxSlots;
+			delete characterTemplate.spells.levels['0'].slotsUsed;
+		}
+	}
+
+	_updateWarlockSpellSlots(characterTemplate, warlockLevel) {
+		// Warlock Pact Magic progression
+		const warlockSlots = {
+			slots: warlockLevel >= 1 ? (warlockLevel >= 11 ? 3 : warlockLevel >= 2 ? 2 : 1) : 0,
+			level: warlockLevel >= 9 ? 5 : warlockLevel >= 7 ? 4 : warlockLevel >= 5 ? 3 : warlockLevel >= 3 ? 2 : 1
+		};
+
+		if (warlockSlots.slots > 0) {
+			const spellLevel = warlockSlots.level.toString();
+			
+			if (!characterTemplate.spells.levels[spellLevel]) {
+				characterTemplate.spells.levels[spellLevel] = {
+					maxSlots: 0,
+					slotsUsed: 0,
+					spells: []
+				};
+			}
+
+			const currentLevel = characterTemplate.spells.levels[spellLevel];
+			const oldMaxSlots = currentLevel.maxSlots || 0;
+			const oldSlotsUsed = currentLevel.slotsUsed || 0;
+			
+			// Calculate the difference in slots
+			const slotDifference = warlockSlots.slots - oldMaxSlots;
+			
+			// Update max slots
+			currentLevel.maxSlots = warlockSlots.slots;
+			
+			// When gaining slots, add the same amount to slotsUsed (new slots start as "used")
+			// Special case: if this is the first time getting slots for this level, set slotsUsed = maxSlots
+			if (oldMaxSlots === 0 && warlockSlots.slots > 0) {
+				// First time getting slots at this level - all slots should be "used" (available)
+				currentLevel.slotsUsed = warlockSlots.slots;
+				console.log(`✨ New Warlock spell level ${spellLevel}: 0 → ${warlockSlots.slots} max slots, 0 → ${currentLevel.slotsUsed} used (first time)`);
+			} else if (slotDifference > 0) {
+				currentLevel.slotsUsed = oldSlotsUsed + slotDifference;
+				console.log(`🧙‍♀️ Warlock Level ${spellLevel}: ${oldMaxSlots} → ${warlockSlots.slots} max slots, ${oldSlotsUsed} → ${currentLevel.slotsUsed} used`);
+			} else if (slotDifference < 0) {
+				currentLevel.slotsUsed = Math.max(0, Math.min(oldSlotsUsed, warlockSlots.slots));
+				console.log(`🧙‍♀️ Warlock Level ${spellLevel}: ${oldMaxSlots} → ${warlockSlots.slots} max slots, ${oldSlotsUsed} → ${currentLevel.slotsUsed} used`);
+			}
+			// If slotDifference === 0, no change needed (don't log)
+		}
+	}
+
+	_updateStandardSpellSlots(characterTemplate, effectiveCasterLevel) {
+		// Spell slots per level based on caster level (standard 5e progression)
+		const spellSlotsTable = {
+			1: [0, 2, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+			2: [0, 0, 0, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+			3: [0, 0, 0, 0, 0, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+			4: [0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+			5: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+			6: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 3, 3, 3, 3],
+			7: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 3, 3],
+			8: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2],
+			9: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1]
+		};
+
+		// Update spell slots for levels 1-9 (cantrips don't use slots)
+		for (let spellLevel = 1; spellLevel <= 9; spellLevel++) {
+			const maxSlots = spellSlotsTable[spellLevel][effectiveCasterLevel] || 0;
+			
+			if (maxSlots > 0 || characterTemplate.spells.levels[spellLevel.toString()]) {
+				if (!characterTemplate.spells.levels[spellLevel.toString()]) {
+					characterTemplate.spells.levels[spellLevel.toString()] = {
+						maxSlots: maxSlots, // Set to the correct max slots immediately
+						slotsUsed: maxSlots, // All slots should start as "used" (available)
+						spells: []
+					};
+					console.log(`🆕 Created new spell level ${spellLevel}: maxSlots: ${maxSlots}, slotsUsed: ${maxSlots}`);
+				} else {
+					const currentLevel = characterTemplate.spells.levels[spellLevel.toString()];
+					const oldMaxSlots = currentLevel.maxSlots || 0;
+					const oldSlotsUsed = currentLevel.slotsUsed || 0;
+					
+					// Calculate the difference in slots
+					const slotDifference = maxSlots - oldMaxSlots;
+					
+					// Update max slots
+					currentLevel.maxSlots = maxSlots;
+					
+					// When gaining slots, add the same amount to slotsUsed (new slots start as "used")
+					// Special case: if this is the first time getting slots for this level, set slotsUsed = maxSlots
+					if (oldMaxSlots === 0 && maxSlots > 0) {
+						// First time getting slots at this level - all slots should be "used" (available)
+						currentLevel.slotsUsed = maxSlots;
+						console.log(`✨ New spell level ${spellLevel}: 0 → ${maxSlots} max slots, 0 → ${currentLevel.slotsUsed} used (first time)`);
+					} else if (slotDifference > 0) {
+						// Gained additional slots - add the difference to slotsUsed
+						// This ensures that if you had 1/2 slots, you now have 2/3 slots (both increased by 1)
+						currentLevel.slotsUsed = oldSlotsUsed + slotDifference;
+						console.log(`📊 Level ${spellLevel}: ${oldMaxSlots} → ${maxSlots} max slots, ${oldSlotsUsed} → ${currentLevel.slotsUsed} used`);
+					} else if (slotDifference < 0) {
+						// Lost slots - reduce slotsUsed but don't go below 0
+						currentLevel.slotsUsed = Math.max(0, Math.min(oldSlotsUsed, maxSlots));
+						console.log(`📊 Level ${spellLevel}: ${oldMaxSlots} → ${maxSlots} max slots, ${oldSlotsUsed} → ${currentLevel.slotsUsed} used`);
+					}
+					// If slotDifference === 0, no change needed (don't log)
+				}
+			}
+		}
 	}
 
 	applySelectedSpells(selectedSpells, characterTemplate) {
@@ -3381,43 +2977,30 @@ class CharacterEditorPage {
 				return;
 			}
 
-			// Find the primary spellcasting class (first class with spellcasting ability or subclass caster)
-			let spellcastingClass = null;
-			let classLevel = 0;
-			let subclassName = null;
-
-			for (const classEntry of character.class) {
-				const classData = await this.loadClassData(classEntry.name);
-
-				// Check for traditional spellcasting classes
-				if (classData && classData.spellcastingAbility) {
-					spellcastingClass = classEntry.name;
-					classLevel = classEntry.level;
-					subclassName = classEntry.subclass?.name || null;
-					break;
-				}
-
-				// Check for subclass casters (Eldritch Knight, Arcane Trickster)
-				if (classEntry.subclass?.name && this.isSubclassCaster(classEntry.name, classEntry.subclass.name)) {
-					spellcastingClass = classEntry.name;
-					classLevel = classEntry.level;
-					subclassName = classEntry.subclass.name;
-					break;
-				}
+			// Use the new CharacterSpellManager with 5etools UI
+			if (!this.spellManager) {
+				this.spellManager = new CharacterSpellManager();
 			}
 
-			if (!spellcastingClass) {
-				console.log('No spellcasting classes found. Only spellcasting classes can select spells.');
-				return;
-			}
-
-			// Show spell selection modal
-			await this.showSpellSelectionModal(spellcastingClass, classLevel, character, subclassName);
+			// Use spell manager for spell selection
+			await this.spellManager.openSpellManager(character, (selectedSpells) => {
+				console.log('Spells selected:', selectedSpells);
+				this.applySelectedSpellsFromManager(selectedSpells, character);
+			});
 
 		} catch (error) {
 			console.error('Error opening spell selection modal:', error);
 			throw error; // Let calling code handle this gracefully
 		}
+	}
+
+	async classHasAvailableSpells(className, subclassName, character) {
+		// Since spell selection is now handled by CharacterSpellManager UI,
+		// we assume spellcasting classes have available spells
+		const spellcastingClasses = ['Wizard', 'Sorcerer', 'Cleric', 'Druid', 'Bard', 'Warlock', 'Paladin', 'Ranger', 'Fighter', 'Rogue'];
+		const hasSpells = spellcastingClasses.includes(className);
+		console.log(`${hasSpells ? '✅' : '❌'} ${className} ${hasSpells ? 'has' : 'has no'} spellcasting capabilities`);
+		return hasSpells;
 	}
 
 	calculateSpellSlots(casterLevel, progression) {
@@ -5496,6 +5079,17 @@ class CharacterEditorPage {
 		}
 
 		return levels;
+	}
+
+	getCurrentCantripCount(className) {
+		// Get current number of cantrips the character has
+		const characterData = this.levelUpState.characterData;
+		if (!characterData.spells || !characterData.spells.levels || !characterData.spells.levels["0"]) {
+			return 0;
+		}
+		
+		const cantrips = characterData.spells.levels["0"].spells || [];
+		return cantrips.length;
 	}
 
 	calculateSpellsKnown(casterClass) {
@@ -8385,6 +7979,28 @@ class CharacterEditorPage {
 			console.log('❌ Level Up button not found in DOM');
 		}
 
+		// Edit Spells button
+		const editSpellsBtn = document.getElementById('editSpellsCharacter');
+		if (editSpellsBtn) {
+			console.log('🎯 Setting up Edit Spells button listener');
+			editSpellsBtn.addEventListener('click', () => {
+				console.log('🔮 Edit Spells button clicked');
+				// Initialize spell manager if not already created
+				if (!this.spellManager) {
+					this.spellManager = new CharacterSpellManager();
+				}
+				// Get current character data from the editor
+				const characterData = JSON.parse(this.ace.getValue());
+				this.spellManager.openSpellManager(characterData, (selectedSpells) => {
+					console.log('Spells selected from Edit button:', selectedSpells);
+					// Apply selected spells to character
+					this.applySelectedSpellsFromManager(selectedSpells, characterData);
+				});
+			});
+		} else {
+			console.log('❌ Edit Spells button not found in DOM');
+		}
+
 		// Spell selection is now part of the level up process
 
 		// Set up listener for character updates from WebSocket/P2P sync
@@ -8435,8 +8051,14 @@ class CharacterEditorPage {
 
 		// Note: Source password management moved to sources.html page
 
+		// Flag to prevent recursive ACE editor updates
+		this._isUpdatingAceEditor = false;
+
 		// Watch for JSON changes to update source display and render preview
 		this.ace.session.on('change', () => {
+			// Prevent infinite loop from ace.setValue() calls
+			if (this._isUpdatingAceEditor) return;
+			
 			this.updateSourceDisplay();
 			this.debouncedRenderCharacter();
 		});
@@ -8466,11 +8088,19 @@ class CharacterEditorPage {
 
 			// Update the editor content if migration was performed
 			if (migrationPerformed) {
-				this.ace.setValue(JSON.stringify(characterData, null, 2), 1);
+				this._safeSetAceValue(JSON.stringify(characterData, null, 2), 1);
 			}
 
 			// Process the character data first to add computed fields
 			this._processCharacterData(characterData);
+
+			// Update spell slot progression whenever character is rendered
+			// This ensures spell slots are correct when leveling up or changing classes
+			if (characterData.spells && characterData.class) {
+				this.updateSpellSlotProgression(characterData);
+				// Update the JSON in the editor if spell slots changed
+				this._safeSetAceValue(JSON.stringify(characterData, null, 2), 1);
+			}
 
 			// Use the existing 5etools character rendering system
 			let renderedContent;
@@ -8674,7 +8304,7 @@ class CharacterEditorPage {
 			if (!characterData.source || characterData.source === 'MyCharacters' || characterData.source === 'ADD_YOUR_NAME_HERE') {
 				characterData.source = 'MyCharacters';
 				// Update the JSON in the editor to reflect the change
-				this.ace.setValue(JSON.stringify(characterData, null, 2));
+				this._safeSetAceValue(JSON.stringify(characterData, null, 2));
 			}
 
 			// Use CharacterManager for centralized permission checking
@@ -9343,21 +8973,10 @@ class CharacterEditorPage {
 		// Check for spell selection using data-driven detection
 		console.log(`🔍 LEVEL UP FLOW - Checking spell capability for ${classEntry.name} at level ${newLevel}`);
 
-		// Create character object for spell detection (include ALL classes for multiclassing)
-		const characterForSpellCheck = {
-			class: character.class || [classEntry], // Use full class array for multiclass detection
-			race: character.race,
-			// Include any existing spells to help with detection
-			spells: character.spells,
-			spell: character.spell
-		};
-
-		const spellResult = await this.canCharacterSelectSpells(characterForSpellCheck, newLevel);
-		const isSpellcaster = spellResult.canSelect;
-		console.log(`🎯 LEVEL UP FLOW - spell detection result:`, spellResult);
-		if (isSpellcaster) {
-			console.log(`📝 LEVEL UP FLOW - Reasons: ${spellResult.reasons.join(", ")}`);
-		}
+		// Check if this is a spellcasting class that should be offered spell selection
+		const spellcastingClasses = ['Wizard', 'Sorcerer', 'Cleric', 'Druid', 'Bard', 'Warlock', 'Paladin', 'Ranger'];
+		const isSpellcaster = spellcastingClasses.includes(classEntry.name);
+		console.log(`🎯 LEVEL UP FLOW - ${classEntry.name} ${isSpellcaster ? 'is' : 'is not'} a spellcasting class`);
 
 		if (isSpellcaster) {
 			// For spellcasters, show spell selection before other features
@@ -10846,7 +10465,7 @@ class CharacterEditorPage {
 				
 				// Try to open spell selection, but don't show alerts if it fails
 				try {
-					await this.openSpellSelectionModal(selectedClass);
+					await this.openSpellSelectionModal();
 				} catch (error) {
 					console.log('Spell selection not available or not needed, completing character creation');
 					// Complete character creation without spell selection
@@ -11330,17 +10949,6 @@ class CharacterEditorPage {
 				className: className,
 				isMulticlass: false
 			});
-
-			// Add skill selection as the second feature for first class
-			allFeatures.push({
-				type: 'skillSelection',
-				feature: {
-					name: 'Skill Proficiencies',
-					entries: [`Choose your skill proficiencies from the ${className} class list.`]
-				},
-				className: className,
-				isMulticlass: false
-			});
 		} else if (isMulticlassing) {
 			// For multiclassing, check if this class grants any limited proficiencies
 			const multiclassProfs = this.getMulticlassProficiencies(className, classInfo);
@@ -11368,7 +10976,40 @@ class CharacterEditorPage {
 			allFeatures.push(...level1Features);
 		}
 
-		// Process all features (ability scores + level 1 features)
+		// Check if this class can cast spells at level 1 and add spell selection
+		const spellcastingClasses = ['Wizard', 'Sorcerer', 'Cleric', 'Druid', 'Bard', 'Warlock'];
+		const isSpellcaster = spellcastingClasses.includes(className);
+		console.log(`🎯 NEW CLASS SPELL CHECK - ${className} ${isSpellcaster ? 'is' : 'is not'} a spellcasting class`);
+		
+		if (isSpellcaster) {
+			console.log(`✅ Adding spell selection for ${className} level 1`);
+			
+			// Initialize spells structure if it doesn't exist
+			if (!this.levelUpState.characterData.spells) {
+				console.log(`🔧 Initializing spells structure for new spellcaster`);
+				this.levelUpState.characterData.spells = {
+					levels: {},
+					spellcastingAbility: null,
+					dc: 8,
+					attackBonus: "+0"
+				};
+			}
+
+			// Add spell selection feature
+			allFeatures.push({
+				type: 'spells',
+				feature: {
+					name: 'Spell Selection',
+					entries: [`Choose spells for your ${className} spell list. At level 1, you can learn cantrips and 1st-level spells.`],
+					requiresChoice: true,
+					choiceType: 'spells'
+				},
+				className: className,
+				classLevel: 1
+			});
+		}
+
+		// Process all features (ability scores + level 1 features + spells if applicable)
 		if (allFeatures.length > 0) {
 			this.levelUpState.pendingFeatures = allFeatures;
 			this.levelUpState.currentFeatureIndex = 0;
@@ -11656,18 +11297,29 @@ class CharacterEditorPage {
 
 		if (isKnownSpellcaster || hasSpellcastingAbility) {
 			console.log(`✅ Adding spell selection feature for ${classInfo.name} at level ${newLevel}`);
-			// This is a spellcasting class, add spell selection feature
-			features.push({
-				type: 'spells',
-				feature: {
-					name: 'Spell Selection',
-					entries: [`Choose spells for your ${classInfo.name} spell list. You can learn new spells and replace existing ones.`],
-					requiresChoice: true,
-					choiceType: 'spells'
-				},
-				className: classInfo.name,
-				classLevel: newLevel
-			});
+			
+			// Check if we already have a spell selection feature to avoid duplicates
+			const existingSpellFeature = features.find(f => 
+				f.type === 'spells' || 
+				(f.choiceType === 'spells' && f.feature?.name?.toLowerCase().includes('spell selection'))
+			);
+			
+			if (!existingSpellFeature) {
+				// This is a spellcasting class, add spell selection feature
+				features.push({
+					type: 'spells',
+					feature: {
+						name: 'Spell Selection',
+						entries: [`Choose spells for your ${classInfo.name} spell list. You can learn new spells and replace existing ones.`],
+						requiresChoice: true,
+						choiceType: 'spells'
+					},
+					className: classInfo.name,
+					classLevel: newLevel
+				});
+			} else {
+				console.log(`⚠️ Spell selection feature already exists, skipping duplicate`);
+			}
 		} else {
 			console.log(`❌ No spell selection for ${classInfo.name} - not detected as spellcaster`);
 		}
@@ -11788,16 +11440,23 @@ class CharacterEditorPage {
 					enhancedFeature.choiceType = 'metamagic';
 				} else if (entriesText.includes('draconic ancestry') || entriesText.includes('dragon ancestry')) {
 					enhancedFeature.choiceType = 'dragonbornAncestry';
-				} else if (entriesText.includes('spell') && (entriesText.includes('learn') || entriesText.includes('know'))) {
-					enhancedFeature.choiceType = 'spells';
+				} else if ((entriesText.includes('spell') && (entriesText.includes('learn') || entriesText.includes('know'))) ||
+						   (entriesText.includes('cantrip') && entriesText.includes('learn'))) {
+					// Only mark as spell choice if it's actually about learning/knowing spells, not just mentioning them
+					// Exclude features that are about spell recovery, spell slots, etc.
+					if (!entriesText.includes('recover') && !entriesText.includes('regain') && 
+						!entriesText.includes('slot') && !entriesText.includes('rest') &&
+						!feature.name.toLowerCase().includes('recovery') &&
+						!feature.name.toLowerCase().includes('ritual casting') &&
+						!feature.name.toLowerCase().includes('spellcasting focus')) {
+						enhancedFeature.choiceType = 'spells';
+					}
 				} else if (entriesText.includes('expertise') || (entriesText.includes('proficiency bonus') && entriesText.includes('double'))) {
 					enhancedFeature.choiceType = 'expertise';
 				} else if (entriesText.includes('invocation')) {
 					enhancedFeature.choiceType = 'invocation';
 				} else if (entriesText.includes('pact boon')) {
 					enhancedFeature.choiceType = 'pactBoon';
-				} else if (entriesText.includes('cantrip') && entriesText.includes('learn')) {
-					enhancedFeature.choiceType = 'spells';
 				}
 			}
 		}
@@ -12006,9 +11665,6 @@ class CharacterEditorPage {
 		if (feature.type === 'abilityScores') {
 			// Handle ability score assignment for level 0 characters
 			await this.showAbilityScoreAssignmentModal(feature.className);
-		} else if (feature.type === 'skillSelection') {
-			// Handle class skill selection for first class
-			await this.showClassSkillSelectionForLevelUp(feature.className);
 		} else if (feature.type === 'multiclassSkillSelection') {
 			// Handle multiclass skill selection
 			await this.showMulticlassSkillSelectionForLevelUp(feature.className, feature.multiclassOptions);
@@ -12053,7 +11709,7 @@ class CharacterEditorPage {
 		} else if (feature.choiceType === 'pactBoon' || featureName.includes('pact boon')) {
 			this.showPactBoonChoiceModal(feature, featureData);
 		} else if (featureName.includes('cantrip') && featureName.includes('learn')) {
-			this.showFeatureSpellChoiceModal(feature, featureData);
+			this.showSpellChoiceModal(feature, featureData);
 		} else {
 			// Use the enhanced class feature choice system for features that require choices
 			if (feature.requiresChoice || featureData.requiresChoice) {
@@ -13006,63 +12662,6 @@ class CharacterEditorPage {
 		$modalFooter.append($btnCancel).append($btnConfirm);
 	}
 
-	showManeuverChoiceModal(feature, featureData) {
-		// This would show available Battle Master maneuvers
-		// For now, just show a generic choice modal
-		this.showGenericFeatureChoiceModal(featureData);
-	}
-
-	showEldritchInvocationChoiceModal(feature, featureData) {
-		// This would show available Warlock invocations
-		// For now, just show a generic choice modal
-		this.showGenericFeatureChoiceModal(featureData);
-	}
-
-	showPactBoonChoiceModal(feature, featureData) {
-		// This would show Warlock pact boon choices
-		// For now, just show a generic choice modal
-		this.showGenericFeatureChoiceModal(featureData);
-	}
-
-	showFeatureSpellChoiceModal(feature, featureData) {
-		// This would show spell choices for features that grant spells
-		// For now, just show a generic choice modal
-		this.showGenericFeatureChoiceModal(featureData);
-	}
-
-	showGenericFeatureChoiceModal(feature, featureData) {
-		// Generic modal for features that have choices but aren't specifically implemented yet
-		const modalContent = `
-			<p class="mb-3"><strong>Current Level:</strong> ${this.levelUpState.currentLevel}</p>
-			<p class="mb-3"><strong>New Level:</strong> ${this.levelUpState.newLevel}</p>
-			<h6>Feature Choice Required</h6>
-			<p class="text-muted mb-3">This feature requires choices that are not yet fully implemented in the UI.</p>
-			<div class="alert alert-info">
-				<strong>Feature:</strong> ${featureData.feature.name}<br>
-				<strong>Action Required:</strong> Please manually add your choices to the character after creation.
-			</div>
-		`;
-
-	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-		title: "Feature Choice - Manual Selection Required",
-		hasFooter: true,
-		isPermanent: true
-	});
-
-		this.levelUpModalClose = doClose;
-		$modalInner.html(modalContent);
-
-		const $btnContinue = $(`<button class="ve-btn ve-btn-primary">Continue</button>`)
-			.click(() => {
-				// Just continue without storing specific choices
-				this.levelUpState.currentFeatureIndex++;
-				doClose(true);
-				this.showNextFeatureChoice();
-			});
-
-		$modalFooter.append($btnContinue);
-	}
-
 	showGenericRacialChoiceModal(feature, raceData) {
 		// Generic modal for racial choices
 		this.showGenericFeatureChoiceModal(feature, { feature: { name: "Racial Feature Choice" } });
@@ -13074,751 +12673,83 @@ class CharacterEditorPage {
 	}
 
 	async showSpellChoiceModal(feature, featureData) {
-		console.log('=== SPELL CHOICE MODAL CALLED ===');
+		console.log('=== SPELL CHOICE MODAL CALLED - DELEGATING TO SPELL MANAGER ===');
 		console.log('Feature:', feature);
 		console.log('FeatureData:', featureData);
-		console.log('Level up state:', this.levelUpState);
 
-		// Show spell selection modal for spellcasting features
+		// Early exit for non-spell-selection features that were misrouted here
+		const featureName = feature?.name?.toLowerCase() || '';
+		if (featureName.includes('recovery') || featureName.includes('ritual') || 
+			featureName.includes('focus') || featureName === 'spellcasting') {
+			console.log('⚠️ Non-spell-selection feature routed to spell modal, skipping:', featureName);
+			// Continue to next feature instead of showing spell selection
+			this.levelUpState.currentFeatureIndex++;
+			await this.showNextFeatureChoice();
+			return;
+		}
+
+		// Get current character data
 		const character = this.levelUpState.characterData;
-		const classes = character.class || [];
 
-		// Get current character data from editor to access known spells
-		const editorText = this.ace.getValue();
-		const currentCharacterData = JSON.parse(editorText);
-		const currentSpells = currentCharacterData.spells?.levels || {};
-
-		// Determine what spells to offer based on class/subclass
-		let spellList = 'wizard'; // Default to wizard spells
-		let schoolRestrictions = [];
-		let cantripsToLearn = 0;
-		let spellsToLearn = 0;
-
-		// Check if this is an Eldritch Knight
-		const hasEldritchKnight = classes.some(cls =>
-			cls.subclass && cls.subclass.name === 'Eldritch Knight'
-		);
-
-		if (hasEldritchKnight) {
-			spellList = 'wizard';
-			schoolRestrictions = ['A', 'V']; // Abjuration and Evocation
-
-			// Eldritch Knight spell progression based on Fighter level
-			const fighterLevel = this.levelUpState.newLevel;
-			if (fighterLevel === 3) {
-				cantripsToLearn = 2;
-				spellsToLearn = 3;
-			} else if (fighterLevel === 4) {
-				spellsToLearn = 1;
-			} else if (fighterLevel === 7) {
-				spellsToLearn = 1;
-			} else if (fighterLevel === 8) {
-				spellsToLearn = 1;
-			} else if (fighterLevel === 10) {
-				cantripsToLearn = 1;
-				spellsToLearn = 1;
-			} else if (fighterLevel === 11) {
-				spellsToLearn = 1;
-			} else if (fighterLevel === 13) {
-				spellsToLearn = 1;
-			} else if (fighterLevel === 14) {
-				spellsToLearn = 1;
-			} else if (fighterLevel === 16) {
-				spellsToLearn = 1;
-			} else if (fighterLevel === 19) {
-				spellsToLearn = 1;
-			} else if (fighterLevel === 20) {
-				spellsToLearn = 1;
-			}
-		} else {
-			// Handle primary spellcasting classes
-			const primaryClass = (classes[0] && classes[0].name) ? classes[0].name : null;
-
-			// Load class data to get proper spell progression
-			try {
-				const classData = await this.loadClassData(primaryClass);
-				if (classData && classData.class && classData.class[0]) {
-					const classInfo = classData.class[0];
-					const level = this.levelUpState.newLevel;
-
-					// Set spell list
-					spellList = primaryClass.toLowerCase();
-
-					// Calculate cantrips progression
-					if (classInfo.cantripProgression && level <= classInfo.cantripProgression.length) {
-						const currentCantrips = classInfo.cantripProgression[level - 1] || 0;
-						const previousCantrips = level > 1 ? (classInfo.cantripProgression[level - 2] || 0) : 0;
-						cantripsToLearn = Math.max(0, currentCantrips - previousCantrips);
-					}
-
-					// Calculate spells progression
-					if (classInfo.spellsKnownProgressionFixed && level <= classInfo.spellsKnownProgressionFixed.length) {
-						const currentSpells = classInfo.spellsKnownProgressionFixed[level - 1] || 0;
-						const previousSpells = level > 1 ? (classInfo.spellsKnownProgressionFixed[level - 2] || 0) : 0;
-						spellsToLearn = Math.max(0, currentSpells - previousSpells);
-					} else if (classInfo.preparedSpells) {
-						// For prepared spell casters like Cleric, Druid, Wizard at level 1
-						if (level === 1) {
-							if (primaryClass === 'Wizard') {
-								spellsToLearn = 6; // Wizards start with 6 spells in spellbook
-							} else {
-								spellsToLearn = 2; // Base preparation for other prepared casters
-							}
-						} else if (primaryClass === 'Wizard' && level > 1) {
-							// Wizards learn 2 spells per level from leveling up
-							spellsToLearn = 2;
-						}
-					}
-
-					// Handle half-casters that start spellcasting at level 2
-					if ((primaryClass === 'Paladin' || primaryClass === 'Ranger') && level === 2) {
-						if (classInfo.spellsKnownProgressionFixed) {
-							spellsToLearn = classInfo.spellsKnownProgressionFixed[1] || 2; // Level 2 index
-						} else {
-							spellsToLearn = 2; // Default for half-casters starting
-						}
-					}
-				} else {
-					// Fallback for classes without data
-					spellList = primaryClass ? primaryClass.toLowerCase() : 'wizard';
-
-					if (primaryClass === 'Wizard' && this.levelUpState.newLevel === 1) {
-						cantripsToLearn = 3;
-						spellsToLearn = 6;
-					} else if ((primaryClass === 'Sorcerer' || primaryClass === 'Bard') && this.levelUpState.newLevel === 1) {
-						cantripsToLearn = 4;
-						spellsToLearn = 2;
-					} else if (primaryClass === 'Warlock' && this.levelUpState.newLevel === 1) {
-						cantripsToLearn = 2;
-						spellsToLearn = 2;
-					}
-				}
-			} catch (error) {
-				console.error('Error loading class data for spell progression:', error);
-				// Use old hardcoded fallback
-				spellList = primaryClass ? primaryClass.toLowerCase() : 'wizard';
-				if (this.levelUpState.newLevel === 1) {
-					cantripsToLearn = 2;
-					spellsToLearn = 2;
-				}
-			}
+		// Initialize spell manager if not already created
+		if (!this.spellManager) {
+			this.spellManager = new CharacterSpellManager();
 		}
 
-		// Gather available spells based on the SPELLCASTING class, not primary class
-		const spellcastingClass = featureData?.className || (classes[0] && classes[0].name) ? classes[0].name : null;
-		const spellcastingClassEntry = classes.find(c => c.name === spellcastingClass);
-		const spellcastingSubclass = (spellcastingClassEntry && spellcastingClassEntry.subclass && spellcastingClassEntry.subclass.name) ? spellcastingClassEntry.subclass.name : null;
-
-		// Determine max spell level based on the spellcasting class level, not total character level
-		const spellcastingClassLevel = spellcastingClassEntry ? spellcastingClassEntry.level : 1;
-		const maxSpellLevel = this.getMaxSpellLevelForCharacterLevel(spellcastingClassLevel, spellcastingClass);
-
-		// Fix spell list for Arcane Trickster
-		if (spellcastingClass === "Rogue" && spellcastingSubclass === "Arcane Trickster") {
-			spellList = "wizard"; // Arcane Tricksters use wizard spell list
-			schoolRestrictions = ["enchantment", "illusion"]; // Mainly enchantment and illusion
-		}
-
-		// Fix spell counts for Arcane Trickster at level 3
-		if (spellcastingClass === "Rogue" && spellcastingSubclass === "Arcane Trickster" && spellcastingClassLevel === 3) {
-			cantripsToLearn = 3; // 3 cantrips at level 3
-			spellsToLearn = 3;   // 3 1st-level spells at level 3
-		}
-
-		console.log("🔍 Spell Selection Debug:");
-		console.log("- Spellcasting Class:", spellcastingClass);
-		console.log("- Spellcasting Class Level:", spellcastingClassLevel);
-		console.log("- Subclass:", spellcastingSubclass);
-		console.log("- Character Level:", this.levelUpState.newLevel);
-		console.log("- Max Spell Level:", maxSpellLevel);
-		console.log("- Cantrips to Learn:", cantripsToLearn);
-		console.log("- Spells to Learn:", spellsToLearn);
-		console.log("- Spell List:", spellList);
-		console.log("- School Restrictions:", schoolRestrictions);
-
-		// Fix: Ensure level 1 spellcasters always get spells to learn if they have access to level 1 spells
-		if (this.levelUpState.newLevel === 1 && maxSpellLevel >= 1 && spellsToLearn === 0) {
-			console.log("🔧 FIXING: Level 1 character should be able to select spells but spellsToLearn is 0");
-			const fullCasters = ["Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard"];
-			const halfCasters = ["Paladin", "Ranger"];
+		// Use spell manager with level-up integration callback
+		this.spellManager.openSpellManager(character, (selectedSpells) => {
+			console.log('Spell selection completed during level up, selected spells:', selectedSpells);
 			
-			if (fullCasters.includes(spellcastingClass)) {
-				if (spellcastingClass === "Wizard") {
-					spellsToLearn = 6; // Wizards start with 6 spells in spellbook
-				} else {
-					spellsToLearn = 2; // Other full casters typically start with 2 spells known
-				}
-				console.log(`🔧 FIXED: Set spellsToLearn to ${spellsToLearn} for ${spellcastingClass}`);
-			} else if (halfCasters.includes(spellcastingClass)) {
-				// Half-casters (Paladin, Ranger) get access to spells at level 1
-				if (spellcastingClass === "Paladin") {
-					// Paladins prepare spells = Cha mod + half paladin level (minimum 1)
-					// For level 1, let's assume at least 1-2 spells they can prepare
-					spellsToLearn = 2; 
-				} else if (spellcastingClass === "Ranger") {
-					spellsToLearn = 2; // Rangers know specific spells
-				}
-				console.log(`🔧 FIXED: Set spellsToLearn to ${spellsToLearn} for half-caster ${spellcastingClass}`);
-			}
-		}
-
-		// Fix: Ensure wizards at any level > 1 get spells to learn
-		if (spellcastingClass === 'Wizard' && this.levelUpState.newLevel > 1 && spellsToLearn === 0) {
-			console.log("🔧 FIXING: Wizard above level 1 should learn 2 spells per level");
-			spellsToLearn = 2;
-			console.log(`🔧 FIXED: Set spellsToLearn to ${spellsToLearn} for ${spellcastingClass} level ${this.levelUpState.newLevel}`);
-		}
-
-		// Fetch lists of available spells for the expected spell list (e.g. wizard)
-		const availableSpellsByLevel = {};
-		try {
-			const spellListClass = spellList; // e.g. 'wizard'
-
-			// Determine starting spell level - some classes don't get cantrips
-			const classesWithoutCantrips = ["Paladin", "Ranger"];
-			const startLevel = classesWithoutCantrips.includes(spellcastingClass) ? 1 : 0;
-
-			// For cantrips (if applicable) and all available spell levels, pre-fetch lists
-			for (let lvl = startLevel; lvl <= maxSpellLevel; lvl++) {
-				availableSpellsByLevel[lvl] = await this.pGetAvailableSpellsForClass(spellListClass, spellcastingClass, spellcastingSubclass, lvl, schoolRestrictions, character);
-			}
-		} catch (e) {
-			// If fetching fails, fall back to simplified behaviour
-			console.warn('Could not load spell lists for modal:', e);
-		}
-
-		console.log("📚 Available Spells by Level:");
-		for (let lvl = 0; lvl <= maxSpellLevel; lvl++) {
-			const spells = availableSpellsByLevel[lvl] || [];
-			console.log(`- Level ${lvl}: ${spells.length} spells available`);
-		}
-
-		// Helper functions for spell formatting (since PageFilterSpells might not be available)
-		const formatSpellTime = (timeObj) => {
-			if (!timeObj) return "—";
-			const unit = timeObj.unit || "";
-			const number = timeObj.number || 1;
-
-			// Handle special cases
-			if (unit === "action") return "Action";
-			if (unit === "bonus") return "Bonus";
-			if (unit === "reaction") return "Reaction";
-			if (unit === "minute" && number === 1) return "1 Min";
-			if (unit === "hour" && number === 1) return "1 Hr";
-
-			return `${number} ${unit}${number > 1 ? 's' : ''}`;
-		};
-
-		const formatSpellLevel = (spell) => {
-			if (!spell) return "—";
-			const level = spell.level || 0;
-			if (level === 0) return "Cantrip";
-
-			let levelStr = "";
-			if (level === 1) levelStr = "1st";
-			else if (level === 2) levelStr = "2nd";
-			else if (level === 3) levelStr = "3rd";
-			else levelStr = `${level}th`;
-
-			// Add ritual indicator
-			if (spell.meta && spell.meta.ritual) levelStr += " (rit.)";
-
-			return levelStr;
-		};
-
-		// Track pre-selected spells to enforce limits
-		const preSelectedCantrips = new Set();
-		const preSelectedSpells = new Set();
-
-		// Helper function to determine if a spell should be pre-selected
-		const shouldPreSelectSpell = (spell, isCantrip, spellLevel = null) => {
-			const actualSpellLevel = isCantrip ? 0 : (spellLevel || spell.level || 1);
-			const isCurrentlyKnown = currentSpells[actualSpellLevel]?.spells?.includes(spell.name) || false;
-
-			if (!isCurrentlyKnown) return false;
-
-			// For spell swapping mode (no new spells to learn), pre-select existing spells
-			if (cantripsToLearn === 0 && spellsToLearn === 0) return true;
-
-			// For normal level up, respect slot limits
-			if (isCantrip) {
-				if (preSelectedCantrips.size < cantripsToLearn) {
-					preSelectedCantrips.add(spell.name);
-					return true;
-				}
-			} else {
-				if (preSelectedSpells.size < spellsToLearn) {
-					preSelectedSpells.add(spell.name);
-					return true;
-				}
-			}
-			return false;
-		};
-
-		// Helper function to build spell list item like spells page
-		const buildSpellListItem = (spell, isCantrip, spellLevel = null) => {
-			const school = Parser.spSchoolAndSubschoolsAbvsShort ?
-				Parser.spSchoolAndSubschoolsAbvsShort(spell.school, spell.subschools) :
-				(spell.school || "—");
-			const time = formatSpellTime(spell.time?.[0]);
-			const concentration = spell._isConc ? "×" : "";
-			const range = Parser.spRangeToFull ?
-				Parser.spRangeToFull(spell.range, {isDisplaySelfArea: true}) :
-				(spell.range?.distance?.amount ? `${spell.range.distance.amount} ${spell.range.distance.type}` : "—");
-			const levelText = formatSpellLevel(spell);
-			const checkboxClass = isCantrip ? 'cantrip-checkbox' : 'spell-checkbox';
-			const actualSpellLevel = isCantrip ? 0 : (spellLevel || spell.level || 1);
-
-			// Use smart pre-selection that respects slot limits
-			const checkedAttr = shouldPreSelectSpell(spell, isCantrip, spellLevel) ? 'checked' : '';
-
-			// Get school style safely
-			const schoolStyle = Parser.spSchoolAbvToStylePart ?
-				Parser.spSchoolAbvToStylePart(spell.school) : "";
-			const schoolTitle = Parser.spSchoolAndSubschoolsAbvsToFull ?
-				Parser.spSchoolAndSubschoolsAbvsToFull(spell.school, spell.subschools) :
-				school;
-
-			// Create spell hash for hover functionality
-			const spellHash = `${spell.name.toLowerCase().replace(/[^a-z0-9]/g, '')}|${spell.source}`;
-
-			return `
-				<div class="lst__row lst__row--sublist lst__row-border lst__row-inner clickable" data-spell-name="${spell.name}">
-					<span class="ve-col-0-5 px-1 ve-text-center">
-						<input type="checkbox" class="${checkboxClass}" value="${spell.name}" data-spell-level="${actualSpellLevel}" ${checkedAttr}>
-					</span>
-					<span class="bold ve-col-2-4 pl-0 pr-1 spell-name-hover" data-spell-hash="${spellHash}" data-spell-source="${spell.source}">${spell.name}</span>
-					<span class="ve-col-1-5 px-1 ve-text-center">${levelText}</span>
-					<span class="ve-col-1-7 px-1 ve-text-center">${time}</span>
-					<span class="ve-col-1-2 px-1 sp__school-${spell.school} ve-text-center"
-						  title="${schoolTitle}"
-						  style="${schoolStyle}">${school}</span>
-					<span class="ve-col-0-6 px-1 ve-text-center" title="Concentration">${concentration}</span>
-					<span class="ve-col-2-4 px-1 ve-text-right">${range}</span>
-				</div>
-			`;
-		};
-
-		// Build spell lists dynamically using 5etools styling
-		let modalContent = `
-			<div class="mb-4 p-3 ve-flex-col">
-				<h5 class="mb-2">${spellcastingClass} Spell Selection</h5>
-				<p class="mb-1"><strong>Level:</strong> ${this.levelUpState.currentLevel} → <strong>${this.levelUpState.newLevel}</strong></p>
-				<p class="mb-0"><strong>Spell List:</strong> ${spellList} • <strong>Max Spell Level:</strong> ${this.getMaxSpellLevelForCharacterLevel(spellcastingClassLevel, spellcastingClass)}</p>
-			</div>
-		`;
-
-		// Add cantrips section if needed
-		if (cantripsToLearn > 0) {
-			const cantrips = availableSpellsByLevel[0] || [];
-			modalContent += `
-				<div class="mb-4 p-3 border rounded" >
-					<div class="ve-flex-v-center mb-3">
-						<h5 class="mr-auto mb-0 text-success"><i class="fa fa-magic" aria-hidden="true"></i> Cantrips - Choose ${cantripsToLearn}</h5>
-						<div class="badge badge-success badge-pill px-3 py-2">
-							<span class="cantrip-count">0</span>/${cantripsToLearn} Selected
-						</div>
-					</div>
-
-					<!-- Header row matching spells page -->
-					<div class="lst__row lst__row--sublist-header">
-						<span class="ve-col-0-5 px-1"></span>
-						<span class="bold ve-col-2-4 pl-0 pr-1">Name</span>
-						<span class="ve-col-1-5 px-1 ve-text-center">Level</span>
-						<span class="ve-col-1-7 px-1 ve-text-center">Time</span>
-						<span class="ve-col-1-2 px-1 ve-text-center">School</span>
-						<span class="ve-col-0-6 px-1 ve-text-center" title="Concentration">C.</span>
-						<span class="ve-col-2-4 px-1 ve-text-right">Range</span>
-					</div>
-
-					<div class="lst__wrp-rows">
-						${cantrips.map(spell => buildSpellListItem(spell, true)).join('')}
-					</div>
-				</div>
-			`;
-		}
-
-		// Add spell sections for available spell levels
-		if (spellsToLearn > 0) {
-
-			// Show spells for levels 1 through maxSpellLevel
-			for (let spellLevel = 1; spellLevel <= maxSpellLevel; spellLevel++) {
-				const spellsAtLevel = availableSpellsByLevel[spellLevel] || [];
-				if (spellsAtLevel.length > 0) {
-					const levelName = spellLevel === 1 ? '1st' : spellLevel === 2 ? '2nd' : spellLevel === 3 ? '3rd' : `${spellLevel}th`;
-					modalContent += `
-						<div class="mb-4 p-3 border rounded" >
-							<div class="ve-flex-v-center mb-3">
-								<h5 class="mr-auto mb-0 text-primary"><i class="fa fa-star" aria-hidden="true"></i> ${levelName} Level Spells</h5>
-								<div class="badge badge-primary badge-pill px-3 py-2">
-									${spellsAtLevel.length} Available
-								</div>
-							</div>
-
-							<!-- Header row matching spells page -->
-							<div class="lst__row lst__row--sublist-header">
-								<span class="ve-col-0-5 px-1"></span>
-								<span class="bold ve-col-2-4 pl-0 pr-1">Name</span>
-								<span class="ve-col-1-5 px-1 ve-text-center">Level</span>
-								<span class="ve-col-1-7 px-1 ve-text-center">Time</span>
-								<span class="ve-col-1-2 px-1 ve-text-center">School</span>
-								<span class="ve-col-0-6 px-1 ve-text-center" title="Concentration">C.</span>
-								<span class="ve-col-2-4 px-1 ve-text-right">Range</span>
-							</div>
-
-							<div class="lst__wrp-rows">
-								${spellsAtLevel.map(spell => buildSpellListItem(spell, false, spellLevel)).join('')}
-							</div>
-						</div>
-					`;
-				}
-			}
-
-			// Add selection counter info
-			modalContent += `
-				<div class="alert alert-info">
-					<div class="ve-flex-v-center">
-						<div class="mr-auto">
-							<h6 class="mb-1"><i class="fa fa-info-circle" aria-hidden="true"></i> Spell Selection Instructions</h6>
-							<p class="mb-0">Select <strong>${spellsToLearn} spell${spellsToLearn > 1 ? 's' : ''}</strong> from any available level above.</p>
-						</div>
-						<div class="badge badge-info badge-pill px-3 py-2">
-							<span class="spell-count">0</span>/${spellsToLearn} Selected
-						</div>
-					</div>
-				</div>
-			`;
-		}
-
-		if (cantripsToLearn === 0 && spellsToLearn === 0) {
-			modalContent += `
-				<div class="alert alert-warning">
-					<div class="ve-flex-v-center">
-						<div class="mr-auto">
-							<h6 class="mb-1"><i class="fa fa-exchange-alt" aria-hidden="true"></i> Spell Management</h6>
-							<p class="mb-0">No new spells gained this level, but you can <strong>replace existing spells</strong> with others of the same level or lower.</p>
-						</div>
-					</div>
-				</div>
-			`;
-
-			// Always show available spells for replacement, even if no new spells are gained
-			// First show cantrips for swapping
-			const cantrips = availableSpellsByLevel[0] || [];
-			if (cantrips.length > 0) {
-				modalContent += `
-					<div class="mb-4 p-3 border rounded" >
-						<div class="ve-flex-v-center mb-3">
-							<h5 class="mr-auto mb-0 text-secondary"><i class="fa fa-magic" aria-hidden="true"></i> Cantrips</h5>
-							<div class="badge badge-secondary badge-pill px-3 py-2">
-								${cantrips.length} Available for Replacement
-							</div>
-						</div>
-
-						<!-- Header row matching spells page -->
-						<div class="lst__row lst__row--sublist-header">
-							<span class="ve-col-0-5 px-1"></span>
-							<span class="bold ve-col-2-4 pl-0 pr-1">Name</span>
-							<span class="ve-col-1-5 px-1 ve-text-center">Level</span>
-							<span class="ve-col-1-7 px-1 ve-text-center">Time</span>
-							<span class="ve-col-1-2 px-1 ve-text-center">School</span>
-							<span class="ve-col-0-6 px-1 ve-text-center" title="Concentration">C.</span>
-							<span class="ve-col-2-4 px-1 ve-text-right">Range</span>
-						</div>
-
-						<div class="lst__wrp-rows">
-							${cantrips.map(spell => buildSpellListItem(spell, true)).join('')}
-						</div>
-					</div>
-				`;
-			}
-
-			// Then show spells for swapping
-			for (let spellLevel = 1; spellLevel <= this.getMaxSpellLevelForCharacterLevel(spellcastingClassLevel, spellcastingClass); spellLevel++) {
-				const spellsAtLevel = availableSpellsByLevel[spellLevel] || [];
-				if (spellsAtLevel.length > 0) {
-					const levelName = spellLevel === 1 ? '1st' : spellLevel === 2 ? '2nd' : spellLevel === 3 ? '3rd' : `${spellLevel}th`;
-					modalContent += `
-						<div class="mb-4 p-3 border rounded" >
-							<div class="ve-flex-v-center mb-3">
-								<h5 class="mr-auto mb-0 text-secondary"><i class="fa fa-star" aria-hidden="true"></i> ${levelName} Level Spells</h5>
-								<div class="badge badge-secondary badge-pill px-3 py-2">
-									${spellsAtLevel.length} Available for Replacement
-								</div>
-							</div>
-
-							<!-- Header row matching spells page -->
-							<div class="lst__row lst__row--sublist-header">
-								<span class="ve-col-0-5 px-1"></span>
-								<span class="bold ve-col-2-4 pl-0 pr-1">Name</span>
-								<span class="ve-col-1-5 px-1 ve-text-center">Level</span>
-								<span class="ve-col-1-7 px-1 ve-text-center">Time</span>
-								<span class="ve-col-1-2 px-1 ve-text-center">School</span>
-								<span class="ve-col-0-6 px-1 ve-text-center" title="Concentration">C.</span>
-								<span class="ve-col-2-4 px-1 ve-text-right">Range</span>
-							</div>
-
-							<div class="lst__wrp-rows">
-								${spellsAtLevel.map(spell => buildSpellListItem(spell, false, spellLevel)).join('')}
-							</div>
-						</div>
-					`;
-				}
-			}
-		}
-
-	// Create 5etools native modal with lower z-index to allow tooltips to appear above
-	const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-		title: "Level Up Character - Spell Selection",
-		hasFooter: true,
-		isWidth100: true,
-		isUncappedHeight: true,
-		isHeaderBorder: true,
-		isMinHeight0: true,
-		zIndex: 999,
-		isPermanent: true
-	});
-
-		// Store modal close function
-		this.levelUpModalClose = doClose;
-
-		// Add content to modal
-		$modalInner.html(modalContent);
-
-		// Note: Spell hover functionality is now handled automatically by the 5etools renderer
-
-		// Create footer buttons with enhanced styling
-		const $btnCancel = $(`<button class="ve-btn ve-btn-default ve-btn-lg mr-3" style="min-width: 120px;">
-			<i class="fa fa-times" aria-hidden="true"></i> Cancel
-		</button>`)
-			.click(() => doClose(false));
-
-		const hasNewSpells = cantripsToLearn > 0 || spellsToLearn > 0;
-		const buttonText = hasNewSpells ? "Confirm Spell Selection" : "Confirm Spell Changes";
-		const $btnConfirm = $(`<button class="ve-btn ve-btn-success ve-btn-lg" style="min-width: 180px;" ${hasNewSpells ? 'disabled' : ''}>
-			<i class="fa fa-check" aria-hidden="true"></i> ${buttonText}
-		</button>`)
-			.click(() => {
-				// Collect spell selections from checkboxes by their actual spell levels
-				const spellSelections = {};
-
-				// Collect selected cantrips (level 0)
-				$modalInner.find('.cantrip-checkbox:checked').each((i, el) => {
-					if (!spellSelections['0']) spellSelections['0'] = [];
-					spellSelections['0'].push($(el).val());
-				});
-
-				// Collect selected spells by their actual levels
-				$modalInner.find('.spell-checkbox:checked').each((i, el) => {
-					const $checkbox = $(el);
-					const spellLevel = $checkbox.data('spell-level') || '1';
-					if (!spellSelections[spellLevel]) spellSelections[spellLevel] = [];
-					spellSelections[spellLevel].push($checkbox.val());
-				});
-
-				// For backward compatibility, also populate the old format
-				const legacySpellSelections = {
-					cantrips: spellSelections['0'] || [],
-					spells: []
-				};
-				// Flatten all non-cantrip spells into the generic 'spells' array for legacy code
-				Object.keys(spellSelections).forEach(level => {
-					if (level !== '0') {
-						legacySpellSelections.spells.push(...spellSelections[level]);
-					}
-				});
-
-				// Validate selection counts using legacy format for compatibility
-				const cantripsSelected = legacySpellSelections.cantrips.length;
-				const spellsSelected = legacySpellSelections.spells.length;
-
-				if (cantripsToLearn > 0 && cantripsSelected !== cantripsToLearn) {
-					alert(`Please select exactly ${cantripsToLearn} cantrip${cantripsToLearn > 1 ? 's' : ''}. You have selected ${cantripsSelected}.`);
-					return;
-				}
-
-				if (spellsToLearn > 0 && spellsSelected !== spellsToLearn) {
-					alert(`Please select exactly ${spellsToLearn} spell${spellsToLearn > 1 ? 's' : ''}. You have selected ${spellsSelected}.`);
-					return;
-				}
-
-				// Store the spell choices
-				this.levelUpState.choices.push({
-					type: 'spells',
-					feature: feature,
-					selections: spellSelections,
-					spellList: spellList,
-					schoolRestrictions: schoolRestrictions
-				});
-
-				// Continue to next feature
-				this.levelUpState.currentFeatureIndex++;
-				doClose(true);
-				this.showNextFeatureChoice();
+			// Store the spell choices for level up processing
+			this.levelUpState.choices.push({
+				type: 'spells',
+				feature: feature,
+				selections: selectedSpells,
+				spellList: 'any', // Allow any spells for flexibility
+				schoolRestrictions: [] // No restrictions for special campaigns
 			});
 
-		$modalFooter.append($btnCancel, $btnConfirm);
-
-		// Add spell row interaction (clicking row toggles checkbox)
-		$modalInner.find('.lst__row.clickable').on('click', function(e) {
-			if (e.target.type === 'checkbox') return; // Don't double-toggle
-			const $checkbox = $(this).find('input[type="checkbox"]');
-			if (!$checkbox.prop('disabled')) {
-				$checkbox.prop('checked', !$checkbox.prop('checked')).trigger('change');
-			}
+			// Continue to next feature in level up flow
+			this.levelUpState.currentFeatureIndex++;
+			this.showNextFeatureChoice();
 		});
-
-		// Add checkbox interaction logic
-		const updateCounters = () => {
-			const cantripCount = $modalInner.find('.cantrip-checkbox:checked').length;
-			const spellCount = $modalInner.find('.spell-checkbox:checked').length;
-
-			$modalInner.find('.cantrip-count').text(cantripCount);
-			$modalInner.find('.spell-count').text(spellCount);
-
-			// Handle cantrip limits - allow deselection and reselection up to the limit
-			if (cantripsToLearn > 0) {
-				if (cantripCount >= cantripsToLearn) {
-					// At limit: disable only unchecked checkboxes, allow deselecting checked ones
-					$modalInner.find('.cantrip-checkbox:not(:checked)').prop('disabled', true);
-					$modalInner.find('.cantrip-checkbox:not(:checked)').closest('.lst__row').addClass('lst__row--disabled');
-					$modalInner.find('.cantrip-checkbox:checked').prop('disabled', false);
-				} else {
-					// Under limit: enable all cantrip checkboxes
-					$modalInner.find('.cantrip-checkbox').prop('disabled', false);
-					$modalInner.find('.cantrip-checkbox').closest('.lst__row').removeClass('lst__row--disabled');
-				}
-			}
-
-			// Handle spell limits - allow deselection and reselection up to the limit
-			if (spellsToLearn > 0) {
-				if (spellCount >= spellsToLearn) {
-					// At limit: disable only unchecked checkboxes, allow deselecting checked ones
-					$modalInner.find('.spell-checkbox:not(:checked)').prop('disabled', true);
-					$modalInner.find('.spell-checkbox:not(:checked)').closest('.lst__row').addClass('lst__row--disabled');
-					$modalInner.find('.spell-checkbox:checked').prop('disabled', false);
-				} else {
-					// Under limit: enable all spell checkboxes
-					$modalInner.find('.spell-checkbox').prop('disabled', false);
-					$modalInner.find('.spell-checkbox').closest('.lst__row').removeClass('lst__row--disabled');
-				}
-			}
-
-			// For spell swapping mode (no new spells), always enable all checkboxes
-			if (cantripsToLearn === 0 && spellsToLearn === 0) {
-				$modalInner.find('.cantrip-checkbox, .spell-checkbox').prop('disabled', false);
-				$modalInner.find('.lst__row').removeClass('lst__row--disabled');
-			}
-
-			// Highlight selected rows
-			$modalInner.find('.cantrip-checkbox:checked, .spell-checkbox:checked').closest('.lst__row').addClass('lst__row--selected');
-			$modalInner.find('.cantrip-checkbox:not(:checked), .spell-checkbox:not(:checked)').closest('.lst__row').removeClass('lst__row--selected');
-
-			// Update confirm button state
-			// Allow confirmation if:
-			// 1. New spells are required and correct counts are selected, OR
-			// 2. No new spells required (spell swapping mode) - always allow
-			const hasNewSpellsToLearn = cantripsToLearn > 0 || spellsToLearn > 0;
-			const isValid = hasNewSpellsToLearn ?
-				((cantripsToLearn === 0 || cantripCount === cantripsToLearn) &&
-				 (spellsToLearn === 0 || spellCount === spellsToLearn)) :
-				true; // Always valid for spell swapping
-			$btnConfirm.prop('disabled', !isValid);
-		};
-
-		// Add event listeners for checkboxes
-		$modalInner.find('.cantrip-checkbox, .spell-checkbox').on('change', updateCounters);
-		updateCounters(); // Initial update
 	}
 
-	/**
-	 * Return a list of available spells (names) for a given class/subclass and spell level.
-	 * This uses the site's Renderer.spell lookup helpers to derive spells available to a class.
-	 */
-	async pGetAvailableSpellsForClass(classTag, className, subclassName, level, schoolRestrictions = [], character = null) {
-		// COMPREHENSIVE spell loading - includes ALL sources: class, subclass, race, background
-		try {
-			const allSpells = await DataLoader.pCacheAndGetAllSite(UrlUtil.PG_SPELLS);
-			console.log(`Loading spells for ${className || classTag}, level ${level}, found ${allSpells.length} total spells`);
-
-			// Filter spells by ALL sources and return full spell objects
-			const filteredSpells = allSpells
-				.filter(sp => sp.level === level)
-				.filter(sp => {
-					// Check ALL combined spell sources
-					const fromClasses = Renderer.spell.getCombinedClasses(sp, 'fromClassList') || [];
-					const fromSubclasses = Renderer.spell.getCombinedClasses(sp, 'fromSubclass') || [];
-					const fromVariantClasses = Renderer.spell.getCombinedClasses(sp, 'fromClassListVariant') || [];
-					const fromRaces = Renderer.spell.getCombinedClasses(sp, 'fromRaces') || [];
-					const fromBackgrounds = Renderer.spell.getCombinedClasses(sp, 'fromBackgrounds') || [];
-
-					// Check if spell is available to this class
-					const targetClass = (className || classTag).toLowerCase();
-					let matchesClass = fromClasses.some(c => c.name && c.name.toLowerCase() === targetClass) ||
-					                  fromVariantClasses.some(c => c.name && c.name.toLowerCase() === targetClass);
-
-					// Check subclass expanded spells if subclass is specified
-					if (!matchesClass && subclassName) {
-						const targetSubclass = subclassName.toLowerCase();
-						matchesClass = fromSubclasses.some(sc =>
-							sc.subclass && sc.subclass.name && sc.subclass.name.toLowerCase() === targetSubclass &&
-							sc.class && sc.class.name && sc.class.name.toLowerCase() === targetClass
-						);
-					}
-
-					// Check racial spells if character data provided
-					if (!matchesClass && character && character.race) {
-						const raceName = typeof character.race === 'string' ? character.race : character.race.name;
-						if (raceName) {
-							matchesClass = fromRaces.some(r => r.name && r.name.toLowerCase().includes(raceName.toLowerCase()));
-						}
-					}
-
-					// Check background spells if character data provided
-					if (!matchesClass && character && character.background) {
-						const backgroundName = typeof character.background === 'string' ? character.background : character.background.name;
-						if (backgroundName) {
-							matchesClass = fromBackgrounds.some(b => b.name && b.name.toLowerCase().includes(backgroundName.toLowerCase()));
-						}
-					}
-
-					// If no match from any source, exclude this spell
-					if (!matchesClass) return false;
-
-					// Apply school restrictions if provided (schoolRestrictions are school initials)
-					if (schoolRestrictions && schoolRestrictions.length) {
-						const sch = sp.school ? sp.school.charAt(0).toUpperCase() : '';
-						if (!schoolRestrictions.includes(sch)) return false;
-					}
-
-					return true;
-				})
-				.sort((a, b) => a.name.localeCompare(b.name));
-
-			console.log(`Found ${filteredSpells.length} spells for ${className || classTag} at level ${level} (including ALL sources):`, filteredSpells.slice(0, 5).map(sp => sp.name));
-			return filteredSpells; // Return full spell objects, not just names
-		} catch (e) {
-			console.warn('pGetAvailableSpellsForClass failed', e);
-			return [];
-		}
-	}
+	// Spell availability and selection logic is now handled by CharacterSpellManager UI
 
 	showManeuverChoiceModal(feature, featureData) {
 		// This would show Battle Master maneuver choices
 		// For now, just show a generic choice modal
-		this.showGenericFeatureChoiceModal(featureData);
+		this.showGenericFeatureChoiceModal(feature, featureData);
 	}
 
-	showGenericFeatureChoiceModal(featureData) {
-		const feature = featureData.feature;
+	showGenericFeatureChoiceModal(feature, featureData = null) {
+		// Handle multiple parameter formats
+		let actualFeature;
+		if (featureData && featureData.feature) {
+			// Called with (feature, featureData) where the feature data is nested
+			actualFeature = featureData.feature;
+		} else if (feature && feature.feature) {
+			// Called with (featureData) where featureData is the first parameter
+			actualFeature = feature.feature;
+		} else if (feature) {
+			// Called with (feature) directly
+			actualFeature = feature;
+		} else {
+			// Fallback for missing data
+			actualFeature = {
+				name: 'Unknown Feature',
+				entries: ['This feature requires manual implementation.']
+			};
+		}
 
 		// Create a generic modal for features that have choices but aren't specifically handled yet
 		const modalContent = `
 			<p class="mb-3"><strong>Current Level:</strong> ${this.levelUpState.currentLevel}</p>
 			<p class="mb-3"><strong>New Level:</strong> ${this.levelUpState.newLevel}</p>
-			<h6>${feature.name}</h6>
+			<h6>${actualFeature.name || 'Unknown Feature'}</h6>
 			<div class="mb-3">
-				${feature.entries ? feature.entries.map(entry => `<p>${entry}</p>`).join('') : '<p>This feature requires a choice.</p>'}
+				${actualFeature.entries ? actualFeature.entries.map(entry => `<p>${entry}</p>`).join('') : '<p>This feature requires a choice.</p>'}
 			</div>
 
 			<div class="alert alert-info">
@@ -14841,7 +13772,7 @@ class CharacterEditorPage {
 		// Update the editor with new character data
 		console.log('Setting ACE editor value with character data:', updatedCharacter);
 		console.log('Character JSON string length:', JSON.stringify(updatedCharacter, null, 2).length);
-		this.ace.setValue(JSON.stringify(updatedCharacter, null, 2), 1);
+		this._safeSetAceValue(JSON.stringify(updatedCharacter, null, 2), 1);
 
 		// Re-render character
 		this.renderCharacter();
@@ -16185,23 +15116,50 @@ class CharacterEditorPage {
 		// Get spell slot progression table
 		const spellSlots = this.getSpellSlotsForClass(className, classLevel);
 
-		// Update spell slots for each level
-		for (let spellLevel = 1; spellLevel <= 9; spellLevel++) {
-			const slots = spellSlots[spellLevel] || 0;
+		// Special handling for Warlocks - move all slots to the highest level
+		if (className === "Warlock") {
+			// Clear all existing spell slots for Warlocks
+			for (let spellLevel = 1; spellLevel <= 9; spellLevel++) {
+				if (character.spells.levels[spellLevel.toString()]) {
+					character.spells.levels[spellLevel.toString()].maxSlots = 0;
+					character.spells.levels[spellLevel.toString()].slotsUsed = 0;
+				}
+			}
 
-			if (slots > 0) {
-				// Initialize spell level if it doesn't exist
-				if (!character.spells.levels[spellLevel.toString()]) {
-					character.spells.levels[spellLevel.toString()] = {
+			// Set only the appropriate Warlock spell slots
+			for (const [spellLevel, slots] of Object.entries(spellSlots)) {
+				const levelStr = spellLevel.toString();
+				if (!character.spells.levels[levelStr]) {
+					character.spells.levels[levelStr] = {
 						maxSlots: 0,
 						slotsUsed: 0,
 						spells: []
 					};
 				}
+				// Set Warlock slots to full (unused) since they get all slots back on short rest
+				character.spells.levels[levelStr].maxSlots = slots;
+				character.spells.levels[levelStr].slotsUsed = 0;
+			}
+		} else {
+			// Standard handling for other classes
+			// Update spell slots for each level
+			for (let spellLevel = 1; spellLevel <= 9; spellLevel++) {
+				const slots = spellSlots[spellLevel] || 0;
 
-				// Update max slots (don't reduce existing slots)
-				const currentMax = character.spells.levels[spellLevel.toString()].maxSlots || 0;
-				character.spells.levels[spellLevel.toString()].maxSlots = Math.max(currentMax, slots);
+				if (slots > 0) {
+					// Initialize spell level if it doesn't exist
+					if (!character.spells.levels[spellLevel.toString()]) {
+						character.spells.levels[spellLevel.toString()] = {
+							maxSlots: 0,
+							slotsUsed: 0,
+							spells: []
+						};
+					}
+
+					// Update max slots (don't reduce existing slots)
+					const currentMax = character.spells.levels[spellLevel.toString()].maxSlots || 0;
+					character.spells.levels[spellLevel.toString()].maxSlots = Math.max(currentMax, slots);
+				}
 			}
 		}
 	}
@@ -17067,63 +16025,7 @@ class CharacterEditorPage {
 		return fullCasters.includes(className) || halfCasters.includes(className) || thirdCasters.includes(className);
 	}
 
-	async canCharacterSelectSpells(character, level) {
-		console.log('=== CHECKING IF CHARACTER CAN SELECT SPELLS ===');
-		console.log('Character:', character);
-		console.log('Level:', level);
-
-		const reasons = [];
-		let canSelect = false;
-
-		// Check each class for spellcasting ability
-		for (const classEntry of character.class || []) {
-			const className = classEntry.name;
-			console.log(`Checking class: ${className}`);
-
-			// Check if it's a known spellcasting class
-			if (this.isSpellcastingClass(className)) {
-				reasons.push(`${className} is a spellcasting class`);
-
-				// Check level requirements for spellcasting
-				const classLevel = classEntry.level || 1;
-				if (className === 'Paladin' && classLevel >= 2) {
-					canSelect = true;
-					reasons.push(`${className} gains spells at level 2`);
-				} else if (className === 'Ranger' && classLevel >= 2) {
-					canSelect = true;
-					reasons.push(`${className} gains spells at level 2`);
-				} else if (['Bard', 'Cleric', 'Druid', 'Sorcerer', 'Warlock', 'Wizard'].includes(className)) {
-					canSelect = true;
-					reasons.push(`${className} is a full caster from level 1`);
-				} else if (className === 'Fighter' && classEntry.subclass?.name === 'Eldritch Knight' && classLevel >= 3) {
-					canSelect = true;
-					reasons.push(`Eldritch Knight Fighter gains spells at level 3`);
-				} else if (className === 'Rogue' && classEntry.subclass?.name === 'Arcane Trickster' && classLevel >= 3) {
-					canSelect = true;
-					reasons.push(`Arcane Trickster Rogue gains spells at level 3`);
-				}
-			}
-		}
-
-		// Check racial spellcasting (if any)
-		if (character.race) {
-			const raceName = character.race.name || character.race;
-			// Some races get innate spellcasting
-			const spellcastingRaces = ['Tiefling', 'Drow', 'High Elf', 'Forest Gnome'];
-			if (spellcastingRaces.includes(raceName)) {
-				reasons.push(`${raceName} race has innate spellcasting`);
-				// Don't set canSelect for racial spells alone, only class-based spell selection
-			}
-		}
-
-		console.log(`Spell selection result: ${canSelect ? 'YES' : 'NO'}`);
-		console.log(`Reasons: ${reasons.join(', ')}`);
-
-		return {
-			canSelect,
-			reasons
-		};
-	}
+	// Spell selection logic is now handled by CharacterSpellManager UI
 
 	async isSpellValidForClass(spellName, className, subclassName = null, character = null) {
 		console.log(`Checking if ${spellName} is valid for ${className} ${subclassName ? `(${subclassName})` : ''}`);
@@ -17138,19 +16040,7 @@ class CharacterEditorPage {
 		}
 
 		// Check subclass-specific spell lists if applicable
-		if (subclassName) {
-			// Some subclasses get expanded spell lists (like Warlock patrons)
-			const expandedSpells = this.getSubclassExpandedSpells(className, subclassName);
-			if (expandedSpells) {
-				for (let level = 0; level <= 9; level++) {
-					const spellsAtLevel = expandedSpells[level] || [];
-					if (spellsAtLevel.includes(spellName)) {
-						console.log(`✅ ${spellName} found in ${className} ${subclassName} expanded spells level ${level}`);
-						return true;
-					}
-				}
-			}
-		}
+		// Note: Subclass expanded spells are now handled by CharacterSpellManager UI with proper filtering
 
 		// Check racial spells if character provided
 		if (character) {
@@ -17165,46 +16055,7 @@ class CharacterEditorPage {
 		return false;
 	}
 
-	getSubclassExpandedSpells(className, subclassName) {
-		// Handle expanded spell lists for subclasses like Warlock patrons
-		if (className === 'Warlock') {
-			const patronSpells = {
-				'The Fiend': {
-					1: ['Burning Hands', 'Command'],
-					2: ['Blindness/Deafness', 'Scorching Ray'],
-					3: ['Fireball', 'Stinking Cloud'],
-					4: ['Fire Shield', 'Wall of Fire'],
-					5: ['Flame Strike', 'Hallow']
-				},
-				'The Great Old One': {
-					1: ['Dissonant Whispers', 'Tasha\'s Hideous Laughter'],
-					2: ['Calm Emotions', 'Detect Thoughts'],
-					3: ['Clairvoyance', 'Sending'],
-					4: ['Dominate Beast', 'Evard\'s Black Tentacles'],
-					5: ['Dominate Person', 'Telekinesis']
-				},
-				'The Genie': {
-					1: ['Detect Evil and Good'],
-					2: ['Phantasmal Force'],
-					3: ['Create Food and Water'],
-					4: ['Phantasmal Killer'],
-					5: ['Creation'],
-					9: ['Wish']
-				},
-				'The Celestial': {
-					1: ['Cure Wounds', 'Guiding Bolt'],
-					2: ['Flaming Sphere', 'Lesser Restoration'],
-					3: ['Daylight', 'Revivify'],
-					4: ['Guardian of Faith', 'Wall of Fire'],
-					5: ['Flame Strike', 'Greater Restoration']
-				}
-			};
-			return patronSpells[subclassName] || null;
-		}
-
-		// Add other subclass expanded spells as needed
-		return null;
-	}
+	// Subclass expanded spells are now handled by the CharacterSpellManager UI with proper filtering
 
 	getSpellcastingProgression(className) {
 		const progressions = {
@@ -18442,8 +17293,8 @@ class CharacterEditorPage {
 			featuresSection.entries.push(featureEntry);
 		}
 
-		// Show HP choice modal and update hit points based on user choice
-		this.showHPChoiceModal(character);
+		// Automatically use average HP gain (no modal)
+		this.updateHitPointsForLevelUp(character);
 
 		// Update spell slots if character is a spellcaster
 		this.updateSpellSlotsForLevelUp(character);
@@ -18496,143 +17347,6 @@ class CharacterEditorPage {
 			hitPoints: character.hitPoints,
 			modifiers: { str: strMod, dex: dexMod, con: conMod, int: intMod, wis: wisMod, cha: chaMod }
 		});
-	}
-
-	showHPChoiceModal(character) {
-		const classes = character.class;
-		if (!classes || !Array.isArray(classes)) {
-			return;
-		}
-
-		const selectedClassIndex = this.levelUpState.selectedClassIndex;
-		if (selectedClassIndex === undefined || !classes[selectedClassIndex]) {
-			return;
-		}
-
-		const selectedClass = classes[selectedClassIndex];
-		const className = selectedClass.name;
-		const hitDie = this.getClassHitDie(className, character);
-
-		// Handle both nested abilities object and direct properties for CON
-		const conScore = character.abilities ? character.abilities.con : character.con || 10;
-		const conMod = Math.floor((conScore - 10) / 2);
-
-		// Calculate average HP gain
-		const averageGain = Math.floor(hitDie / 2) + 1 + conMod;
-		const maxPossibleGain = hitDie + conMod;
-		const minPossibleGain = 1 + conMod;
-
-		// Simulate a dice roll
-		const rolledValue = Math.floor(Math.random() * hitDie) + 1;
-		const rolledGain = rolledValue + conMod;
-
-		const modalContent = `
-			<p class="mb-3"><strong>Leveling up ${className}</strong></p>
-			<p class="mb-3">Hit Die: d${hitDie} + CON modifier (${conMod >= 0 ? '+' : ''}${conMod})</p>
-
-			<h6>Choose HP Gain Method:</h6>
-			<div class="form-group">
-				<div class="form-check mb-3">
-					<input class="form-check-input" type="radio" name="hpChoice" id="takeAverage" value="average" checked>
-					<label class="form-check-label" for="takeAverage">
-						<strong>Take Average: ${averageGain} HP</strong>
-						<small class="text-muted d-block">Safe choice - always get the average value</small>
-					</label>
-				</div>
-				<div class="form-check mb-3">
-					<input class="form-check-input" type="radio" name="hpChoice" id="rollDice" value="roll">
-					<label class="form-check-label" for="rollDice">
-						<strong>Roll Dice: ${rolledGain} HP</strong>
-						<small class="text-muted d-block">You rolled ${rolledValue} on d${hitDie} + ${conMod} CON = ${rolledGain} HP</small>
-						<small class="text-muted d-block">Range: ${minPossibleGain}-${maxPossibleGain} HP</small>
-					</label>
-				</div>
-			</div>
-
-			<div id="rollResult" class="alert alert-info" style="display: none;">
-				<strong>New Roll:</strong> <span id="newRollValue"></span> HP
-			</div>
-		`;
-
-		const $modal = UiUtil.getModal({
-			title: "Hit Point Increase",
-			cbClose: () => {
-				// If modal is closed without selection, default to average
-				this.updateHitPointsForLevelUp(character, averageGain);
-			}
-		});
-
-		const $modalInner = $modal.find('.modal-dialog');
-		$modalInner.addClass('modal-lg');
-
-		const $modalBody = $modal.find('.modal-body');
-		$modalBody.html(modalContent);
-
-		const $modalFooter = $modal.find('.modal-footer');
-		$modalFooter.empty();
-
-		const $btnReroll = $('<button class="btn btn-secondary mr-2">Roll Again</button>');
-		const $btnConfirm = $('<button class="btn btn-primary">Confirm Choice</button>');
-		const $btnCancel = $('<button class="btn btn-outline-secondary">Cancel</button>');
-
-		// Reroll functionality
-		$btnReroll.click(() => {
-			const newRoll = Math.floor(Math.random() * hitDie) + 1;
-			const newGain = newRoll + conMod;
-
-			// Update the roll option label
-			$modalInner.find('#rollDice').next('label').html(`
-				<strong>Roll Dice: ${newGain} HP</strong>
-				<small class="text-muted d-block">You rolled ${newRoll} on d${hitDie} + ${conMod} CON = ${newGain} HP</small>
-				<small class="text-muted d-block">Range: ${minPossibleGain}-${maxPossibleGain} HP</small>
-			`);
-
-			// Update the roll option value
-			$modalInner.find('#rollDice').val(newGain);
-
-			// Show roll result
-			$modalInner.find('#newRollValue').text(`${newRoll} + ${conMod} = ${newGain}`);
-			$modalInner.find('#rollResult').show().fadeTo(100, 0.1).fadeTo(200, 1.0);
-		});
-
-		// Cancel functionality
-		$btnCancel.click(() => {
-			$modal.modal('hide');
-		});
-
-		// Confirm functionality
-		$btnConfirm.click(() => {
-			const choice = $modalInner.find('input[name="hpChoice"]:checked').val();
-			let hpGain;
-
-			if (choice === 'average') {
-				hpGain = averageGain;
-			} else {
-				// Get the current roll value from the radio button value or calculate from label
-				const rollValue = parseInt($modalInner.find('#rollDice').val()) || rolledGain;
-				hpGain = rollValue;
-			}
-
-			this.updateHitPointsForLevelUp(character, hpGain);
-			$modal.modal('hide');
-		});
-
-		// Show/hide reroll button based on choice
-		$modalInner.find('input[name="hpChoice"]').change(() => {
-			const choice = $modalInner.find('input[name="hpChoice"]:checked').val();
-			if (choice === 'roll') {
-				$btnReroll.show();
-			} else {
-				$btnReroll.hide();
-			}
-		});
-
-		$modalFooter.append($btnCancel, $btnReroll, $btnConfirm);
-
-		// Initially hide reroll button since average is selected by default
-		$btnReroll.hide();
-
-		$modal.modal('show');
 	}
 
 	updateHitPointsForLevelUp(character, providedHpGain = null) {
@@ -18761,7 +17475,41 @@ class CharacterEditorPage {
 			const spellSlots = this.calculateSpellSlotsByLevel(totalCasterLevel);
 			
 			if (spellSlots && Object.keys(spellSlots).length > 0) {
-				character.spellcasting.spells = spellSlots;
+				// Ensure character.spells.levels exists
+				if (!character.spells) character.spells = {};
+				if (!character.spells.levels) character.spells.levels = {};
+				
+				// Update spell levels with proper maxSlots/slotsUsed structure
+				Object.entries(spellSlots).forEach(([spellLevel, maxSlots]) => {
+					const currentLevel = character.spells.levels[spellLevel];
+					if (!currentLevel) {
+						// Create new spell level with maxSlots = slotsUsed (all slots available)
+						character.spells.levels[spellLevel] = {
+							spells: [],
+							maxSlots: maxSlots,
+							slotsUsed: maxSlots // All slots start as "used" (available)
+						};
+						console.log(`🆕 Created spell level ${spellLevel}: maxSlots=${maxSlots}, slotsUsed=${maxSlots}`);
+					} else {
+						// Update existing level, preserving spells and increasing slots proportionally
+						const oldMaxSlots = currentLevel.maxSlots || 0;
+						const oldSlotsUsed = currentLevel.slotsUsed || 0;
+						
+						currentLevel.maxSlots = maxSlots;
+						
+						if (oldMaxSlots === 0) {
+							// First time getting slots for this level
+							currentLevel.slotsUsed = maxSlots;
+							console.log(`✨ First-time slots for level ${spellLevel}: maxSlots=${maxSlots}, slotsUsed=${maxSlots}`);
+						} else {
+							// Proportional increase: add the same number of slots to both max and used
+							const increase = maxSlots - oldMaxSlots;
+							currentLevel.slotsUsed = Math.min(maxSlots, oldSlotsUsed + increase);
+							console.log(`📊 Level up! Spell level ${spellLevel}: ${oldMaxSlots}→${maxSlots} max, ${oldSlotsUsed}→${currentLevel.slotsUsed} used (+${increase} to both)`);
+						}
+					}
+				});
+				
 				console.log('Updated spell slots:', spellSlots);
 			}
 		} else {
