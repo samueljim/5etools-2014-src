@@ -2837,6 +2837,10 @@ class CharacterEditorPage {
 	}
 
 	_updateWarlockSpellSlots(characterTemplate, warlockLevel) {
+		// Ensure spells object exists
+		if (!characterTemplate.spells) characterTemplate.spells = {};
+		if (!characterTemplate.spells.levels) characterTemplate.spells.levels = {};
+		
 		// Warlock Pact Magic progression
 		const warlockSlots = {
 			slots: warlockLevel >= 1 ? (warlockLevel >= 11 ? 3 : warlockLevel >= 2 ? 2 : 1) : 0,
