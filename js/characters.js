@@ -415,6 +415,34 @@ window.addEventListener("load", () => {
 			window.location.href = "charactereditor.html?edit=true";
 		}
 	});
+
+	// Initialize Refresh Characters button
+	$(document).on("click", "#btn-refresh-characters", async () => {
+		try {
+			// Indicate loading
+			const $btn = $("#btn-refresh-characters");
+			$btn.prop("disabled", true).addClass("ve-btn-loading");
+
+			// Force a fresh server list fetch, purge missing local characters, and reload
+			await CharacterManager.forceRefreshListAndReload();
+
+			// Rebuild the page data using the fresh character list
+			const characters = CharacterManager.getCharacters();
+			const formattedData = { character: characters };
+			// Clear and add fresh data
+			charactersPage._dataList.length = 0;
+			charactersPage._addData(formattedData);
+			if (charactersPage._list) charactersPage._list.update();
+
+			console.log(`Characters refreshed: ${characters.length} entries`);
+		} catch (e) {
+			console.warn("Failed to refresh characters:", e);
+		} finally {
+			// Restore button state
+			const $btn = $("#btn-refresh-characters");
+			$btn.prop("disabled", false).removeClass("ve-btn-loading");
+		}
+	});
 });
 
 globalThis.dbg_page = charactersPage;

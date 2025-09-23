@@ -1029,10 +1029,16 @@ class CharacterManager {
 	static _STORAGE_KEY = "VeTool_CharacterManager_Cache";
 	// Client-side cache for the blob list (metadata returned by /api/characters/load)
 	static _LIST_CACHE_KEY = "VeTool_CharacterManager_ListCache";
-	static _LIST_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours - extended since WebSockets handle updates
+	// Only refresh the `/characters/list` from server if the cached blob list
+	// is older than 24 hours. We rely on WebSocket/P2P notifications for
+	// near-real-time updates; use the 24h TTL to avoid excessive list fetches
+	// on simple page navigations.
+	static _LIST_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 	// Version tracking and offline sync
 	static _offlineQueue = []; // Queue for changes made while offline
 	static _OFFLINE_QUEUE_KEY = "VeTool_CharacterManager_OfflineQueue";
+	static _listFetchInProgress = false; // Prevent concurrent forced list fetches
+	static _suppressBackgroundChecksUntil = 0; // Timestamp to suppress background staleness checks
 	static _conflictResolver = null; // Function to handle conflicts
 	static _onlineListenerSet = false; // Flag to prevent duplicate listeners
 
@@ -1120,6 +1126,8 @@ class CharacterManager {
 	 */
 	static async _checkForStaleCharactersInBackground (sources = null) {
 		try {
+			// If suppression is active (e.g., manual refresh just ran), skip background checks
+			if (Date.now() < (this._suppressBackgroundChecksUntil || 0)) return;
 			// Wait a bit to not block the initial UI load
 			setTimeout(async () => {
 				const now = Date.now();
@@ -1629,6 +1637,8 @@ class CharacterManager {
 				url += `?${sourcesParam}`;
 			}
 
+			if (force) console.log("CharacterManager: Fetching /characters/list (force)", url);
+			else console.log("CharacterManager: Fetching /characters/list", url);
 			const response = await fetch(url, {
 				cache: "no-cache",
 				headers: {
@@ -1652,6 +1662,15 @@ class CharacterManager {
 				console.warn("CharacterManager: Failed to cache blob list locally:", e);
 			}
 
+			// If this was a full (unfiltered) server fetch, purge any locally-cached
+			// characters that no longer appear on the server list. This keeps the
+			// UI and localStorage in sync with server-side deletions.
+			try {
+				if (!sources) {
+					this._purgeLocalCharactersNotInServer(blobs);
+				}
+			} catch (e) { /* non-fatal */ }
+
 			// If sources filter requested, apply it to the returned list
 			if (sources) {
 				const sourceList = Array.isArray(sources) ? sources : [sources];
@@ -1667,6 +1686,54 @@ class CharacterManager {
 			console.warn("CharacterManager: Error fetching blob list metadata:", e);
 			// Fall back to localStorage if API is not available
 			return this._getLocalStorageBlobList(sources);
+		}
+	}
+
+	/**
+	 * Remove any locally cached characters that are not present in the server's
+	 * blob list. This will remove entries from localStorage, in-memory caches,
+	 * blob cache, and any editing state so the UI will stop showing deleted
+	 * characters.
+	 * @param {Array} serverBlobs - Array of blob metadata from server
+	 */
+	static _purgeLocalCharactersNotInServer (serverBlobs) {
+		try {
+			if (!Array.isArray(serverBlobs)) return;
+			const serverIds = new Set((serverBlobs || []).map(b => b && b.id).filter(Boolean));
+			const local = this._loadFromLocalStorage();
+			const toRemove = (local || []).filter(c => c && c.id && !serverIds.has(c.id)).map(c => c.id);
+			if (!toRemove.length) return;
+			console.log(`CharacterManager: Purging ${toRemove.length} local character(s) not found on server`);
+			for (const id of toRemove) {
+				try {
+					// If the character is already in-memory, use existing removal path
+					if (this._characters && this._characters.has && this._characters.has(id)) {
+						this.removeCharacter(id);
+						continue;
+					}
+					// Otherwise remove from persisted localStorage list
+					const stored = this._loadFromLocalStorage();
+					const filtered = (stored || []).filter(c => c && c.id !== id);
+					try { localStorage.setItem(this._STORAGE_KEY, JSON.stringify(filtered)); } catch (e) { /* ignore */ }
+					// Remove blob cache entry
+					if (this._blobCache && this._blobCache.has && this._blobCache.has(id)) this._blobCache.delete(id);
+					// Clear editing state if present
+					try {
+						const editingRaw = localStorage.getItem("editingCharacter");
+						if (editingRaw) {
+							const editing = JSON.parse(editingRaw);
+							if (editing && editing.id === id) localStorage.removeItem("editingCharacter");
+						}
+					} catch (e) { /* ignore */ }
+					if (globalThis._CHARACTER_EDIT_DATA && globalThis._CHARACTER_EDIT_DATA[id]) delete globalThis._CHARACTER_EDIT_DATA[id];
+					// Notify listeners so UI updates
+					this._notifyListeners();
+				} catch (e) {
+					console.warn("CharacterManager: Error purging character", id, e);
+				}
+			}
+		} catch (e) {
+			console.warn("CharacterManager: _purgeLocalCharactersNotInServer failed:", e);
 		}
 	}
 
@@ -1962,8 +2029,8 @@ class CharacterManager {
 
 		const processed = this._processCharacterForDisplay(character);
 
-		// Update or add to map
-		const existingIndex = this._charactersArray.findIndex(c => c.id === character.id);
+	// Update or add to map
+	const existingIndex = this._charactersArray.findIndex(c => c.id === character.id);
 		if (existingIndex >= 0) {
 			// Update existing
 			this._charactersArray[existingIndex] = processed;
@@ -1990,31 +2057,27 @@ class CharacterManager {
 	 * @param {Object} remoteCharacter - Remote version from server
 	 */
 	static _handleVersionConflict (localCharacter, remoteCharacter) {
-		console.warn(`CharacterManager: Version conflict detected for character ${localCharacter.id}`);
-		
-		// For now, prefer local changes but store conflict info
-		// TODO: Implement proper UI for conflict resolution
-		localCharacter._hasConflict = true;
-		localCharacter._conflictData = {
-			remoteVersion: remoteCharacter,
-			conflictTime: Date.now()
-		};
-		
-		// If a conflict resolver is set, use it
-		if (this._conflictResolver) {
-			try {
-				const resolved = this._conflictResolver(localCharacter, remoteCharacter);
-				if (resolved) {
-					this.addOrUpdateCharacter(resolved, false);
-					return;
-				}
-			} catch (e) {
-				console.warn("CharacterManager: Error in conflict resolver:", e);
+		// Auto-resolve by preferring the newer character based on timestamps
+		// Avoid adding conflict metadata to the character object itself.
+		try {
+			const localTs = Number(localCharacter._lastModified || localCharacter._localVersion || 0);
+			const remoteTs = Number(remoteCharacter._lastModified || remoteCharacter._remoteVersion || 0);
+			if (isNaN(localTs) || isNaN(remoteTs)) {
+				// If timestamps are not present or invalid, default to keeping local
+				this.addOrUpdateCharacter(localCharacter, false);
+				return;
 			}
+			if (remoteTs > localTs) {
+				// Remote is newer - accept remote and persist
+				this.addOrUpdateCharacter(remoteCharacter, true);
+			} else {
+				// Local is newer or equal - keep local and persist
+				this.addOrUpdateCharacter(localCharacter, false);
+			}
+		} catch (e) {
+			console.warn("CharacterManager: Automatic conflict resolution failed, keeping local by default:", e);
+			this.addOrUpdateCharacter(localCharacter, false);
 		}
-		
-		// Default: keep local changes, notify user
-		this._notifyConflict(localCharacter, remoteCharacter);
 	}
 
 	/**
@@ -2417,6 +2480,35 @@ class CharacterManager {
 				console.warn("CharacterManager: Failed to send P2P CHARACTER_DELETED", e);
 			}
 
+
+			// Also remove any persisted editing state for this character
+			try {
+				const editingRaw = localStorage.getItem("editingCharacter");
+				if (editingRaw) {
+					try {
+						const editing = JSON.parse(editingRaw);
+						if (editing && editing.id === id) {
+							localStorage.removeItem("editingCharacter");
+						}
+					} catch (e) { /* ignore malformed editingCharacter */ }
+				}
+
+				// Remove any in-memory edit cache
+				if (globalThis._CHARACTER_EDIT_DATA && globalThis._CHARACTER_EDIT_DATA[id]) {
+					delete globalThis._CHARACTER_EDIT_DATA[id];
+				}
+			} catch (e) {
+				console.warn("CharacterManager: Error clearing editing state for deleted character:", e);
+			}
+
+			// Invalidate the server-side blob list cache so other UI will re-fetch
+			try {
+				this.invalidateBlobListCache();
+			} catch (e) {
+				// Fallback to private invalidator if public one not present
+				try { this._invalidateBlobListCache(); } catch (e) { /* ignore */ }
+			}
+
 			// Notify listeners
 			this._notifyListeners();
 		}
@@ -2465,6 +2557,106 @@ class CharacterManager {
 	}
 
 	/**
+	 * Force-fetch the server blob list, purge any local characters not present on the server,
+	 * invalidate caches and reload character data. Public convenience method intended for
+	 * UI actions like a manual "Refresh" button.
+	 * @returns {Promise<Array>} Reloaded characters
+	 */
+	static async forceRefreshListAndReload () {
+		// Force a fresh blob list from server
+		const serverBlobs = await this._getBlobList(null, true);
+		// Purge any local characters missing from server
+		try { this._purgeLocalCharactersNotInServer(serverBlobs); } catch (e) { /* ignore */ }
+		// Suppress background checks for a short window to avoid immediate racing reloads
+		this._suppressBackgroundChecksUntil = Date.now() + 10 * 1000; // 10s
+
+		// Use the already-fetched blob list to load characters (avoids re-fetching the list)
+		try {
+			const chars = await this._performFullApiLoadWithBlobs(serverBlobs);
+			// After loading, mark as loaded and notify listeners
+			this._isLoaded = true;
+			this._notifyListeners();
+			return chars;
+		} catch (e) {
+			// Fall back to full reload if something goes wrong
+			this._invalidateCachesKeepList();
+			return this.reloadCharacters();
+		}
+	}
+
+	/**
+	 * Perform a full API load using a pre-fetched list of server blobs. This avoids
+	 * calling the `/characters/list` endpoint again when we already have the list.
+	 * @param {Array} serverBlobs - Array of blob metadata (must be non-null)
+	 * @returns {Promise<Array>} Array of loaded characters
+	 */
+	static async _performFullApiLoadWithBlobs (serverBlobs) {
+		try {
+			if (!serverBlobs || !Array.isArray(serverBlobs) || serverBlobs.length === 0) return [];
+			const now = Date.now();
+			const fetchPromises = (serverBlobs || []).map(async (blob) => {
+				try {
+					if (blob.url && blob.url.startsWith("localStorage://")) {
+						const characterId = blob.url.replace("localStorage://", "");
+						const characters = this._loadFromLocalStorage();
+						const character = characters.find(c => this._generateCompositeId(c.name, c.source) === characterId);
+						if (!character) return null;
+						this._blobCache.set(blob.id, { blob, character, lastFetched: now });
+						return character;
+					}
+					const response = await fetch(blob.url, { cache: "no-cache", headers: { "Cache-Control": "no-cache, no-store, must-revalidate" } });
+					if (!response.ok) return null;
+					const characterData = await response.json();
+					const character = (characterData.character && Array.isArray(characterData.character)) ? characterData.character[0] : characterData;
+					this._blobCache.set(blob.id, { blob, character, lastFetched: now });
+					return character;
+				} catch (e) {
+					console.warn("CharacterManager: Error fetching character blob:", e);
+					return null;
+				}
+			});
+			const fetchedCharacters = (await Promise.all(fetchPromises)).filter(c => c);
+			return this._processAndStoreCharacters(fetchedCharacters);
+		} catch (e) {
+			console.warn("CharacterManager: _performFullApiLoadWithBlobs failed:", e);
+			return [];
+		}
+	}
+
+	/**
+	 * Similar to _invalidateAllCaches but DO NOT remove the blob list cache.
+	 * Used after we've just fetched the server list to avoid double-fetching.
+	 */
+	static _invalidateCachesKeepList () {
+		try {
+			// Clear DataLoader cache
+			if (typeof DataLoader !== "undefined") {
+				const formattedData = { character: [...this._charactersArray] };
+				DataLoader._pCache_addToCache({
+					allDataMerged: formattedData,
+					propAllowlist: new Set(["character"]),
+				});
+			}
+
+			// NOTE: Intentionally do not remove this._LIST_CACHE_KEY here
+
+			// Force refresh of blob cache timestamps
+			for (const [id, cached] of this._blobCache.entries()) {
+				const character = this._characters.get(id);
+				if (character) {
+					this._blobCache.set(id, {
+						...cached,
+						character: character,
+						lastFetched: Date.now(),
+					});
+				}
+			}
+		} catch (e) {
+			console.warn("CharacterManager: Error during cache invalidation (keep list):", e);
+		}
+	}
+
+	/**
 	 * Start automatic refresh of character data (like existing system)
 	 * @param {number} intervalMs - Refresh interval in milliseconds (default 15 minutes - extended due to WebSocket updates)
 	 */
@@ -2480,6 +2672,9 @@ class CharacterManager {
 				console.warn("CharacterManager: Auto-refresh failed:", e);
 			}
 		}, intervalMs);
+
+		// Ensure daily list recheck is running to pick up server-side additions/deletions
+		this.startDailyListRecheck();
 	}
 
 	/**
@@ -2489,6 +2684,80 @@ class CharacterManager {
 		if (this._refreshInterval) {
 			clearInterval(this._refreshInterval);
 			this._refreshInterval = null;
+		}
+
+		// Stop daily recheck as well
+		this._stopDailyListRecheck();
+	}
+
+	/**
+	 * Start a daily recheck of the `/characters/list` endpoint to ensure
+	 * newly added or deleted characters on the server are discovered.
+	 * This runs at most once per 24 hours.
+	 * @param {number} intervalMs - Interval for the daily check (default 24h)
+	 */
+	static startDailyListRecheck (intervalMs = 24 * 60 * 60 * 1000) {
+		try {
+			if (this._dailyListInterval) {
+				clearInterval(this._dailyListInterval);
+			}
+
+			// Run immediately once, then on the interval
+			const runCheck = async () => {
+				try {
+					// Check cached timestamp first; only force a server fetch if cache is
+					// older than the configured interval (default 24h). This avoids
+					// unnecessary network requests on simple page navigations.
+					const cachedRaw = localStorage.getItem(this._LIST_CACHE_KEY);
+					let cachedTs = 0;
+					let cachedBlobs = [];
+					if (cachedRaw) {
+						try {
+							const parsed = JSON.parse(cachedRaw);
+							cachedTs = parsed.ts || 0;
+							cachedBlobs = parsed.blobs || [];
+						} catch (e) { cachedTs = 0; cachedBlobs = []; }
+					}
+
+					// If cached list is recent enough, skip forced fetch
+					if (cachedTs && (Date.now() - cachedTs) < intervalMs) {
+						// Nothing to do — cache is fresh
+						return;
+					}
+
+					// Cache is stale (or missing) — force a server list fetch and compare
+					const serverBlobs = await this._getBlobList(null, true); // force fetch
+					const serverIds = new Set((serverBlobs || []).map(b => b.id));
+					const cachedIds = new Set((cachedBlobs || []).map(b => b.id));
+					let changed = false;
+					if (serverIds.size !== cachedIds.size) changed = true;
+					else {
+						for (const id of serverIds) if (!cachedIds.has(id)) { changed = true; break; }
+					}
+					if (changed) {
+						console.log("CharacterManager: Daily list recheck detected changes; invalidating caches and reloading");
+						try { localStorage.setItem(this._LIST_CACHE_KEY, JSON.stringify({ blobs: serverBlobs || [], ts: Date.now() })); } catch (e) { /* ignore */ }
+						this._invalidateAllCaches();
+						await this.reloadCharacters();
+					}
+				} catch (e) {
+					console.warn("CharacterManager: Daily list recheck failed:", e);
+				}
+			};
+
+			// Run an immediate check, but don't block
+			runCheck();
+
+			this._dailyListInterval = setInterval(runCheck, intervalMs);
+		} catch (e) {
+			console.warn("CharacterManager: Failed to start daily list recheck:", e);
+		}
+	}
+
+	static _stopDailyListRecheck () {
+		if (this._dailyListInterval) {
+			clearInterval(this._dailyListInterval);
+			this._dailyListInterval = null;
 		}
 	}
 
