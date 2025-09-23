@@ -16927,7 +16927,137 @@ Renderer.hover = class {
 		if (EventUtil.isCtrlMetaKey(evt)) meta.isFluff = true;
 
 		let toRender;
-		if (preloadId != null) { // FIXME(Future) remove in favor of `customHashId`
+		// Special handling for character pages
+		console.debug(`Render.hover: Attempting to load - page="${page}", source="${source}", hash="${hash}"`);
+		if (page === "characters.html" || page === UrlUtil.PG_CHARACTERS) {
+			console.debug(`Render.hover: Detected character page, using CharacterManager`);
+			try {
+				// Try to load character from CharacterManager first
+				console.debug(`Render.hover: CharacterManager available:`, typeof globalThis.CharacterManager !== "undefined");
+				if (typeof globalThis.CharacterManager !== "undefined") {
+					const characterManager = globalThis.CharacterManager;
+					console.debug(`Render.hover: Using CharacterManager:`, characterManager);
+					// Try different ID formats that might be used (including case variations)
+					const possibleIds = [
+						hash, // Direct hash (e.g., "garurt_sam")
+						hash.toLowerCase(), // Lowercase version
+						hash.replace('_', ''), // Without underscore
+						hash.replace('_', '').toLowerCase(), // Without underscore, lowercase
+						source, // Just the source part
+						source.toLowerCase(), // Source lowercase
+						`${source}_${hash.split('_')[0]}`, // Reconstructed ID
+						`${source.toLowerCase()}_${hash.split('_')[0].toLowerCase()}`, // Reconstructed ID lowercase
+						hash.split('_')[0], // Just the character name part
+						hash.split('_')[0].toLowerCase() // Character name lowercase
+					];
+					console.debug(`Render.hover: Trying character IDs:`, possibleIds);
+
+					for (const possibleId of possibleIds) {
+						try {
+							const character = characterManager.getCharacterById(possibleId);
+							if (character) {
+								console.debug(`Render.hover: Found character by ID "${possibleId}":`, character.name);
+								toRender = character;
+								break;
+							} else {
+								console.debug(`Render.hover: No character found for ID "${possibleId}"`);
+							}
+						} catch (e) {
+							// Continue trying other IDs
+							console.debug(`Render.hover: Error loading character with ID "${possibleId}":`, e.message);
+						}
+					}
+
+					// If not found by ID, try loading by name from localStorage
+					if (!toRender) {
+						try {
+							const allCharacters = characterManager.loadCharacterSummaries();
+							const characterName = hash.split('_')[0];
+							const matchingChar = allCharacters.find(char => 
+								char.name.toLowerCase() === characterName.toLowerCase() ||
+								char.id === hash ||
+								char.id === characterName
+							);
+							if (matchingChar) {
+								toRender = characterManager.getCharacterById(matchingChar.id) || matchingChar;
+							}
+						} catch (e) {
+							console.warn("Failed to search characters by name:", e);
+						}
+					}
+				}
+
+				// If still not found, fall back to DataLoader
+				if (!toRender) {
+					console.debug(`Render.hover: No character found via CharacterManager, trying DataLoader`);
+					try {
+						toRender = await DataLoader.pCacheAndGet(page, source, hash);
+					} catch (dataLoaderError) {
+						console.warn("DataLoader failed for character:", dataLoaderError);
+						// Create a placeholder character object
+						toRender = {
+							name: hash.split('_')[0] || "Unknown Character",
+							id: hash,
+							source: source,
+							_isPlaceholder: true,
+							entries: [
+								"This character could not be loaded from either CharacterManager or DataLoader.",
+								"The character may not exist or there may be a data loading issue.",
+								`Requested: page="${page}", source="${source}", hash="${hash}"`
+							]
+						};
+						console.log("Created placeholder character (DataLoader fallback):", toRender);
+					}
+				}
+			} catch (e) {
+				console.warn("Character loading error, falling back to DataLoader:", e);
+				try {
+					toRender = await DataLoader.pCacheAndGet(page, source, hash);
+				} catch (dataLoaderError) {
+					console.warn("DataLoader also failed:", dataLoaderError);
+					// Create a placeholder character object to prevent the error
+					toRender = {
+						name: hash.split('_')[0] || "Unknown Character",
+						id: hash,
+						source: source,
+						_isPlaceholder: true,
+						entries: [
+							"This character could not be loaded. The character data may not be available or there may be a loading error.",
+							`Attempted to load: page="${page}", source="${source}", hash="${hash}"`
+						]
+					};
+					console.log("Created placeholder character:", toRender);
+				}
+			}
+		console.debug(`Render.hover: Final toRender for character page:`, toRender);
+			
+			// Special handling for character verification - create placeholder if null
+			if (!toRender) {
+				console.warn(`Character loading failed completely for: page="${page}" source="${source}" hash="${hash}" - creating placeholder`);
+				toRender = {
+					name: hash.split('_')[0] || "Unknown Character",
+					id: hash,
+					source: source,
+					_isPlaceholder: true,
+					entries: [
+						"⚠️ Character Loading Error",
+						"This character could not be loaded from localStorage.",
+						"The character may have been deleted, moved, or there may be a data corruption issue.",
+						{"type": "inset", "name": "Debug Info", "entries": [
+							`Page: ${page}`,
+							`Source: ${source}`, 
+							`Hash: ${hash}`,
+							`PreloadId: ${preloadId}`,
+							`CustomHashId: ${customHashId}`,
+							`IsFluff: ${meta.isFluff}`
+						]}
+					]
+				};
+				console.log("Created final placeholder character for hover:", toRender);
+			}
+			
+			this._pHandleLinkMouseOver_doVerifyToRender({toRender, page, source, hash, preloadId, customHashId, isFluff: meta.isFluff});
+		} else if (preloadId != null) { // FIXME(Future) remove in favor of `customHashId`
 			switch (page) {
 				case UrlUtil.PG_BESTIARY: {
 					const {_scaledCr: scaledCr, _scaledSpellSummonLevel: scaledSpellSummonLevel, _scaledClassSummonLevel: scaledClassSummonLevel} = Renderer.monster.getUnpackedCustomHashId(preloadId);

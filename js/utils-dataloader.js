@@ -1062,15 +1062,23 @@ class _DataTypeLoaderCharacter extends _DataTypeLoader {
 						// Check if we have full character data already cached
 						const cached = CharacterManager.getCharacterById(summary.id);
 						if (cached) {
-							// Use the full character data
-							characters.push(cached);
+							// Use the full character data and ensure proper formatting
+							const character = {
+								...cached,
+								// Ensure character has required fields for DataLoader
+								id: cached.id || summary.id,
+								name: cached.name || summary.name,
+								source: cached.source || summary.source || "custom",
+								__prop: "character"
+							};
+							characters.push(character);
 						} else {
 							// Create an enhanced summary object for DataLoader indexing
 							// This allows search/filter to work without loading full characters
-							characters.push({
+							const character = {
 								id: summary.id,
 								name: summary.name,
-								source: summary.source,
+								source: summary.source || "custom",
 								_fClass: summary._fClass,
 								_fRace: summary._fRace,
 								_fLevel: summary._fLevel,
@@ -1078,17 +1086,20 @@ class _DataTypeLoaderCharacter extends _DataTypeLoader {
 								updatedAt: summary.updatedAt,
 								__prop: "character",
 								__isStub: true // Mark as stub for lazy loading
-							});
+							};
+							characters.push(character);
 						}
 					} catch (e) {
 						console.warn(`Failed to process character summary ${summary.id}:`, e);
 					}
 				}
+				console.debug(`DataLoader: Loaded ${characters.length} characters from CharacterManager`);
 				return {character: characters};
 			} catch (error) {
 				console.warn("Failed to load character summaries from CharacterManager for DataLoader:", error);
 			}
 		}
+		return {character: []}; // Return empty array if no CharacterManager
 	}
 
 	// Cache for character data
@@ -2153,18 +2164,47 @@ class DataLoader {
 			try {
 				const CharacterManager = getCharacterManager();
 				if (CharacterManager) {
-					// Decode the hash to avoid double encoding issues
-					const decodedHash = decodeURIComponent(hash);
-					// Try to load the full character on demand
-					const character = await CharacterManager.ensureFullCharacter(decodedHash);
+					// Try different ID variations to find the character
+					const possibleIds = [
+						hash, // Direct hash (e.g., "garurt_sam")
+						hash.replace('_', ''), // Without underscore
+						source, // Just the source part
+						`${source}_${hash.split('_')[0]}`, // Reconstructed ID
+						hash.split('_')[0] // Just the character name part
+					];
+
+					let character = null;
+					for (const possibleId of possibleIds) {
+						try {
+							character = CharacterManager.getCharacterById(possibleId);
+							if (character) break;
+						} catch (e) {
+							// Continue trying other IDs
+						}
+					}
+
+					// If found by ID search, try loading summaries to find by name
+					if (!character) {
+						try {
+							const summaries = CharacterManager.loadCharacterSummaries();
+							const characterName = hash.split('_')[0];
+							const matchingChar = summaries.find(char => 
+								char.name.toLowerCase() === characterName.toLowerCase() ||
+								char.id === hash ||
+								char.id === characterName
+							);
+							if (matchingChar) {
+								character = CharacterManager.getCharacterById(matchingChar.id) || matchingChar;
+							}
+						} catch (e) {
+							console.warn("Failed to search characters by name:", e);
+						}
+					}
+
 					if (character) {
-						// Add to cache using existing infrastructure
-						this._pCache_addEntityToCache({
-							prop: "character",
-							hashBuilder: UrlUtil.URL_TO_HASH_BUILDER["character"],
-							ent: character
-						});
-						// Return the character (with copy if requested)
+						// Manually add to cache since we found the character
+						this._CACHE.set(pageClean, sourceClean, hashClean, character);
+						console.debug(`Character lazy loaded and cached: ${character.name} (${character.id})`);
 						return isCopy ? MiscUtil.copyFast(character) : character;
 					}
 				}
