@@ -165,10 +165,16 @@ class CharactersPage extends ListPageMultiSource {
 			// accidentally been inserted into the cache.
 			summaries = (summaries || []).filter(c => c);
 			if (summaries.length > 0) {
+				// Process characters for display to ensure _fRace, _fClass, etc. are set
+				const processedSummaries = summaries.map(char => {
+					this._processCharacterForDisplay(char);
+					return char;
+				});
+				
 				// Format for 5etools compatibility - summaries work like full characters for list display
-				const formattedData = { character: summaries };
+				const formattedData = { character: processedSummaries };
 				this._addData(formattedData);
-				console.log(`Loaded ${summaries.length} character summaries for list display`);
+				console.log(`Loaded ${processedSummaries.length} character summaries for list display`);
 			} else {
 				console.log("No character summaries found - this is normal for a fresh installation");
 			}
@@ -180,24 +186,36 @@ class CharactersPage extends ListPageMultiSource {
 		CharacterManager.addListener((characters) => {
 			// Defensive: remove falsy entries
 			characters = (characters || []).filter(c => c);
+			
+			console.log(`CharacterManager listener: Received ${characters.length} character updates`);
+			
 			// Update the list when characters change - summaries work for list display
 			if (this._list) {
 				// Get latest summaries for list display (more efficient than full characters)
 				CharacterManager.loadCharacterSummaries().then(summaries => {
 					if (summaries && summaries.length > 0) {
-						const formattedData = { character: summaries.filter(c => c) };
-						// Clear existing data and add fresh data
-						this._dataList.length = 0;
-						this._addData(formattedData);
-						this._list.update();
+						// Process characters for display to ensure _fRace, _fClass, etc. are set
+						const processedSummaries = summaries.filter(c => c).map(char => {
+							this._processCharacterForDisplay(char);
+							return char;
+						});
+						
+						console.log(`Updating character list with ${processedSummaries.length} characters`);
+						
+						const formattedData = { character: processedSummaries };
+						// SMOOTHLY update data instead of clearing and re-adding
+						this._updateDataList(formattedData);
 					}
 				}).catch(e => {
 					console.warn("Failed to reload summaries for list update:", e);
 					// Fallback to using the full character data provided
-					const formattedData = { character: characters };
-					this._dataList.length = 0;
-					this._addData(formattedData);
-					this._list.update();
+					const processedCharacters = characters.map(char => {
+						this._processCharacterForDisplay(char);
+						return char;
+					});
+					
+					const formattedData = { character: processedCharacters };
+					this._updateDataList(formattedData);
 				});
 			}
 
@@ -306,6 +324,65 @@ class CharactersPage extends ListPageMultiSource {
 				propAllowlist: new Set(["character"]),
 			});
 		}
+	}
+	
+	/**
+	 * Smoothly update the data list without clearing everything (prevents flickering)
+	 * @param {Object} newData - New data to merge into the list
+	 */
+	_updateDataList(newData) {
+		if (!newData.character || !Array.isArray(newData.character)) {
+			console.warn('_updateDataList: Invalid data provided');
+			return;
+		}
+		
+		// Create a map of existing characters by ID for fast lookup
+		const existingCharMap = new Map();
+		this._dataList.forEach((char, index) => {
+			if (char && char.id) {
+				existingCharMap.set(char.id, { char, index });
+			}
+		});
+		
+		// Process new characters
+		const newCharacters = newData.character;
+		const updatedIds = new Set();
+		
+		for (const newChar of newCharacters) {
+			if (!newChar || !newChar.id) continue;
+			
+			updatedIds.add(newChar.id);
+			
+			if (existingCharMap.has(newChar.id)) {
+				// Update existing character
+				const { index } = existingCharMap.get(newChar.id);
+				this._dataList[index] = newChar;
+			} else {
+				// Add new character
+				this._dataList.push(newChar);
+			}
+		}
+		
+		// Remove characters that are no longer in the new data
+		for (let i = this._dataList.length - 1; i >= 0; i--) {
+			const char = this._dataList[i];
+			if (char && char.id && !updatedIds.has(char.id)) {
+				this._dataList.splice(i, 1);
+			}
+		}
+		
+		// Update the list display
+		if (this._list) {
+			this._list.update();
+		}
+		
+		// Update DataLoader cache
+		DataLoader._pCache_addToCache({
+			allDataMerged: newData,
+			propAllowlist: new Set(["character"]),
+		});
+		
+		console.log(`_updateDataList: Smoothly updated character list with ${newCharacters.length} characters`);
 	}
 
 	async _renderStats_doBuildStatsTab ({ent}) {

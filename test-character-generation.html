@@ -30,7 +30,7 @@
                     levels: {
                         "1": {
                             maxSlots: 2,
-                            slotsUsed: 2  // For warlocks, should equal maxSlots
+                            slotsRemaining: 2  // For warlocks, should equal maxSlots
                         }
                     }
                 },
@@ -56,7 +56,7 @@
             console.log("Warlock level 2 -> currentHitDice:", testCharacterData.class[1].currentHitDice, "=== 2");
 
             console.log("✅ Warlock spell slot fixes:");
-            console.log("Warlock slotsUsed:", testCharacterData.spells.levels["1"].slotsUsed, "=== maxSlots:", testCharacterData.spells.levels["1"].maxSlots);
+            console.log("Warlock slotsRemaining:", testCharacterData.spells.levels["1"].slotsRemaining, "=== maxSlots:", testCharacterData.spells.levels["1"].maxSlots);
 
             console.log("✅ Equipment rendering fixes:");
             console.log("Equipment in entries structure:", testCharacterData.entries[0].entries);
