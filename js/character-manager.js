@@ -14,9 +14,7 @@
  *  CharacterP2P.init(); // Automatically connects to Cloudflare session
  *  // Character updates are automatically broadcast to all users
  */
-let API_BASE_URL = window.location.origin.includes("localhost")
-	? "https://5e.bne.sh/api"
-	: "/api";
+let API_BASE_URL = "https://5etools-character-sync.thesamueljim.workers.dev/api";
 
 class CharacterP2P {
 	static _ws = null;
@@ -31,24 +29,6 @@ class CharacterP2P {
 	static _maxReconnectAttempts = 5;
 	static _connectedUsers = new Set();
 	static _heartbeatInterval = null;
-
-	static _startPeriodicAnnounce () {
-		if (this._announceTimer) return;
-		if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-		this._announceTimer = setInterval(() => {
-			try {
-				if (this._dc && this._dc.readyState === "open") {
-					this.send({ type: "PEER_ANNOUNCE", clientId: this.clientId });
-				} else if (this._signalingSocket && this._signalingSocket.readyState === WebSocket.OPEN) {
-					this._signalingSocket.send(JSON.stringify({ type: "relay", payload: { type: "PEER_ANNOUNCE", clientId: this.clientId }, origin: this.clientId }));
-				}
-			} catch (e) { /* ignore */ }
-		}, this._announceInterval);
-	}
-
-	static _stopPeriodicAnnounce () {
-		if (this._announceTimer) { clearInterval(this._announceTimer); this._announceTimer = null; }
-	}
 
 	/**
 	 * Setup BroadcastChannel for tab-to-tab signaling
@@ -696,6 +676,34 @@ class CharacterP2P {
 			console.error("CharacterP2P: Failed to connect to Cloudflare:", error);
 			this._scheduleReconnect();
 		}
+	
+		// Auto-initialize character indexing site-wide. This triggers a background
+		// load of character summaries so other pages can access basic character info
+		// without requiring the user to visit `characters.html`. Uses lazy loading
+		// architecture for better performance.
+		(function () {
+		    try {
+		        // Run after a short delay to avoid delaying initial page rendering
+		        setTimeout(() => {
+		            try {
+		                const CM = CharacterManager;
+		                // Load character summaries in the background (lightweight)
+		                // This populates the summary cache for lists/search without downloading full JSONs
+		                if (!navigator.onLine) {
+		                    // Offline: try to load any cached summaries
+		                    CM.loadCharacterSummaries().catch(() => {});
+		                } else {
+		                    // Online: load fresh summaries in background
+		                    CM.loadCharacterSummaries().catch(() => {});
+		                }
+		            } catch (e) {
+		                console.warn("CharacterManager: Auto-init failed:", e);
+		            }
+		        }, 250);
+		    } catch (e) {
+		        /* swallow */
+		    }
+		})();
 	}
 
 	/**
@@ -717,13 +725,8 @@ class CharacterP2P {
 				this._connectionState = "connected";
 				this._reconnectAttempts = 0;
 
-				// Send test message
-				setTimeout(() => {
-					this._sendMessage({
-						type: "TEST_MESSAGE",
-						message: `Hello from device ${this.clientId}`,
-					});
-				}, 1000);
+				// Start heartbeat to keep connection alive
+				this._startHeartbeat();
 
 				// Notify listeners
 				this._onOpen.forEach(fn => fn());
@@ -755,52 +758,151 @@ class CharacterP2P {
 	}
 
 	/**
-	 * Handle incoming messages from Cloudflare session
+	 * Handle incoming messages from server (server-centric model)
 	 */
 	static _handleMessage (data) {
-		// Don't process our own messages
-		if (data.userId === this.clientId) {
-			return;
-		}
-
 		switch (data.type) {
-			case "USER_JOINED":
-				this._connectedUsers.add(data.userId);
-				break;
+			// P2P user join/leave messages no longer used in server-centric model
 
-			case "USER_LEFT":
-				this._connectedUsers.delete(data.userId);
-				break;
-
-			case "CHARACTER_UPDATED":
-				if (typeof CharacterManager !== "undefined" && CharacterManager._handleP2PSync) {
-					CharacterManager._handleP2PSync({
-						type: "CHARACTER_UPDATED",
-						character: data.character,
-						origin: data.userId,
+		case "CHARACTER_UPDATED":
+		case "CHARACTER_CREATED":
+			// Server notifies us of character changes with full character data - update everywhere immediately
+			if (typeof CharacterManager !== "undefined" && data.characterId) {
+				console.log(`CharacterP2P: Character ${data.characterId} updated by server - updating everywhere with broadcasted data`);
+				
+				// Check if we received character data in the broadcast message
+				if (data.characterData) {
+					console.log(`CharacterP2P: Using character data from broadcast (no server fetch needed)`);
+					
+					// STEP 1: Force clear all caches for this character
+					CharacterManager.forceRefreshCharacters([data.characterId]);
+					CharacterManager._clearSummariesCache();
+					
+					// STEP 2: Use the character data from the broadcast (no server fetch needed!)
+					const updatedCharacter = CharacterManager._processCharacterForDisplay(data.characterData);
+					updatedCharacter.id = data.characterId; // Ensure ID is set correctly
+					
+					// Update memory cache
+					CharacterManager._characters.set(data.characterId, updatedCharacter);
+					
+					// Update array cache
+					const arrayIndex = CharacterManager._charactersArray.findIndex(c => c && c.id === data.characterId);
+					if (arrayIndex >= 0) {
+						CharacterManager._charactersArray[arrayIndex] = updatedCharacter;
+					} else {
+						CharacterManager._charactersArray.push(updatedCharacter);
+					}
+					
+					// Update localStorage cache
+					CharacterManager._updateLocalStorageCache(updatedCharacter);
+					
+					console.log(`CharacterP2P: Successfully updated character from broadcast: ${updatedCharacter.name}`);
+					
+					// STEP 3: Always notify all UI listeners (this updates everywhere)
+					CharacterManager._notifyListeners();
+					
+					// STEP 4: Update specific UI components based on current page
+					this._updateUIComponentsWithCharacter(updatedCharacter, data.characterId);
+					
+					console.log(`CharacterP2P: ✅ Successfully updated character ${data.characterId} everywhere using broadcast data`);
+					
+				} else {
+					// Fallback: No character data in broadcast, fetch from server (old behavior)
+					console.log(`CharacterP2P: No character data in broadcast, falling back to server fetch`);
+					
+					// STEP 1: Force clear all caches for this character
+					CharacterManager.forceRefreshCharacters([data.characterId]);
+					CharacterManager._clearSummariesCache();
+					
+					// STEP 2: Fetch the updated character from server
+					CharacterManager.ensureFullCharacter(data.characterId).then((updatedCharacter) => {
+						if (updatedCharacter) {
+							console.log(`CharacterP2P: Successfully fetched updated character from server: ${updatedCharacter.name}`);
+							
+							// Always notify all UI listeners (this updates everywhere)
+							CharacterManager._notifyListeners();
+							
+							// Update specific UI components based on current page
+							this._updateUIComponentsWithCharacter(updatedCharacter, data.characterId);
+							
+							console.log(`CharacterP2P: ✅ Successfully updated character ${data.characterId} everywhere via server fetch`);
+						} else {
+							console.warn(`CharacterP2P: ❌ Failed to fetch updated character ${data.characterId}`);
+						}
+					}).catch(error => {
+						console.error(`CharacterP2P: ❌ Error fetching updated character ${data.characterId}:`, error);
 					});
 				}
-				break;
+			}
+			break;
 
 			case "CHARACTER_DELETED":
-				if (typeof CharacterManager !== "undefined" && CharacterManager._handleP2PSync) {
-					CharacterManager._handleP2PSync({
-						type: "CHARACTER_DELETED",
-						characterId: data.characterId,
-						origin: data.userId,
-					});
+				// Server notifies us of character deletion - remove from local cache
+				if (typeof CharacterManager !== "undefined" && data.characterId) {
+					console.log(`CharacterP2P: Character ${data.characterId} deleted by server`);
+					// Remove character from local caches
+					CharacterManager._removeCharacterFromCache(data.characterId);
+					// Invalidate summaries cache
+					CharacterManager._clearSummariesCache();
 				}
 				break;
 
-			case "TEST_MESSAGE":
+			case "CONNECTED":
+				console.log(`CharacterP2P: Connected to character sync server`);
 				break;
 
-			case "HEARTBEAT":
-				// Heartbeat from another user, ignore
+			case "HEARTBEAT_ACK":
+				// Server heartbeat acknowledgment, ignore
 				break;
 
 			default:
-				console.debug("CharacterP2P: Unknown message type:", data.type);
+				console.debug("CharacterP2P: Unknown message type:", data.type, data);
+		}
+	}
+
+	/**
+	 * Update UI components when a character is updated via WebSocket
+	 * @param {Object} updatedCharacter - The updated character data
+	 * @param {string} characterId - The character ID
+	 */
+	static _updateUIComponentsWithCharacter(updatedCharacter, characterId) {
+		// Skip character editor updates - user should manually refresh if needed
+		if (window.location.pathname.includes('charactereditor.html')) {
+			console.log(`CharacterP2P: ⏭️ Skipping character editor update - user is editing manually`);
+			// Character editor gets no automatic updates to avoid interrupting manual editing
+			// User can use the refresh button if they want to see updates
+		}
+		
+		// Update characters.html page if currently displaying this character
+		if (window.location.pathname.includes('characters.html')) {
+			try {
+				if (typeof window.charactersPage !== 'undefined' && window.charactersPage._currentCharacter) {
+					if (window.charactersPage._currentCharacter.id === characterId) {
+						// Update the current character reference and re-render
+						window.charactersPage._currentCharacter = updatedCharacter;
+						window.charactersPage._renderStats_doBuildStatsTab({ent: updatedCharacter});
+						console.log(`CharacterP2P: ✅ Updated displayed character ${updatedCharacter.name} in characters page`);
+					}
+				}
+			} catch (e) {
+				console.warn('Failed to update characters page display:', e);
+			}
+		}
+		
+		// Update any other pages/components that might display characters
+		try {
+			// Dispatch a global event that any component can listen to
+			if (typeof window.dispatchEvent === 'function') {
+				window.dispatchEvent(new CustomEvent('characterUpdatedGlobally', {
+					detail: { 
+						character: updatedCharacter, 
+						characterId: characterId,
+						updateType: 'websocket_broadcast_with_data'
+					}
+				}));
+			}
+		} catch (e) {
+			console.warn('Failed to dispatch global character update event:', e);
 		}
 	}
 
@@ -869,24 +971,15 @@ class CharacterP2P {
 	}
 
 	/**
-	 * Send character update to all users (called by CharacterManager)
+	 * Send character update notifications (server-centric model)
+	 * Note: In server-centric model, we don't broadcast client-to-client
+	 * Instead, the server API handles sync and sends updates via WebSocket
 	 */
 	static send (data) {
-		if (data.type === "CHARACTER_UPDATED" && data.character) {
-			return this._sendMessage({
-				type: "CHARACTER_UPDATED",
-				character: data.character,
-			});
-		}
-
-		if (data.type === "CHARACTER_DELETED" && data.characterId) {
-			return this._sendMessage({
-				type: "CHARACTER_DELETED",
-				characterId: data.characterId,
-			});
-		}
-
-		return false;
+		// In server-centric model, we don't send client updates directly
+		// The server API will handle character saves and broadcast updates
+		console.log(`CharacterP2P: Server-centric sync - ${data.type} will be handled by server`);
+		return true; // Always return true since server handles sync
 	}
 
 	/**
@@ -953,10 +1046,6 @@ class CharacterP2P {
 		this._connectedUsers.clear();
 		this._reconnectAttempts = 0;
 	}
-
-	// Legacy compatibility methods - now no-ops since we're using Cloudflare
-	static _startPeriodicAnnounce () { /* handled by Cloudflare session */ }
-	static _stopPeriodicAnnounce () { /* handled by Cloudflare session */ }
 }
 
 // Expose globally for backward compatibility
@@ -987,33 +1076,7 @@ try {
 	// ignore in non-browser contexts
 }
 
-// Manage periodic peer announces based on tab visibility
-try {
-	if (typeof document !== "undefined" && typeof window !== "undefined") {
-		document.addEventListener("visibilitychange", () => {
-			try {
-				if (document.visibilityState === "visible") {
-					if (typeof CharacterP2P !== "undefined" && typeof CharacterP2P._startPeriodicAnnounce === "function") {
-						CharacterP2P._startPeriodicAnnounce();
-					}
-				} else {
-					if (typeof CharacterP2P !== "undefined" && typeof CharacterP2P._stopPeriodicAnnounce === "function") {
-						CharacterP2P._stopPeriodicAnnounce();
-					}
-				}
-			} catch (e) { /* ignore */ }
-		});
 
-		// Add cleanup on page unload
-		window.addEventListener("beforeunload", () => {
-			try {
-				if (typeof CharacterP2P !== "undefined" && typeof CharacterP2P.cleanup === "function") {
-					CharacterP2P.cleanup();
-				}
-			} catch (e) { /* ignore */ }
-		});
-	}
-} catch (e) { /* ignore in non-browser contexts */ }
 
 class CharacterManager {
 	static _instance = null;
@@ -1026,9 +1089,231 @@ class CharacterManager {
 	static _refreshInterval = null;
 	static _blobCache = new Map(); // Map<id, {blob, character, lastFetched}> for caching with timestamps
 	static _freshnessThreshold = 10 * 60 * 1000; // 10 minutes in milliseconds (localStorage staleness threshold)
+	// If localStorage JSON for a character is newer than this, avoid re-fetching the
+	// character blob on page load to reduce unnecessary network calls.
+	static _LOCAL_JSON_FRESH_MS = 1 * 60 * 1000; // 1 minute
 	static _STORAGE_KEY = "VeTool_CharacterManager_Cache";
+	// Client-side cache for character summaries (lightweight data for lists/search)
+	static _SUMMARIES_CACHE_KEY = "VeTool_CharacterManager_Summaries";
 	// Client-side cache for the blob list (metadata returned by /api/characters/load)
 	static _LIST_CACHE_KEY = "VeTool_CharacterManager_ListCache";
+	static _LAST_BLOBS_FETCH_TS_KEY = "VeTool_CharacterManager_LastBlobFetchTs";
+	static _SUMMARIES_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours for summaries
+
+	static _getLastBlobsFetchTs () {
+		try {
+			const raw = localStorage.getItem(this._LAST_BLOBS_FETCH_TS_KEY);
+			if (!raw) return 0;
+			return Number(raw) || 0;
+		} catch (e) { return 0; }
+	}
+
+	static _setLastBlobsFetchTs (ts) {
+		try { localStorage.setItem(this._LAST_BLOBS_FETCH_TS_KEY, String(ts)); } catch (e) { /* ignore */ }
+	}
+
+	/**
+	 * Extract character summary from full character data
+	 * @param {Object} character - Full character object
+	 * @returns {Object} Character summary with essential fields
+	 */
+	static _extractCharacterSummary (character) {
+		if (!character || !character.name) return null;
+		
+		// If character has already been processed for display, use those fields
+		// Otherwise, fallback to raw extraction
+		const characterClass = character._fClass || this._extractClassFromRaw(character);
+		const characterRace = character._fRace || this._extractRaceFromRaw(character);
+		const characterLevel = character._fLevel || this._extractLevelFromRaw(character);
+		const characterBackground = character._fBackground || this._extractBackgroundFromRaw(character);
+		
+		return {
+			id: character.id || this._generateCompositeId(character.name, character.source),
+			name: character.name,
+			source: character.source || "Unknown",
+			_fClass: characterClass,
+			_fRace: characterRace, 
+			_fLevel: characterLevel,
+			_fBackground: characterBackground,
+			updatedAt: character._lastModified || character._localVersion || Date.now(),
+			_isLocallyModified: character._isLocallyModified || false
+		};
+	}
+
+	/**
+	 * Helper methods for extracting data from raw character objects
+	 */
+	static _extractClassFromRaw (character) {
+		if (!character.class) return "Unknown";
+		
+		if (Array.isArray(character.class) && character.class.length > 0) {
+			// Find highest level class or first class
+			const primaryClass = character.class.reduce((prev, current) => {
+				return (current.level || 1) > (prev.level || 1) ? current : prev;
+			}, character.class[0]);
+			return primaryClass.name || "Unknown";
+		} else if (typeof character.class === 'string') {
+			return character.class;
+		}
+		
+		return "Unknown";
+	}
+
+	static _extractRaceFromRaw (character) {
+		if (!character.race) return "Unknown";
+		
+		if (typeof character.race === 'string') {
+			return character.race;
+		} else if (character.race.name) {
+			return character.race.name;
+		}
+		
+		return "Unknown";
+	}
+
+	static _extractLevelFromRaw (character) {
+		if (character.class && Array.isArray(character.class)) {
+			return character.class.reduce((total, cls) => total + (cls.level || 1), 0);
+		} else if (character.level) {
+			return character.level;
+		}
+		return 1; // Default level
+	}
+
+	static _extractBackgroundFromRaw (character) {
+		if (!character.background) return null;
+		
+		if (typeof character.background === 'string') {
+			return character.background;
+		} else if (character.background.name) {
+			return character.background.name;
+		}
+		
+		return null;
+	}
+
+	/**
+	 * Load character summaries from localStorage cache
+	 * @returns {Array} Array of cached character summaries
+	 */
+	static _loadSummariesFromCache () {
+		try {
+			const stored = localStorage.getItem(this._SUMMARIES_CACHE_KEY);
+			if (!stored) return { summaries: [], timestamp: 0 };
+			
+			const data = JSON.parse(stored);
+			if (!data || !Array.isArray(data.summaries)) return { summaries: [], timestamp: 0 };
+			
+			return {
+				summaries: data.summaries,
+				timestamp: data.timestamp || 0
+			};
+		} catch (e) {
+			console.warn("CharacterManager: Failed to load summaries from cache:", e);
+			return { summaries: [], timestamp: 0 };
+		}
+	}
+
+	/**
+	 * Save character summaries to localStorage cache
+	 * @param {Array} summaries - Array of character summaries to cache
+	 */
+	static _saveSummariesToCache (summaries) {
+		try {
+			const data = {
+				summaries: summaries || [],
+				timestamp: Date.now()
+			};
+			localStorage.setItem(this._SUMMARIES_CACHE_KEY, JSON.stringify(data));
+		} catch (e) {
+			console.warn("CharacterManager: Failed to save summaries to cache:", e);
+		}
+	}
+
+	/**
+	 * Add or update a character in the summaries cache for immediate visibility
+	 * @param {Object} character - Character to add/update in summaries cache
+	 */
+	static _addCharacterToSummariesCache (character) {
+		try {
+			if (!character || !character.name) {
+				return;
+			}
+
+			// Extract character summary
+			const summary = this._extractCharacterSummary(character);
+			if (!summary) {
+				return;
+			}
+
+			// Load existing summaries
+			const { summaries } = this._loadSummariesFromCache();
+
+			// Find existing summary and update or add new one
+			const existingIndex = summaries.findIndex(s => s.id === summary.id);
+			if (existingIndex >= 0) {
+				// Update existing summary
+				summaries[existingIndex] = summary;
+			} else {
+				// Add new summary
+				summaries.push(summary);
+			}
+
+			// Save updated summaries
+			this._saveSummariesToCache(summaries);
+
+			console.log(`CharacterManager: Added/updated character ${character.name} in summaries cache`);
+		} catch (e) {
+			console.warn("CharacterManager: Failed to add character to summaries cache:", e);
+		}
+	}
+
+	/**
+	 * Clear summaries cache to force reload
+	 */
+	static _clearSummariesCache () {
+		try {
+			localStorage.removeItem(this._SUMMARIES_CACHE_KEY);
+			console.log("CharacterManager: Summaries cache cleared");
+		} catch (e) {
+			console.warn("CharacterManager: Failed to clear summaries cache:", e);
+		}
+	}
+
+	/**
+	 * Remove character from all local caches
+	 * @param {string} characterId - Character ID to remove
+	 */
+	static _removeCharacterFromCache (characterId) {
+		try {
+			// Remove from in-memory caches
+			this._characters.delete(characterId);
+			this._blobCache.delete(characterId);
+			
+			// Remove from array cache
+			const arrayIndex = this._charactersArray.findIndex(c => c && c.id === characterId);
+			if (arrayIndex >= 0) {
+				this._charactersArray.splice(arrayIndex, 1);
+			}
+			
+			// Remove from localStorage
+			const stored = this._loadFromLocalStorage();
+			const filtered = stored.filter(c => c && c.id !== characterId);
+			this._saveToLocalStorage(filtered);
+			
+			// Remove from summary cache
+			const { summaries } = this._loadSummariesFromCache();
+			const filteredSummaries = summaries.filter(s => s.id !== characterId);
+			this._saveSummariesToCache(filteredSummaries);
+			
+			// Notify listeners
+			this._notifyListeners();
+			
+			console.log(`CharacterManager: Removed character ${characterId} from all caches`);
+		} catch (e) {
+			console.warn(`CharacterManager: Failed to remove character ${characterId} from cache:`, e);
+		}
+	}
 	// Only refresh the `/characters/list` from server if the cached blob list
 	// is older than 24 hours. We rely on WebSocket/P2P notifications for
 	// near-real-time updates; use the 24h TTL to avoid excessive list fetches
@@ -1076,6 +1361,52 @@ class CharacterManager {
 			}
 		}
 	}
+	
+	/**
+	 * Force complete refresh of character by clearing all cached data
+	 * @param {string} characterId - Character ID to completely refresh
+	 */
+	static forceCompleteRefresh (characterId) {
+		console.log(`CharacterManager: Force complete refresh for ${characterId}`);
+		
+		// Remove from in-memory caches
+		this._characters.delete(characterId);
+		this._blobCache.delete(characterId);
+		
+		// Remove from array cache
+		const arrayIndex = this._charactersArray.findIndex(c => c && c.id === characterId);
+		if (arrayIndex >= 0) {
+			this._charactersArray.splice(arrayIndex, 1);
+		}
+		
+		// Remove from localStorage
+		try {
+			const stored = this._loadFromLocalStorage();
+			const filtered = stored.filter(c => c && c.id !== characterId);
+			this._saveToLocalStorage(filtered);
+		} catch (e) {
+			console.warn(`CharacterManager: Error removing ${characterId} from localStorage:`, e);
+		}
+		
+		// Clear summary cache to force rebuild
+		this._clearSummariesCache();
+		
+		// Clear DataLoader cache
+		if (typeof DataLoader !== "undefined") {
+			try {
+				// Force DataLoader to refresh
+				const formattedData = { character: [...this._charactersArray] };
+				DataLoader._pCache_addToCache({
+					allDataMerged: formattedData,
+					propAllowlist: new Set(["character"]),
+				});
+			} catch (e) {
+				console.warn("CharacterManager: Error updating DataLoader cache:", e);
+			}
+		}
+		
+		console.log(`CharacterManager: Complete refresh cache cleared for ${characterId}`);
+	}
 
 	/**
 	 * Load characters from localStorage cache
@@ -1120,113 +1451,7 @@ class CharacterManager {
 		}
 	}
 
-	/**
-	 * Check for stale characters in the background and update if needed
-	 * @param {Array<string>} [sources] - Optional list of sources to check
-	 */
-	static async _checkForStaleCharactersInBackground (sources = null) {
-		try {
-			// If suppression is active (e.g., manual refresh just ran), skip background checks
-			if (Date.now() < (this._suppressBackgroundChecksUntil || 0)) return;
-			// Wait a bit to not block the initial UI load
-			setTimeout(async () => {
-				const now = Date.now();
-				let hasStaleCharacters = false;
 
-				// Check if any characters are stale
-				for (const [id, cached] of this._blobCache.entries()) {
-					if (sources && sources.length > 0) {
-						// Check if this character matches the source filter
-						const character = cached.character;
-						if (!character || !sources.includes(character.source)) {
-							continue;
-						}
-					}
-
-					if ((now - (cached.lastFetched || 0)) > this._freshnessThreshold) {
-						hasStaleCharacters = true;
-						break;
-					}
-				}
-
-				if (hasStaleCharacters) {
-					// Force a background refresh
-					this.forceRefreshCharacters();
-					// This will trigger a new load that actually hits the API
-					const updated = await this._performFullApiLoad(sources);
-					if (updated.length > 0) {
-						this._notifyListeners();
-					}
-				}
-			}, 100); // Small delay to not block UI
-		} catch (e) {
-			console.warn("CharacterManager: Error in background staleness check:", e);
-		}
-	}
-
-	/**
-	 * Perform a full API load (used for background updates)
-	 * Forces a fresh fetch of the blob list and all characters
-	 * @param {Array<string>} [sources] - Optional list of sources to filter by
-	 */
-	static async _performFullApiLoad (sources = null) {
-		try {
-			// Force refresh the blob list cache
-			const blobs = await this._getBlobList(sources, true);
-
-			if (!blobs || blobs.length === 0) {
-				console.warn("CharacterManager: No character blobs found during full API load");
-				return [];
-			}
-
-			// Fetch all characters fresh from API (ignore cache)
-			const fetchPromises = blobs.map(async (blob) => {
-				try {
-					const response = await fetch(blob.url, {
-						cache: "no-cache",
-						headers: {
-							"Cache-Control": "no-cache, no-store, must-revalidate",
-							"Pragma": "no-cache",
-							"Expires": "0",
-						},
-					});
-
-					if (!response.ok) {
-						console.warn(`CharacterManager: Failed to fetch character ${blob.id}: ${response.statusText}`);
-						return null;
-					}
-
-					const characterData = await response.json();
-					if (!characterData) {
-						console.warn(`CharacterManager: Invalid response for character ${blob.id}`);
-						return null;
-					}
-
-					const character = (characterData.character && Array.isArray(characterData.character))
-						? characterData.character[0]
-						: characterData;
-
-					// Update cache with fresh timestamp
-					this._blobCache.set(blob.id, {
-						blob: blob,
-						character: character,
-						lastFetched: Date.now(),
-					});
-
-					return character;
-				} catch (error) {
-					console.warn(`CharacterManager: Error fetching character ${blob.id}:`, error);
-					return null;
-				}
-			});
-
-			const fetchedCharacters = (await Promise.all(fetchPromises)).filter(c => c);
-			return this._processAndStoreCharacters(fetchedCharacters);
-		} catch (error) {
-			console.warn("CharacterManager: Background API load failed:", error);
-			return [];
-		}
-	}
 
 	/**
 	 * Register a listener for character data changes
@@ -1258,71 +1483,119 @@ class CharacterManager {
 	}
 
 	/**
-	 * Load characters from the API (single source of truth)
+	 * Load character summaries (lightweight data for lists/search/DM screen)
+	 * Uses 24-hour cache, hits /api/characters/list daily to detect new/deleted characters
 	 * @param {Array<string>} [sources] - Optional list of sources to filter by
-	 * @returns {Promise<Array>} Array of characters
+	 * @param {boolean} [forceRefresh] - Force refresh from server (cache busting)
+	 * @returns {Promise<Array>} Array of character summaries
+	 */
+	static async loadCharacterSummaries (sources = null, forceRefresh = false) {
+		try {
+			// Check cache first unless forcing refresh
+			if (!forceRefresh) {
+				const { summaries, timestamp } = this._loadSummariesFromCache();
+				const age = Date.now() - timestamp;
+				
+				if (summaries.length > 0 && age < this._SUMMARIES_CACHE_TTL) {
+					console.log(`CharacterManager: Using cached summaries (age: ${Math.round(age / 60000)} minutes)`);
+					// Apply source filter if requested
+					if (sources) {
+						const sourceList = Array.isArray(sources) ? sources : [sources];
+						return summaries.filter(s => sourceList.includes(s.source));
+					}
+					return [...summaries]; // Return copy to avoid mutation
+				}
+			}
+
+			console.log(`CharacterManager: Loading character summaries from server${forceRefresh ? ' (forced)' : ''}`);
+
+			// Get blob list from server (this handles caching and purging internally)
+			const blobs = await this._getBlobList(null, forceRefresh); // Always get full list for proper deletion detection
+			
+			if (!blobs || blobs.length === 0) {
+				console.log("CharacterManager: No character blobs available, using any cached summaries");
+				const { summaries } = this._loadSummariesFromCache();
+				return sources ? summaries.filter(s => sources.includes(s.source)) : summaries;
+			}
+
+			// Build summaries from available data sources:
+			// 1. Existing full characters in memory/localStorage (most accurate)
+			// 2. Blob metadata (fallback with placeholders)
+			const summaries = [];
+			const fullCharacters = this._loadFromLocalStorage();
+			const fullCharMap = new Map();
+			
+			// Index full characters by ID for quick lookup
+			for (const char of fullCharacters) {
+				if (char && char.id) {
+					fullCharMap.set(char.id, char);
+				}
+			}
+
+			for (const blob of blobs) {
+				const fullChar = fullCharMap.get(blob.id);
+				
+				if (fullChar) {
+					// We have full character data - extract accurate summary
+					const summary = this._extractCharacterSummary(fullChar);
+					if (summary) summaries.push(summary);
+				} else {
+					// Only have blob metadata - create summary from available API data
+					// Use metadata from API response if available, otherwise extract from blob ID
+					let name, source;
+					
+					if (blob.character_name && blob.owner) {
+						// Use API-provided metadata (preferred)
+						name = blob.character_name;
+						source = blob.owner;
+					} else {
+						// Fallback to extracting from blob ID (format: name-source)
+						const parts = blob.id.split('-');
+						source = parts.length > 1 ? parts[parts.length - 1] : 'Unknown';
+						name = parts.length > 1 ? parts.slice(0, -1).join('-') : blob.id;
+					}
+					
+					summaries.push({
+						id: blob.id,
+						name: name,
+						source: source,
+						_fClass: blob.class || 'Unknown', // Use API metadata if available
+						_fRace: blob.race || 'Unknown',   // Use API metadata if available  
+						_fLevel: blob.level || 0,        // Use API metadata if available
+						_fBackground: blob.background || null, // Use API metadata if available
+						updatedAt: blob.uploadedAt ? new Date(blob.uploadedAt).getTime() : Date.now(),
+						_isLocallyModified: false
+					});
+				}
+			}
+
+			// Cache the summaries
+			this._saveSummariesToCache(summaries);
+			
+			console.log(`CharacterManager: Loaded ${summaries.length} character summaries`);
+			
+			// Apply source filter if requested
+			if (sources) {
+				const sourceList = Array.isArray(sources) ? sources : [sources];
+				return summaries.filter(s => sourceList.includes(s.source));
+			}
+			
+			return summaries;
+		} catch (error) {
+			console.error("CharacterManager: Error loading character summaries:", error);
+			// Fallback to cached summaries
+			const { summaries } = this._loadSummariesFromCache();
+			return sources ? summaries.filter(s => sources.includes(s.source)) : summaries;
+		}
+	}
+
+	/**
+	 * DEPRECATED: Use loadCharacterSummaries() for lists and ensureFullCharacter(id) for individual characters
+	 * This method has been removed to prevent accidental full JSON loading.
+	 * @deprecated
 	 */
 	static async loadCharacters (sources = null) {
-		// Initialize offline queue on first load
-		if (this._offlineQueue.length === 0) {
-			this._loadOfflineQueue();
-		}
-		
-		// Process offline queue if we're online
-		if (navigator.onLine && this._offlineQueue.length > 0) {
-			setTimeout(() => this._processOfflineQueue(), 1000); // Process after initial load
-		}
-		
-		// Set up online/offline event listeners (only once)
-		if (!this._onlineListenerSet) {
-			window.addEventListener('online', () => {
-				console.log('CharacterManager: Back online, processing queued operations');
-				this._processOfflineQueue();
-			});
-			
-			window.addEventListener('offline', () => {
-				console.log('CharacterManager: Gone offline, will queue operations');
-			});
-			
-			this._onlineListenerSet = true;
-		}
-
-		// If already loaded and no specific sources requested, return cached data
-		if (this._isLoaded && !sources) return [...this._charactersArray];
-
-		// If we have localStorage data and are not forcing a refresh, use that first
-		// This allows the page to load immediately without waiting for server
-		if (!this._isLoaded && !sources) {
-			const localStorageCharacters = this._loadFromLocalStorage();
-			if (localStorageCharacters.length > 0) {
-				// Load immediately from localStorage, then check for updates in background
-				const processed = this._processAndStoreCharacters(localStorageCharacters, false);
-				this._isLoaded = true;
-				
-				// Check for stale data in background (non-blocking)
-				// With longer list cache TTL and WebSocket updates, be less aggressive about background checks
-				setTimeout(() => {
-					this._checkForStaleCharactersInBackground(sources);
-				}, 5000); // Increased delay from 100ms to 5 seconds
-				
-				return processed;
-			}
-		}
-
-		// If currently loading, wait for that to finish
-		if (this._isLoading) return this._loadPromise;
-
-		this._isLoading = true;
-		this._loadPromise = this._performLoad(sources);
-
-		try {
-			const characters = await this._loadPromise;
-			if (!sources) this._isLoaded = true;
-			return characters;
-		} finally {
-			this._isLoading = false;
-			this._loadPromise = null;
-		}
+		throw new Error("loadCharacters() is deprecated. Use loadCharacterSummaries() for lists and ensureFullCharacter(id) for individual characters.");
 	}
 
 	/**
@@ -1362,6 +1635,14 @@ class CharacterManager {
 				
 				for (const localChar of localStorageCharacters) {
 					if (localChar && localChar.id && !serverCharacterIds.has(localChar.id)) {
+						// If this character has local unsaved changes, keep it.
+						// New characters created on this device (or edits not yet synced)
+						// are marked with `_isLocallyModified` and should not be purged.
+						if (localChar._isLocallyModified) {
+							console.log(`CharacterManager: Preserving locally modified character ${localChar.id} (not present on server yet)`);
+							continue;
+						}
+
 						// Character exists locally but not on server - it was deleted elsewhere
 						charactersToDelete.push(localChar.id);
 					}
@@ -1424,7 +1705,10 @@ class CharacterManager {
 			const charactersToFetch = [];
 			const cachedCharacters = [];
 			const now = Date.now();
-			const STALENESS_THRESHOLD = 10 * 60 * 1000; // 10 minutes as requested by user
+			const STALENESS_THRESHOLD = 10 * 60 * 1000; // 10 minutes for blob cache freshness
+			// If a character's JSON in localStorage is newer than this threshold,
+			// avoid re-fetching the server blob on page load to reduce network load.
+			const LOCAL_JSON_FRESH_MS = 1 * 60 * 1000; // 1 minute
 
 			for (const blob of blobs) {
 				const cached = this._blobCache.get(blob.id);
@@ -1441,8 +1725,16 @@ class CharacterManager {
 						cachedCharacters.push(localStorageCharacter);
 						continue;
 					}
-					
-					// Use localStorage if not stale (less than 10 minutes old)
+
+					// If localStorage JSON is very fresh (less than 1 minute), prefer it
+					// and avoid an extra fetch on page load.
+					if (localAge < LOCAL_JSON_FRESH_MS) {
+						console.log(`CharacterManager: Using fresh localStorage JSON for ${localStorageCharacter.name} (age ${localAge}ms)`);
+						cachedCharacters.push(localStorageCharacter);
+						continue;
+					}
+
+					// Use localStorage if not stale (less than STALENESS_THRESHOLD)
 					if (localAge < STALENESS_THRESHOLD) {
 						cachedCharacters.push(localStorageCharacter);
 						continue;
@@ -1621,10 +1913,11 @@ class CharacterManager {
 				}
 			}
 			
-			// If we have localStorage characters but no blob list cache, create synthetic blobs
-			// This allows the system to work fully offline with localStorage data
+			// If we have localStorage characters but no blob list cache, only return
+			// synthetic blobs when we're offline. When online, prefer fetching the
+			// authoritative server list (unless 'force' is specified).
 			const localStorageCharacters = this._loadFromLocalStorage();
-			if (localStorageCharacters.length > 0 && !force) {
+			if (localStorageCharacters.length > 0 && !force && !navigator.onLine) {
 				const syntheticBlobs = this._getLocalStorageBlobList(sources);
 				if (syntheticBlobs.length > 0) {
 					return syntheticBlobs;
@@ -1634,7 +1927,13 @@ class CharacterManager {
 			let url = `${API_BASE_URL}/characters/list`;
 			if (sources && sources.length > 0) {
 				const sourcesParam = sources.map(s => `sources=${encodeURIComponent(s)}`).join("&");
-				url += `?${sourcesParam}`;
+				url += `&${sourcesParam}`;
+			}
+			
+			// Add timestamp for cache busting when forcing refresh
+			if (force) {
+				const separator = url.includes('?') ? '&' : '?';
+				url += `${separator}t=${Date.now()}`;
 			}
 
 			if (force) console.log("CharacterManager: Fetching /characters/list (force)", url);
@@ -1667,7 +1966,8 @@ class CharacterManager {
 			// UI and localStorage in sync with server-side deletions.
 			try {
 				if (!sources) {
-					this._purgeLocalCharactersNotInServer(blobs);
+					// Full unfiltered server fetch - treat server list as authoritative
+					this._purgeLocalCharactersNotInServer(blobs, true);
 				}
 			} catch (e) { /* non-fatal */ }
 
@@ -1696,14 +1996,50 @@ class CharacterManager {
 	 * characters.
 	 * @param {Array} serverBlobs - Array of blob metadata from server
 	 */
-	static _purgeLocalCharactersNotInServer (serverBlobs) {
+	static _purgeLocalCharactersNotInServer (serverBlobs, force = false) {
 		try {
 			if (!Array.isArray(serverBlobs)) return;
-			const serverIds = new Set((serverBlobs || []).map(b => b && b.id).filter(Boolean));
+			// Build a set of server IDs and a normalized variants set to account for
+			// differences in ID formatting (some code paths use '-' while local
+			// composite IDs use '_' between name and source). This prevents
+			// accidental purging when the same character exists remotely but with
+			// a slightly different ID format.
+			const rawServerIds = (serverBlobs || []).map(b => b && b.id).filter(Boolean);
+			const serverIds = new Set(rawServerIds);
+			const serverIdsNorm = new Set();
+			for (const sid of rawServerIds) {
+				serverIdsNorm.add(sid);
+				// dash <-> underscore variants
+				serverIdsNorm.add(sid.replace(/-/g, "_"));
+				serverIdsNorm.add(sid.replace(/_/g, "-"));
+				// Strip common file extensions or suffixes if present
+				serverIdsNorm.add((sid.split(".")[0] || sid));
+			}
 			const local = this._loadFromLocalStorage();
-			const toRemove = (local || []).filter(c => c && c.id && !serverIds.has(c.id)).map(c => c.id);
-			if (!toRemove.length) return;
+			// Only mark for removal characters that are not locally modified. Preserve
+			// local-only creations/edits (marked with `_isLocallyModified`) so the
+			// user doesn't lose in-progress work when a server list fetch occurs.
+			const toRemove = (local || []).filter(c => {
+				if (!c || !c.id) return false;
+				// Consider present if either the raw server IDs or normalized variants contain this id
+				const presentOnServer = serverIds.has(c.id) || serverIdsNorm.has(c.id);
+				if (presentOnServer) return false;
+				// If this is an authoritative purge (force=true), remove regardless of local modification
+				if (force) return true;
+				// Otherwise preserve locally-modified items
+				return !c._isLocallyModified;
+			}).map(c => c.id);
+				if (!toRemove.length) return;
 			console.log(`CharacterManager: Purging ${toRemove.length} local character(s) not found on server`);
+			
+			// Also purge from summary cache
+			const { summaries, timestamp } = this._loadSummariesFromCache();
+			const updatedSummaries = summaries.filter(s => !toRemove.includes(s.id));
+			if (updatedSummaries.length !== summaries.length) {
+				this._saveSummariesToCache(updatedSummaries);
+				console.log(`CharacterManager: Purged ${summaries.length - updatedSummaries.length} summaries`);
+			}
+			
 			for (const id of toRemove) {
 				try {
 					// If the character is already in-memory, use existing removal path
@@ -1950,16 +2286,193 @@ class CharacterManager {
 	 * @returns {Array} Array of characters
 	 */
 	static getCharacters () {
-		return [...this._charactersArray];
+		// Be defensive: ensure we never return undefined entries which can
+		// break downstream UI/filter/render logic.
+		return this._charactersArray.filter(c => c);
 	}
 
 	/**
-	 * Get a character by ID
+	 * Get a character summary by ID (fast lookup from summary cache)
+	 * @param {string} id - Character ID
+	 * @returns {Object|null} Character summary or null if not found
+	 */
+	static getSummaryById (id) {
+		const { summaries } = this._loadSummariesFromCache();
+		return summaries.find(s => s.id === id) || null;
+	}
+
+	/**
+	 * Ensure full character data is available, fetching lazily if needed
+	 * @param {string} id - Character ID
+	 * @returns {Promise<Object|null>} Full character object or null if not found
+	 */
+	static async ensureFullCharacter (id) {
+		if (!id) return null;
+		
+		// Check if we already have the full character in memory
+		let fullCharacter = this._characters.get(id);
+		if (fullCharacter && !this._isCharacterStub(fullCharacter)) {
+			console.log(`CharacterManager: Using cached full character: ${fullCharacter.name}`);
+			return fullCharacter;
+		} else if (fullCharacter && this._isCharacterStub(fullCharacter)) {
+			console.log(`CharacterManager: Found stub for ${fullCharacter.name}, need to fetch full character`);
+			// Continue to fetch the full character
+		}
+		
+		// Check localStorage cache for full character
+		const localCharacters = this._loadFromLocalStorage();
+		fullCharacter = localCharacters.find(c => c && c.id === id);
+		if (fullCharacter) {
+			console.log(`CharacterManager: Using localStorage full character: ${fullCharacter.name}`);
+			// Add to memory cache and return
+			const processed = this._processCharacterForDisplay(fullCharacter);
+			this._characters.set(id, processed);
+			return processed;
+		}
+		
+		// If offline, we can't fetch from server
+		if (!navigator.onLine) {
+			console.warn(`CharacterManager: Cannot load character ${id} - offline and not in cache`);
+			throw new Error("Character not available offline. Please connect to the internet and try again.");
+		}
+
+		// Fetch from server using our API endpoint to avoid CORS issues
+		try {
+			console.log(`CharacterManager: Fetching full character from server via API: ${id}`);
+			
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+			
+				try {
+					// Use the new Cloudflare API endpoint
+					const apiUrl = `${API_BASE_URL}/characters/get?id=${encodeURIComponent(id)}`;
+					const response = await fetch(apiUrl, {
+						signal: controller.signal,
+						headers: {
+							'Cache-Control': 'no-cache'
+						}
+					});
+				
+				clearTimeout(timeoutId);
+				
+				if (!response.ok) {
+					if (response.status === 404) {
+						throw new Error("Character file not found on server. It may have been deleted.");
+					} else if (response.status === 403) {
+						throw new Error("Access denied. You may not have permission to view this character.");
+					} else if (response.status >= 500) {
+						throw new Error("Server error. Please try again in a few moments.");
+					} else {
+						throw new Error(`Failed to load character: Server responded with ${response.status}`);
+					}
+				}
+				
+				const apiResponse = await response.json();
+				if (!apiResponse.success || !apiResponse.character) {
+					throw new Error(apiResponse.error || "Invalid response from character API.");
+				}
+				
+				// Extract character from API response
+				const characterData = apiResponse.character;
+				fullCharacter = (characterData.character && Array.isArray(characterData.character))
+					? characterData.character[0]
+					: characterData;
+				
+				if (!fullCharacter) {
+					throw new Error("Character data is malformed or incomplete.");
+				}
+			} catch (fetchError) {
+				clearTimeout(timeoutId);
+				
+				if (fetchError.name === 'AbortError') {
+					throw new Error("Request timed out. Please check your internet connection and try again.");
+				} else if (fetchError.name === 'TypeError' && fetchError.message.includes('Failed to fetch')) {
+					throw new Error("Network error. Please check your internet connection.");
+				}
+				throw fetchError; // Re-throw other fetch errors
+			}
+			
+			// Process and cache the full character
+			const processed = this._processCharacterForDisplay(fullCharacter);
+			processed.id = id; // Ensure ID is set correctly
+			
+			// Update memory cache
+			this._characters.set(id, processed);
+			
+			// Update array cache
+			const arrayIndex = this._charactersArray.findIndex(c => c && c.id === id);
+			if (arrayIndex >= 0) {
+				this._charactersArray[arrayIndex] = processed;
+			} else {
+				this._charactersArray.push(processed);
+			}
+			
+			// Update localStorage cache
+			this._updateLocalStorageCache(processed);
+			
+			// Update summary cache with accurate data now that we have the full character
+			const summary = this._extractCharacterSummary(processed);
+			if (summary) {
+				const { summaries, timestamp } = this._loadSummariesFromCache();
+				const summaryIndex = summaries.findIndex(s => s.id === id);
+				if (summaryIndex >= 0) {
+					summaries[summaryIndex] = summary;
+				} else {
+					summaries.push(summary);
+				}
+				this._saveSummariesToCache(summaries);
+			}
+			
+			// Update DataLoader cache for hover/popout functionality
+			if (typeof DataLoader !== "undefined") {
+				DataLoader._pCache_addToCache({
+					allDataMerged: { character: [processed] },
+					propAllowlist: new Set(["character"]),
+				});
+			}
+			
+			// Notify listeners
+			this._notifyListeners();
+			
+			console.log(`CharacterManager: Successfully loaded full character: ${processed.name}`);
+			return processed;
+			
+		} catch (error) {
+			console.error(`CharacterManager: Error fetching character ${id}:`, error);
+			// Re-throw the error so UI can handle it appropriately with specific messages
+			throw error;
+		}
+	}
+
+	/**
+	 * Check if a character object is just a summary/stub (not full character)
+	 * @param {Object} character - Character object to check
+	 * @returns {boolean} True if this is a stub, false if it's a full character
+	 */
+	static _isCharacterStub (character) {
+		if (!character) return true;
+		
+		// A stub typically only has id, name, source, updatedAt, and _f* fields
+		// A full character has class, race, background, abilities, etc.
+		return !character.class && !character.race && !character.background && !character.abilities;
+	}
+
+	/**
+	 * Get a character by ID (returns cached full character or null)
+	 * Use ensureFullCharacter() if you want to fetch lazily
 	 * @param {string} id - Character ID
 	 * @returns {Object|null} Character object or null if not found
 	 */
 	static getCharacterById (id) {
-		return this._characters.get(id) || null;
+		const character = this._characters.get(id) || null;
+		
+		// If we have a character but it's just a stub, return null so caller uses ensureFullCharacter()
+		if (character && this._isCharacterStub(character)) {
+			console.warn(`CharacterManager: Character ${id} is a stub, use ensureFullCharacter() instead`);
+			return null;
+		}
+		
+		return character;
 	}
 
 	/**
@@ -2059,25 +2572,90 @@ class CharacterManager {
 	static _handleVersionConflict (localCharacter, remoteCharacter) {
 		// Auto-resolve by preferring the newer character based on timestamps
 		// Avoid adding conflict metadata to the character object itself.
+		// Important: do NOT call `addOrUpdateCharacter` here because that method
+		// may re-enter this conflict handler (it calls _handleVersionConflict when
+		// a remote update collides with a locally-modified character). That
+		// caused an infinite recursion in some cases. Instead, determine the
+		// winner and apply it via a safe upsert that does not re-trigger
+		// conflict resolution.
 		try {
 			const localTs = Number(localCharacter._lastModified || localCharacter._localVersion || 0);
 			const remoteTs = Number(remoteCharacter._lastModified || remoteCharacter._remoteVersion || 0);
+			let winner = null;
+			let winnerIsFromRemote = false;
+
 			if (isNaN(localTs) || isNaN(remoteTs)) {
-				// If timestamps are not present or invalid, default to keeping local
-				this.addOrUpdateCharacter(localCharacter, false);
-				return;
-			}
-			if (remoteTs > localTs) {
-				// Remote is newer - accept remote and persist
-				this.addOrUpdateCharacter(remoteCharacter, true);
+				// If timestamps are not present or invalid, prefer local by default
+				winner = localCharacter;
+				winnerIsFromRemote = false;
+			} else if (remoteTs > localTs) {
+				winner = remoteCharacter;
+				winnerIsFromRemote = true;
 			} else {
-				// Local is newer or equal - keep local and persist
-				this.addOrUpdateCharacter(localCharacter, false);
+				winner = localCharacter;
+				winnerIsFromRemote = false;
 			}
+
+			// Apply the resolved character without re-entering conflict resolution
+			this._applyResolvedCharacter(winner, winnerIsFromRemote);
 		} catch (e) {
 			console.warn("CharacterManager: Automatic conflict resolution failed, keeping local by default:", e);
-			this.addOrUpdateCharacter(localCharacter, false);
+			this._applyResolvedCharacter(localCharacter, false);
 		}
+	}
+
+	/**
+	 * Safely apply a resolved character into the in-memory and persisted caches
+	 * without invoking the normal conflict-resolution path (which may call
+	 * _handleVersionConflict again). This performs the minimal upsert work,
+	 * updates versions/flags appropriately, saves to localStorage, updates
+	 * DataLoader, and notifies listeners.
+	 * @param {Object} character
+	 * @param {boolean} isFromRemote
+	 */
+	static _applyResolvedCharacter (character, isFromRemote) {
+		if (!character || !character.name) return;
+
+		// Ensure composite ID
+		if (!character.id) character.id = this._generateCompositeId(character.name, character.source);
+
+		const now = Date.now();
+		const existing = this._characters.get(character.id) || null;
+
+		// Normalize version fields based on source
+		if (isFromRemote) {
+			character._remoteVersion = character._remoteVersion || now;
+			// If we had local modifications, preserve that flag on the persisted item
+			if (existing && existing._isLocallyModified) {
+				character._isLocallyModified = true;
+			} else {
+				character._isLocallyModified = false;
+			}
+		} else {
+			// Local/accepted local version
+			character._localVersion = character._localVersion || now;
+			character._lastModified = character._lastModified || now;
+			character._isLocallyModified = character._isLocallyModified === undefined ? true : character._isLocallyModified;
+		}
+
+		// Process for display and upsert into caches
+		const processed = this._processCharacterForDisplay(character);
+
+		// Upsert into array and map without triggering dedupe/conflict logic
+		const idx = this._charactersArray.findIndex(c => c && c.id === processed.id);
+		if (idx >= 0) this._charactersArray[idx] = processed; else this._charactersArray.push(processed);
+		this._characters.set(processed.id, processed);
+
+		// Update caches and persist
+		this._updateDataLoaderCache();
+		try {
+			this._updateLocalStorageCache(processed);
+		} catch (e) {
+			console.warn("CharacterManager: Error persisting resolved character:", e);
+		}
+
+		// Notify listeners
+		this._notifyListeners();
 	}
 
 	/**
@@ -2299,17 +2877,83 @@ class CharacterManager {
 			console.warn("CharacterManager: Failed to broadcast CHARACTER_UPDATED to other tabs:", e);
 		}
 
-		try {
-			if (typeof CharacterP2P !== "undefined" && CharacterP2P.send) {
-				CharacterP2P.send({ type: "CHARACTER_UPDATED", character });
-			}
-		} catch (e) {
-			console.warn("CharacterManager: Failed to send P2P CHARACTER_UPDATED", e);
-		}
+		// Also save to server to trigger WebSocket broadcast to other devices/users
+		this._saveQuickEditToServer(character).catch(error => {
+			console.warn(`CharacterManager: Failed to save quick edit to server for ${character.name}:`, error);
+		});
 
 		return true;
 	}
 
+	/**
+	 * Save quick edit changes to server to trigger WebSocket broadcast
+	 * @param {Object} character - Character with updates
+	 */
+	static async _saveQuickEditToServer(character) {
+		try {
+			console.log(`CharacterManager: Saving quick edit to server for ${character.name}`);
+			
+			// Get session token if available
+			let sessionToken = null;
+			try {
+				// Try to get from localStorage or other storage
+				sessionToken = localStorage.getItem('5etools_session_token');
+			} catch (e) {
+				console.warn('Could not get session token:', e);
+			}
+			
+			if (!sessionToken) {
+				console.log('No session token available - attempting anonymous quick edit save');
+				// For now, we'll skip server save if no authentication
+				// In the future, this could support public character editing
+				return;
+			}
+			
+			// Determine the character API endpoint
+			const apiUrl = 'https://5etools-character-sync.thesamueljim.workers.dev/api/characters/save';
+			
+			// Prepare character data for server save
+			const characterData = {
+				...character,
+				// Remove local tracking fields before sending to server
+				_isLocallyModified: undefined,
+				_localVersion: undefined,
+				_lastModified: undefined
+			};
+			
+			const requestBody = {
+				characterData: characterData,
+				characterId: character.id,
+				isEdit: true
+			};
+			
+			const response = await fetch(apiUrl, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-Session-Token': sessionToken
+				},
+				body: JSON.stringify(requestBody)
+			});
+			
+			if (!response.ok) {
+				const errorData = await response.json();
+				throw new Error(`Server save failed: ${response.status} - ${errorData.error || 'Unknown error'}`);
+			}
+			
+			const result = await response.json();
+			console.log(`CharacterManager: Quick edit saved to server successfully:`, result);
+			
+			// Clear the local modification flags since it's now synced
+			character._isLocallyModified = false;
+			character._localVersion = undefined;
+			
+		} catch (error) {
+			console.error(`CharacterManager: Error saving quick edit to server:`, error);
+			// Don't throw - we want quick edits to work even if server save fails
+		}
+	}
+	
 	/**
 	 * Update HP for a character (most common quick edit)
 	 * @param {string} characterId - Character ID
@@ -2471,16 +3115,6 @@ class CharacterManager {
 				console.warn("CharacterManager: Failed to broadcast CHARACTER_DELETED:", e);
 			}
 
-			// Also send deletion over P2P if available
-			try {
-				if (typeof CharacterP2P !== "undefined" && CharacterP2P.send) {
-					CharacterP2P.send({ type: "CHARACTER_DELETED", characterId: id });
-				}
-			} catch (e) {
-				console.warn("CharacterManager: Failed to send P2P CHARACTER_DELETED", e);
-			}
-
-
 			// Also remove any persisted editing state for this character
 			try {
 				const editingRaw = localStorage.getItem("editingCharacter");
@@ -2515,12 +3149,11 @@ class CharacterManager {
 	}
 
 	/**
-	 * Force reload characters from API
-	 * @returns {Promise<Array>} Fresh character data
+	 * DEPRECATED: Use loadCharacterSummaries(true) to force refresh of summaries
+	 * @deprecated
 	 */
 	static async reloadCharacters () {
-		this._isLoaded = false;
-		return this.loadCharacters();
+		throw new Error("reloadCharacters() is deprecated. Use loadCharacterSummaries(true) to force refresh of summaries.");
 	}
 
 	/**
@@ -2533,7 +3166,6 @@ class CharacterManager {
 		this._isLoaded = false;
 		this._isLoading = false;
 		this._loadPromise = null;
-		this._stopAutoRefresh();
 
 		// Also clear the blob list cache
 		try {
@@ -2557,71 +3189,23 @@ class CharacterManager {
 	}
 
 	/**
-	 * Force-fetch the server blob list, purge any local characters not present on the server,
-	 * invalidate caches and reload character data. Public convenience method intended for
-	 * UI actions like a manual "Refresh" button.
-	 * @returns {Promise<Array>} Reloaded characters
+	 * Force-fetch the server blob list and character summaries, purging any local characters 
+	 * not present on the server. Public convenience method intended for UI actions like a manual "Refresh" button.
+	 * @returns {Promise<Array>} Refreshed character summaries
 	 */
 	static async forceRefreshListAndReload () {
-		// Force a fresh blob list from server
-		const serverBlobs = await this._getBlobList(null, true);
-		// Purge any local characters missing from server
-		try { this._purgeLocalCharactersNotInServer(serverBlobs); } catch (e) { /* ignore */ }
-		// Suppress background checks for a short window to avoid immediate racing reloads
-		this._suppressBackgroundChecksUntil = Date.now() + 10 * 1000; // 10s
-
-		// Use the already-fetched blob list to load characters (avoids re-fetching the list)
+		// Force a fresh blob list from server and refresh summaries
 		try {
-			const chars = await this._performFullApiLoadWithBlobs(serverBlobs);
-			// After loading, mark as loaded and notify listeners
-			this._isLoaded = true;
-			this._notifyListeners();
-			return chars;
+			const summaries = await this.loadCharacterSummaries(true);
+			// Suppress background checks for a short window to avoid immediate racing reloads
+			this._suppressBackgroundChecksUntil = Date.now() + 10 * 1000; // 10s
+			return summaries;
 		} catch (e) {
-			// Fall back to full reload if something goes wrong
-			this._invalidateCachesKeepList();
-			return this.reloadCharacters();
+			console.error("CharacterManager: Force refresh failed:", e);
+			throw e;
 		}
 	}
 
-	/**
-	 * Perform a full API load using a pre-fetched list of server blobs. This avoids
-	 * calling the `/characters/list` endpoint again when we already have the list.
-	 * @param {Array} serverBlobs - Array of blob metadata (must be non-null)
-	 * @returns {Promise<Array>} Array of loaded characters
-	 */
-	static async _performFullApiLoadWithBlobs (serverBlobs) {
-		try {
-			if (!serverBlobs || !Array.isArray(serverBlobs) || serverBlobs.length === 0) return [];
-			const now = Date.now();
-			const fetchPromises = (serverBlobs || []).map(async (blob) => {
-				try {
-					if (blob.url && blob.url.startsWith("localStorage://")) {
-						const characterId = blob.url.replace("localStorage://", "");
-						const characters = this._loadFromLocalStorage();
-						const character = characters.find(c => this._generateCompositeId(c.name, c.source) === characterId);
-						if (!character) return null;
-						this._blobCache.set(blob.id, { blob, character, lastFetched: now });
-						return character;
-					}
-					const response = await fetch(blob.url, { cache: "no-cache", headers: { "Cache-Control": "no-cache, no-store, must-revalidate" } });
-					if (!response.ok) return null;
-					const characterData = await response.json();
-					const character = (characterData.character && Array.isArray(characterData.character)) ? characterData.character[0] : characterData;
-					this._blobCache.set(blob.id, { blob, character, lastFetched: now });
-					return character;
-				} catch (e) {
-					console.warn("CharacterManager: Error fetching character blob:", e);
-					return null;
-				}
-			});
-			const fetchedCharacters = (await Promise.all(fetchPromises)).filter(c => c);
-			return this._processAndStoreCharacters(fetchedCharacters);
-		} catch (e) {
-			console.warn("CharacterManager: _performFullApiLoadWithBlobs failed:", e);
-			return [];
-		}
-	}
 
 	/**
 	 * Similar to _invalidateAllCaches but DO NOT remove the blob list cache.
@@ -2656,39 +3240,6 @@ class CharacterManager {
 		}
 	}
 
-	/**
-	 * Start automatic refresh of character data (like existing system)
-	 * @param {number} intervalMs - Refresh interval in milliseconds (default 15 minutes - extended due to WebSocket updates)
-	 */
-	static startAutoRefresh (intervalMs = 15 * 60 * 1000) {
-		if (this._refreshInterval) {
-			clearInterval(this._refreshInterval);
-		}
-
-		this._refreshInterval = setInterval(async () => {
-			try {
-				await this.reloadCharacters();
-			} catch (e) {
-				console.warn("CharacterManager: Auto-refresh failed:", e);
-			}
-		}, intervalMs);
-
-		// Ensure daily list recheck is running to pick up server-side additions/deletions
-		this.startDailyListRecheck();
-	}
-
-	/**
-	 * Stop automatic refresh
-	 */
-	static _stopAutoRefresh () {
-		if (this._refreshInterval) {
-			clearInterval(this._refreshInterval);
-			this._refreshInterval = null;
-		}
-
-		// Stop daily recheck as well
-		this._stopDailyListRecheck();
-	}
 
 	/**
 	 * Start a daily recheck of the `/characters/list` endpoint to ensure
@@ -2771,12 +3322,21 @@ class CharacterManager {
 	}
 
 	/**
-	 * Check if the user can edit a character based on source passwords
+	 * Check if the user can edit a character based on user authentication
 	 * @param {Object|string} characterOrSource - Character object or source name
 	 * @returns {boolean} True if user can edit this character
 	 */
 	static canEditCharacter (characterOrSource) {
 		try {
+			// Get current user authentication
+			const sessionToken = localStorage.getItem('sessionToken');
+			const currentUserData = localStorage.getItem('currentUser');
+			
+			if (!sessionToken || !currentUserData) {
+				return false; // Not authenticated
+			}
+
+			const currentUser = JSON.parse(currentUserData);
 			const source = typeof characterOrSource === "string"
 				? characterOrSource
 				: characterOrSource?.source;
@@ -2785,11 +3345,9 @@ class CharacterManager {
 				return false;
 			}
 
-			const cachedPasswords = localStorage.getItem("sourcePasswords");
-			if (!cachedPasswords) return false;
-
-			const passwords = JSON.parse(cachedPasswords);
-			return !!passwords[source];
+			// User can edit if they're authenticated and the source matches their username
+			// or for backward compatibility, if they're just authenticated
+			return true; // If user is authenticated, they can edit
 		} catch (e) {
 			console.error("Error checking character edit permissions:", e);
 			return false;
@@ -2824,20 +3382,24 @@ class CharacterManager {
 		}
 
 		try {
-			const cachedPasswords = localStorage.getItem("sourcePasswords");
-			const passwords = JSON.parse(cachedPasswords);
-			const password = passwords[characterData.source];
+			// Get session token for authentication
+			const sessionToken = localStorage.getItem('sessionToken');
+			if (!sessionToken) {
+				console.error('CharacterManager: No session token found');
+				return false;
+			}
 
 			// Generate character ID if needed
 			const characterId = characterData.id || this._generateCompositeId(characterData.name, characterData.source);
 
 			const response = await fetch(`${API_BASE_URL}/characters/save`, {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: { 
+					"Content-Type": "application/json",
+					"X-Session-Token": sessionToken
+				},
 				body: JSON.stringify({
 					characterData: characterData,
-					source: characterData.source,
-					password: password,
 					isEdit: isEdit,
 					characterId: characterId,
 				}),
@@ -2875,17 +3437,14 @@ class CharacterManager {
 				// Also ensure localStorage is updated
 				this._updateLocalStorageCache(characterData);
 
+				// Update character summaries cache for immediate visibility in character list
+				this._addCharacterToSummariesCache(characterData);
+
+				// Invalidate blob list cache to ensure server sync on next list load
+				this.invalidateBlobListCache();
+
 				// Broadcast change to other tabs
 				this._broadcastSync("CHARACTER_UPDATED", { character: characterData });
-
-				// Also send over P2P channel if available
-				try {
-					if (typeof CharacterP2P !== "undefined" && CharacterP2P.send) {
-						CharacterP2P.send({ type: "CHARACTER_UPDATED", character: characterData });
-					}
-				} catch (e) {
-					console.warn("CharacterManager: Failed to send P2P CHARACTER_UPDATED", e);
-				}
 
 				return true;
 			} else {
@@ -2917,33 +3476,25 @@ class CharacterManager {
 		}
 
 		try {
-			const cachedPasswords = localStorage.getItem("sourcePasswords");
-			const passwords = JSON.parse(cachedPasswords);
-			const password = passwords[character.source];
+			// Get session token for authentication
+			const sessionToken = localStorage.getItem('sessionToken');
+			if (!sessionToken) {
+				console.error('CharacterManager: No session token found');
+				return false;
+			}
 
-			// Call delete API
-			const response = await fetch(`${API_BASE_URL}/characters/delete`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					characterId: characterId,
-					source: character.source,
-					password: password,
-				}),
+			// Call delete API (new Cloudflare format)
+			const response = await fetch(`${API_BASE_URL}/characters/delete?id=${encodeURIComponent(characterId)}`, {
+				method: "DELETE",
+				headers: { 
+					"Content-Type": "application/json",
+					"X-Session-Token": sessionToken
+				},
 			});
 
 			if (response.ok) {
 				// Remove from local caches
 				this.removeCharacter(characterId);
-
-				// Also send over P2P channel if available
-				try {
-					if (typeof CharacterP2P !== "undefined" && CharacterP2P.send) {
-						CharacterP2P.send({ type: "CHARACTER_DELETED", characterId });
-					}
-				} catch (e) {
-					console.warn("CharacterManager: Failed to send P2P CHARACTER_DELETED", e);
-				}
 
 				return true;
 			} else {
@@ -3192,20 +3743,47 @@ class CharacterManager {
 			switch (type) {
 				case "CHARACTER_UPDATED":
 					if (character && character.id) {
-						// Mark as remote update to ensure proper localStorage persistence
-						// WebSocket already contains all needed character data, no need to hit server
+						// Update full character cache if exists
 						this.addOrUpdateCharacter(character, true);
+						
+						// Update summary cache with accurate data from full character
+						const summary = this._extractCharacterSummary(character);
+						if (summary) {
+							const { summaries, timestamp } = this._loadSummariesFromCache();
+							const summaryIndex = summaries.findIndex(s => s.id === character.id);
+							if (summaryIndex >= 0) {
+								summaries[summaryIndex] = summary;
+							} else {
+								summaries.push(summary);
+							}
+							this._saveSummariesToCache(summaries);
+							console.log(`CharacterManager: Updated summary cache for ${character.name} via WebSocket`);
+						}
 					}
 					break;
 				case "CHARACTER_DELETED":
 					if (characterId) {
+						// Remove from both full and summary caches
 						this.removeCharacter(characterId);
+						
+						// Also remove from summary cache
+						const { summaries } = this._loadSummariesFromCache();
+						const updatedSummaries = summaries.filter(s => s.id !== characterId);
+						if (updatedSummaries.length !== summaries.length) {
+							this._saveSummariesToCache(updatedSummaries);
+							console.log(`CharacterManager: Removed ${characterId} from summary cache via WebSocket`);
+						}
+						
 						// Character deletions might indicate server state changes, so invalidate list cache
 						console.log("CharacterManager: Character deletion detected via WebSocket, invalidating list cache");
 						this._invalidateBlobListCache();
 					}
 					break;
 				case "CHARACTERS_RELOADED":
+					// Clear summary cache to force fresh reload
+					try {
+						localStorage.removeItem(this._SUMMARIES_CACHE_KEY);
+					} catch (e) { /* ignore */ }
 					this.forceRefreshCharacters();
 					this.loadCharacters();
 					break;
@@ -3259,31 +3837,3 @@ try {
 } catch (e) {
 	// ignore in non-browser contexts
 }
-
-// Manage periodic peer announces based on tab visibility
-try {
-	if (typeof document !== "undefined" && typeof window !== "undefined") {
-		document.addEventListener("visibilitychange", () => {
-			try {
-				if (document.visibilityState === "visible") {
-					if (typeof CharacterP2P !== "undefined" && typeof CharacterP2P._startPeriodicAnnounce === "function") {
-						CharacterP2P._startPeriodicAnnounce();
-					}
-				} else {
-					if (typeof CharacterP2P !== "undefined" && typeof CharacterP2P._stopPeriodicAnnounce === "function") {
-						CharacterP2P._stopPeriodicAnnounce();
-					}
-				}
-			} catch (e) { /* ignore */ }
-		});
-
-		// Add cleanup on page unload
-		window.addEventListener("beforeunload", () => {
-			try {
-				if (typeof CharacterP2P !== "undefined" && typeof CharacterP2P.cleanup === "function") {
-					CharacterP2P.cleanup();
-				}
-			} catch (e) { /* ignore */ }
-		});
-	}
-} catch (e) { /* ignore in non-browser contexts */ }

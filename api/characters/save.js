@@ -96,7 +96,7 @@ export default async function handler (req, res) {
 				access: "public",
 				contentType: "application/json",
 				allowOverwrite: true, // Allow overwriting existing characters
-				cacheControlMaxAge: 1800, // Cache for 30 minutes to save bandwidth
+				cacheControlMaxAge: 300, // Cache for 5 minutes to save bandwidth
 			});
 
 			// Invalidate the server-side blob list cache so next list() call fetches fresh metadata

@@ -197,16 +197,16 @@ export class PanelContentManager_Characters extends _PanelContentManager {
 		const $selCharacter = $controls.find("select");
 		const $btnRefresh = $controls.find("button");
 
-		// Load available characters using centralized manager
+		// Load available characters using summaries (faster for dropdown)
 		const loadCharacters = async () => {
 			try {
-				const characters = await CharacterManager.loadCharacters();
+				const summaries = await CharacterManager.loadCharacterSummaries();
 				$selCharacter.empty().append(`<option value="">Select a character...</option>`);
-				characters.forEach(char => {
-					$selCharacter.append(`<option value="${char.name}">${char.name}</option>`);
+				summaries.forEach(summary => {
+					$selCharacter.append(`<option value="${summary.id}" data-name="${summary.name}">${summary.name}</option>`);
 				});
 			} catch (error) {
-				console.warn("Failed to load characters via CharacterManager:", error);
+				console.warn("Failed to load character summaries for DM screen:", error);
 			}
 		};
 
@@ -244,25 +244,29 @@ export class PanelContentManager_Characters extends _PanelContentManager {
 
 		CharacterManager.addListener(characterUpdateListener);
 
-		// Handle character selection
+		// Handle character selection with lazy loading
 		$selCharacter.on("change", async () => {
-			const characterName = $selCharacter.val();
-			if (!characterName) {
+			const characterId = $selCharacter.val();
+			if (!characterId) {
 				$content.empty();
 				currentCharacterId = null;
 				return;
 			}
 
+			// Show loading state
+			$content.html(`<div class="p-2 ve-text-center">
+				<i class="fas fa-spinner fa-spin"></i> Loading character...
+			</div>`);
+			
+			currentCharacterId = characterId;
+
 			try {
-				// Use centralized character manager
-				const characters = await CharacterManager.loadCharacters();
-				const character = characters.find(c => c.name === characterName);
+				// Use lazy loading to get the full character
+				const character = await CharacterManager.ensureFullCharacter(characterId);
 				if (character) {
-					// Characters from CharacterManager are already processed with computed fields
+					console.log(`DM Screen Character Panel: Loaded full character ${character.name}, ID: ${characterId}`);
+					
 					// Register character for editing in global registry
-					const characterId = CharacterManager._generateCompositeId(character.name, character.source);
-					currentCharacterId = characterId;
-					console.log(`DM Screen Character Panel: Selected character ${character.name}, ID: ${characterId}`);
 					if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
 					globalThis._CHARACTER_EDIT_DATA[characterId] = character;
 
@@ -273,10 +277,17 @@ export class PanelContentManager_Characters extends _PanelContentManager {
 
 					// Bind character sheet listeners for quick edit functionality
 					Renderer.character._bindCharacterSheetListeners($content[0]);
+				} else {
+					$content.html(`<div class="p-2 text-danger">
+						<i class="fas fa-exclamation-triangle"></i> Character not found or failed to load
+						${!navigator.onLine ? ' (you are offline)' : ''}
+					</div>`);
 				}
 			} catch (error) {
 				console.warn("Failed to load character:", error);
-				$content.html(`<div class="p-2 text-danger">Failed to load character</div>`);
+				$content.html(`<div class="p-2 text-danger">
+					<i class="fas fa-exclamation-triangle"></i> Error: ${error.message || 'Failed to load character'}
+				</div>`);
 				currentCharacterId = null;
 			}
 		});

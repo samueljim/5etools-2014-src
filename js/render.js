@@ -9387,6 +9387,12 @@ Renderer.character = class {
 	}
 
 	static getCompactRenderedString (character, {isStatic = false} = {}) {
+		// Check if this is a stub character that needs lazy loading
+		if (Renderer.character._isCharacterStub(character)) {
+			// Return a placeholder with lazy loading support
+			return Renderer.character._getStubPlaceholder(character, {isStatic});
+		}
+
 		const renderer = Renderer.get().setFirstSection(true);
 		const renderStack = [];
 
@@ -9863,14 +9869,14 @@ Renderer.character = class {
 					// Only show slots if maxSlots > 0 and not cantrips
 					if (levelNum > 0 && levelData.maxSlots && levelData.maxSlots > 0) {
 						const characterId = character.id || `${character.name}_${character.source}`.toLowerCase().replace(/[^a-z0-9]/g, "");
-						const slotsUsed = levelData.slotsUsed != null ? levelData.slotsUsed : 0;
+						const slotsRemaining = levelData.slotsRemaining != null ? levelData.slotsRemaining : 0;
 
 						if (this._hasSourceAccess(character.source)) {
 							// Editable spell slots
-							slotsHtml = ` (<span class="character-stat-display" data-stat-path="spells.levels.${level}.slotsUsed" data-character-id="${characterId}" data-current-value="${slotsUsed}" data-max-value="${levelData.maxSlots}" title="Click to edit spell slots used" style="cursor: pointer; border-bottom: 1px dashed #666;">${slotsUsed}</span>/${levelData.maxSlots} slots)`;
+							slotsHtml = ` (<span class="character-stat-display" data-stat-path="spells.levels.${level}.slotsRemaining" data-character-id="${characterId}" data-current-value="${slotsRemaining}" data-max-value="${levelData.maxSlots}" title="Click to edit spell slots used" style="cursor: pointer; border-bottom: 1px dashed #666;">${slotsRemaining}</span>/${levelData.maxSlots} slots)`;
 						} else {
 							// Static spell slots
-							slotsHtml = ` (${slotsUsed}/${levelData.maxSlots} slots)`;
+							slotsHtml = ` (${slotsRemaining}/${levelData.maxSlots} slots)`;
 						}
 					}
 
@@ -10078,6 +10084,9 @@ Renderer.character = class {
 	}
 
 	static bindListenersCompact (character, ele) {
+		// Handle lazy loading for stub characters
+		Renderer.character._bindLazyLoading(character, ele);
+		
 		// Bind dice listeners to the element
 		if (ele) {
 			// Handle both jQuery objects and plain DOM elements
@@ -10881,11 +10890,16 @@ Renderer.character = class {
 		}
 	}
 
-	// Check if user has edit access to character's source based on cached passwords
+	// Check if user has edit access to character's source using CharacterManager
 	static _hasSourceAccess (source) {
 		if (!source) return false;
 
-		// Check if we have a cached password for this source
+		// Use CharacterManager's comprehensive access check
+		if (globalThis.CharacterManager && typeof globalThis.CharacterManager.canEditCharacter === "function") {
+			return globalThis.CharacterManager.canEditCharacter(source);
+		}
+
+		// Fallback to cached password check for backward compatibility
 		try {
 			const cachedPasswords = localStorage.getItem("sourcePasswords");
 			if (!cachedPasswords) return false;
@@ -10988,6 +11002,119 @@ Renderer.character = class {
 	// Helper method to generate character ID (kept for backward compatibility)
 	static _generateCharacterId (name) {
 		return `${name.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 20)}_${Date.now()}`;
+	}
+
+	/**
+	 * Check if a character is a stub (missing full character data)
+	 * @param {Object} character - Character object to check
+	 * @returns {boolean} True if character is a stub
+	 */
+	static _isCharacterStub (character) {
+		if (!character) return true;
+		
+		// A character is considered a stub if it's missing key properties that full characters should have
+		// Check for explicit stub marker first
+		if (character.__isStub === true) return true;
+		
+		// Check for essential properties that full characters should have
+		// If a character only has basic metadata (id, name, source, _f* fields) but lacks
+		// core character properties, it's likely a stub
+		const hasBasicInfo = character.name && character.source;
+		const hasFullCharacterData = (
+			character.class || 
+			character.race || 
+			character.background || 
+			character.abilities ||
+			character.hp ||
+			character.str !== undefined
+		);
+		
+		return hasBasicInfo && !hasFullCharacterData;
+	}
+
+	/**
+	 * Create a placeholder for stub characters with lazy loading
+	 * @param {Object} character - Stub character object
+	 * @param {Object} options - Rendering options
+	 * @returns {string} HTML placeholder with lazy loading
+	 */
+	static _getStubPlaceholder (character, {isStatic = false} = {}) {
+		const characterId = character.id || `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
+		
+		// Use metadata if available, otherwise show loading state
+		const level = character._fLevel || "?";
+		const race = character._fRace || "Loading...";
+		const cls = character._fClass || "Loading...";
+		const background = character._fBackground || "";
+		
+		const backgroundText = background ? `, ${background}` : "";
+		
+		return `
+			${Renderer.utils.getExcludedTr({entity: character, dataProp: "character", page: UrlUtil.PG_CHARACTERS})}
+			${Renderer.utils.getNameTr(character, {page: UrlUtil.PG_CHARACTERS})}
+			<tr><td colspan="6" class="pb-2 pt-0" data-character-stub="${characterId}">
+				<p><em>Level ${level} ${race} ${cls}${backgroundText}</em></p>
+				<div class="ve-flex-v-center">
+					<div class="mr-2">Loading character details...</div>
+					<div class="ve-spinner"></div>
+				</div>
+			</td></tr>
+		`;
+	}
+
+	/**
+	 * Bind lazy loading functionality for stub characters
+	 * @param {Object} character - Character object (may be stub)
+	 * @param {Element} ele - DOM element containing the rendered character
+	 */
+	static _bindLazyLoading (character, ele) {
+		if (!ele || !Renderer.character._isCharacterStub(character)) return;
+		
+		// Handle both jQuery objects and plain DOM elements
+		const domElement = ele.jquery ? ele[0] : ele;
+		if (!domElement) return;
+		
+		const characterId = character.id || `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
+		const stubElement = domElement.querySelector(`[data-character-stub="${characterId}"]`);
+		if (!stubElement) return;
+		
+		// Trigger lazy loading immediately on DOM ready
+		setTimeout(async () => {
+			try {
+				// Use CharacterManager to load full character data
+				if (globalThis.CharacterManager && typeof globalThis.CharacterManager.ensureFullCharacter === "function") {
+					const fullCharacter = await globalThis.CharacterManager.ensureFullCharacter(character.id);
+					if (fullCharacter && !Renderer.character._isCharacterStub(fullCharacter)) {
+						// Re-render with full character data
+						const newContent = Renderer.character.getCompactRenderedString(fullCharacter);
+						
+						// Replace the entire character table content
+						const parentTable = stubElement.closest('table');
+						if (parentTable) {
+							parentTable.innerHTML = newContent;
+							
+							// Re-bind listeners for the new content
+							Renderer.character.bindListenersCompact(fullCharacter, parentTable);
+						}
+					}
+				} else {
+					// Fallback: replace with error message if CharacterManager not available
+					stubElement.innerHTML = `
+						<div class="ve-flex-v-center">
+							<div class="mr-2 text-danger">Failed to load character details.</div>
+						</div>
+					`;
+				}
+			} catch (error) {
+				console.warn(`Failed to lazy load character ${character.name}:`, error);
+				// Replace with error message
+				stubElement.innerHTML = `
+					<div class="ve-flex-v-center">
+						<div class="mr-2 text-danger">Failed to load character details.</div>
+					</div>
+				`;
+			}
+		}, 100); // Small delay to ensure DOM is fully rendered
 	}
 
 	static pGetFluff (character) {

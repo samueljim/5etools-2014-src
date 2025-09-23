@@ -1,155 +1,213 @@
-// Source Management Page - Dedicated source creation and management
+// User Authentication Page - User registration and login system
 "use strict";
 
+// API configuration - pointing to new Cloudflare backend
+let API_BASE_URL = "https://5etools-character-sync.thesamueljim.workers.dev/api";
 
-// Source Password Management (moved from charactereditor.js)
-// API configuration
-let API_BASE_URL = window.location.origin.includes("localhost")
-	? "https://5e.bne.sh/api"
-	: "/api";
+class UserAuthManager {
+	static SESSION_TOKEN_KEY = "sessionToken";
+	static USER_DATA_KEY = "currentUser";
 
-class SourcePasswordManager {
-	static STORAGE_KEY = "sourcePasswords";
-
-	// Get all cached passwords from localStorage
-	static getCachedPasswords () {
+	// Get current session token
+	static getSessionToken () {
 		try {
-			const stored = localStorage.getItem(this.STORAGE_KEY);
-			return stored ? JSON.parse(stored) : {};
+			return localStorage.getItem(this.SESSION_TOKEN_KEY);
 		} catch (e) {
-			console.error("Error loading cached passwords:", e);
-			return {};
+			console.error("Error loading session token:", e);
+			return null;
 		}
 	}
 
-	// Cache a password for a source
-	static cachePassword (sourceName, password) {
+	// Set session token
+	static setSessionToken (token) {
 		try {
-			const passwords = this.getCachedPasswords();
-			passwords[sourceName] = password;
-			localStorage.setItem(this.STORAGE_KEY, JSON.stringify(passwords));
+			if (token) {
+				localStorage.setItem(this.SESSION_TOKEN_KEY, token);
+			} else {
+				localStorage.removeItem(this.SESSION_TOKEN_KEY);
+			}
 			return true;
 		} catch (e) {
-			console.error("Error caching password:", e);
+			console.error("Error saving session token:", e);
 			return false;
 		}
 	}
 
-	// Get cached password for a source
-	static getCachedPassword (sourceName) {
-		const passwords = this.getCachedPasswords();
-		return passwords[sourceName] || null;
+	// Get current user data
+	static getCurrentUser () {
+		try {
+			const stored = localStorage.getItem(this.USER_DATA_KEY);
+			return stored ? JSON.parse(stored) : null;
+		} catch (e) {
+			console.error("Error loading user data:", e);
+			return null;
+		}
 	}
 
-	// Remove cached password for a source
-	static removeCachedPassword (sourceName) {
+	// Set current user data
+	static setCurrentUser (user) {
 		try {
-			const passwords = this.getCachedPasswords();
-			delete passwords[sourceName];
-			localStorage.setItem(this.STORAGE_KEY, JSON.stringify(passwords));
+			if (user) {
+				localStorage.setItem(this.USER_DATA_KEY, JSON.stringify(user));
+			} else {
+				localStorage.removeItem(this.USER_DATA_KEY);
+			}
 			return true;
 		} catch (e) {
-			console.error("Error removing cached password:", e);
+			console.error("Error saving user data:", e);
 			return false;
 		}
 	}
 
-	// Check if password is valid for a source
-	static async validatePassword (sourceName, password) {
+	// Check if user is currently logged in
+	static isLoggedIn () {
+		return !!(this.getSessionToken() && this.getCurrentUser());
+	}
+
+	// Register new user
+	static async register (username, email, password) {
 		try {
-			const response = await fetch(`${API_BASE_URL}/sources/validate`, {
+			const response = await fetch(`${API_BASE_URL}/auth/register`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ source: sourceName, password }),
+				body: JSON.stringify({ username, email, password }),
 			});
 
-			if (response.ok) {
-				const result = await response.json();
-				return result.valid === true;
+			const result = await response.json();
+			if (result.success) {
+				const sessionToken = response.headers.get('X-Session-Token');
+				if (sessionToken) {
+					this.setSessionToken(sessionToken);
+					this.setCurrentUser(result.user);
+				}
+				return { success: true, user: result.user };
+			} else {
+				return { success: false, error: result.error };
 			}
-			return false;
 		} catch (e) {
-			console.error("Error validating password:", e);
-			return false;
+			console.error("Error registering user:", e);
+			return { success: false, error: e.message };
 		}
 	}
 
-	// Create a new source with password
-	static async createSource (sourceName, password) {
+	// Login user
+	static async login (username, password) {
 		try {
-			const response = await fetch(`${API_BASE_URL}/sources/create`, {
+			const response = await fetch(`${API_BASE_URL}/auth/login`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ source: sourceName, password }),
+				body: JSON.stringify({ username, password }),
 			});
 
-			if (response.ok) {
-				const result = await response.json();
-				return result.success === true;
+			const result = await response.json();
+			if (result.success) {
+				const sessionToken = response.headers.get('X-Session-Token');
+				if (sessionToken) {
+					this.setSessionToken(sessionToken);
+					this.setCurrentUser(result.user);
+				}
+				return { success: true, user: result.user };
+			} else {
+				return { success: false, error: result.error };
 			}
-			return false;
 		} catch (e) {
-			console.error("Error creating source:", e);
-			return false;
+			console.error("Error logging in:", e);
+			return { success: false, error: e.message };
+		}
+	}
+
+	// Logout user
+	static async logout () {
+		try {
+			const sessionToken = this.getSessionToken();
+			if (sessionToken) {
+				// Try to logout on server
+				await fetch(`${API_BASE_URL}/auth/logout`, {
+					method: "POST",
+					headers: { "X-Session-Token": sessionToken },
+				});
+			}
+		} catch (e) {
+			console.warn("Server logout failed (proceeding with local logout):", e);
+		}
+
+		// Always clear local session
+		this.setSessionToken(null);
+		this.setCurrentUser(null);
+		return true;
+	}
+
+	// Get user info from server
+	static async getUserInfo () {
+		try {
+			const sessionToken = this.getSessionToken();
+			if (!sessionToken) return { success: false, error: "Not logged in" };
+
+			const response = await fetch(`${API_BASE_URL}/auth/me`, {
+				headers: { "X-Session-Token": sessionToken },
+			});
+
+			const result = await response.json();
+			if (result.success) {
+				this.setCurrentUser(result.user);
+				return { success: true, user: result.user };
+			} else {
+				// Session expired, clear local data
+				this.setSessionToken(null);
+				this.setCurrentUser(null);
+				return { success: false, error: result.error };
+			}
+		} catch (e) {
+			console.error("Error getting user info:", e);
+			return { success: false, error: e.message };
 		}
 	}
 }
 
-// Source Management Page Controller
-class SourceManager {
+// User Management Page Controller
+class UserManager {
 	constructor () {
 		this.init();
 	}
 
 	init () {
 		this.setupEventListeners();
-		// Delay updateCachedSourcesList until after sourceManager is globally available
-		setTimeout(() => this.updateCachedSourcesList(), 0);
+		// Check if already logged in
+		setTimeout(() => this.checkLoginStatus(), 0);
 	}
 
 	setupEventListeners () {
-		// Create source button
+		// Register button
 		document.getElementById("create-source-btn").addEventListener("click", () => {
-			this.createNewSource();
+			this.register();
 		});
 
 		// Login button
 		document.getElementById("login-source-btn").addEventListener("click", () => {
-			this.loginToSource();
+			this.login();
 		});
-
-
-		// Test access button (optional)
-		const testAccessBtn = document.getElementById("test-access-btn");
-		if (testAccessBtn) {
-			testAccessBtn.addEventListener("click", () => {
-				this.testSourceAccess();
-			});
-		}
 
 		// Enter key support for inputs
 		document.getElementById("new-source-name").addEventListener("keypress", (e) => {
-			if (e.key === "Enter") this.createNewSource();
+			if (e.key === "Enter") this.register();
 		});
 
 		document.getElementById("confirm-source-password").addEventListener("keypress", (e) => {
-			if (e.key === "Enter") this.createNewSource();
+			if (e.key === "Enter") this.register();
 		});
 
-		// Test source password element is not present in HTML, skip event listener
-
 		document.getElementById("login-source-password").addEventListener("keypress", (e) => {
-			if (e.key === "Enter") this.loginToSource();
+			if (e.key === "Enter") this.login();
 		});
 	}
 
-	async createNewSource () {
-		const sourceNameInput = document.getElementById("new-source-name");
+	async register () {
+		const usernameInput = document.getElementById("new-source-name");
 		const passwordInput = document.getElementById("new-source-password");
 		const confirmPasswordInput = document.getElementById("confirm-source-password");
 		const messageDiv = document.getElementById("create-message");
 
-		const sourceName = sourceNameInput.value.trim().toLocaleString();
+		const username = usernameInput.value.trim();
 		const password = passwordInput.value;
 		const confirmPassword = confirmPasswordInput.value;
 
@@ -158,20 +216,15 @@ class SourceManager {
 		messageDiv.style.color = "";
 
 		// Validation
-		if (!sourceName) {
-			this.showMessage("create-message", "Please enter a source name", "red");
-			sourceNameInput.focus();
+		if (!username) {
+			this.showMessage("create-message", "Please enter a username", "red");
+			usernameInput.focus();
 			return;
 		}
 
-		const cleanSourceName = sourceName.replace(/[^a-zA-Z0-9_-]/g, "");
-		if (cleanSourceName !== sourceName) {
-			this.showMessage("create-message", `Source name contains invalid characters. Using: ${cleanSourceName}`, "orange");
-			sourceNameInput.value = cleanSourceName;
-		}
-
-		if (cleanSourceName === "") {
-			this.showMessage("create-message", "Invalid source name after cleaning", "red");
+		if (username.length < 3) {
+			this.showMessage("create-message", "Username must be at least 3 characters long", "red");
+			usernameInput.focus();
 			return;
 		}
 
@@ -187,54 +240,53 @@ class SourceManager {
 			return;
 		}
 
-		if (password.length < 4) {
-			this.showMessage("create-message", "Password must be at least 4 characters long", "red");
+		if (password.length < 6) {
+			this.showMessage("create-message", "Password must be at least 6 characters long", "red");
 			passwordInput.focus();
 			return;
 		}
 
 		try {
-			this.showMessage("create-message", "Creating source...", "blue");
+			this.showMessage("create-message", "Creating account...", "blue");
 
-			const success = await SourcePasswordManager.createSource(cleanSourceName, password);
+			// Use a dummy email since the API requires it
+			const email = `${username}@example.com`;
+			const result = await UserAuthManager.register(username, email, password);
 
-			if (success) {
-				// Cache the password
-				SourcePasswordManager.cachePassword(cleanSourceName, password);
-
+			if (result.success) {
 				// Clear form
-				sourceNameInput.value = "";
+				usernameInput.value = "";
 				passwordInput.value = "";
 				confirmPasswordInput.value = "";
 
-				// Update cached sources list
-				this.updateCachedSourcesList();
+				// Update login status
+				this.updateLoginStatus();
 
-				this.showMessage("create-message", `Source "${cleanSourceName}" created successfully!`, "green");
+				this.showMessage("create-message", `Account "${username}" created successfully!`, "green");
 			} else {
-				this.showMessage("create-message", "Failed to create source. It may already exist.", "red");
+				this.showMessage("create-message", result.error || "Failed to create account.", "red");
 			}
 		} catch (e) {
-			console.error("Error creating source:", e);
-			this.showMessage("create-message", `Error creating source: ${e.message}`, "red");
+			console.error("Error creating account:", e);
+			this.showMessage("create-message", `Error creating account: ${e.message}`, "red");
 		}
 	}
 
-	async loginToSource () {
-		const sourceNameInput = document.getElementById("login-source-name");
+	async login () {
+		const usernameInput = document.getElementById("login-source-name");
 		const passwordInput = document.getElementById("login-source-password");
 		const messageDiv = document.getElementById("login-message");
 
-		const sourceName = sourceNameInput.value.trim().toLowerCase();
+		const username = usernameInput.value.trim();
 		const password = passwordInput.value;
 
 		// Clear previous messages
 		messageDiv.textContent = "";
 		messageDiv.style.color = "";
 
-		if (!sourceName) {
-			this.showMessage("login-message", "Please enter a source name", "red");
-			sourceNameInput.focus();
+		if (!username) {
+			this.showMessage("login-message", "Please enter a username", "red");
+			usernameInput.focus();
 			return;
 		}
 
@@ -247,114 +299,73 @@ class SourceManager {
 		try {
 			this.showMessage("login-message", "Logging in...", "blue");
 
-			const isValid = await SourcePasswordManager.validatePassword(sourceName, password);
+			const result = await UserAuthManager.login(username, password);
 
-			if (isValid) {
-				// Cache the password if valid
-				SourcePasswordManager.cachePassword(sourceName, password);
-				this.updateCachedSourcesList();
-
+			if (result.success) {
 				// Clear form
-				sourceNameInput.value = "";
+				usernameInput.value = "";
 				passwordInput.value = "";
 
-				this.showMessage("login-message", `Successfully logged in to source "${sourceName}"!`, "green");
+				// Update login status
+				this.updateLoginStatus();
+
+				this.showMessage("login-message", `Welcome back, ${result.user.username}!`, "green");
 			} else {
-				this.showMessage("login-message", "Login failed. Invalid source name or password.", "red");
+				this.showMessage("login-message", result.error || "Login failed.", "red");
 			}
 		} catch (e) {
-			console.error("Error logging in to source:", e);
+			console.error("Error logging in:", e);
 			this.showMessage("login-message", `Login error: ${e.message}`, "red");
 		}
 	}
 
-	async testSourceAccess () {
-		const sourceNameInput = document.getElementById("test-source-name");
-		const passwordInput = document.getElementById("test-source-password");
-		const messageDiv = document.getElementById("test-message");
-
-		const sourceName = sourceNameInput.value.trim().toLocaleString();
-		const password = passwordInput.value;
-
-		// Clear previous messages
-		messageDiv.textContent = "";
-		messageDiv.style.color = "";
-
-		if (!sourceName) {
-			this.showMessage("test-message", "Please enter a source name", "red");
-			sourceNameInput.focus();
-			return;
-		}
-
-		if (!password) {
-			this.showMessage("test-message", "Please enter a password", "red");
-			passwordInput.focus();
-			return;
-		}
-
-		try {
-			this.showMessage("test-message", "Testing access...", "blue");
-
-			const isValid = await SourcePasswordManager.validatePassword(sourceName, password);
-
-			if (isValid) {
-				// Do NOT cache the password for testing - this is just verification
-				this.showMessage("test-message", `Access test successful for source "${sourceName}" (credentials not cached)`, "green");
+	async checkLoginStatus () {
+		if (UserAuthManager.isLoggedIn()) {
+			// Verify session with server
+			const result = await UserAuthManager.getUserInfo();
+			if (result.success) {
+				this.updateLoginStatus();
 			} else {
-				this.showMessage("test-message", "Access denied. Invalid source name or password.", "red");
+				// Session expired or invalid
+				this.updateLoginStatus();
 			}
-		} catch (e) {
-			console.error("Error testing source access:", e);
-			this.showMessage("test-message", `Error testing access: ${e.message}`, "red");
+		} else {
+			this.updateLoginStatus();
 		}
 	}
 
-	updateCachedSourcesList () {
+	updateLoginStatus () {
 		const listDiv = document.getElementById("cached-sources-list");
-		const sourceInput = document.getElementById("character-source-input");
-		const sourceList = document.getElementById("character-source-list");
-		const generateBtn = document.getElementById("generate-random-character");
-		const cachedPasswords = SourcePasswordManager.getCachedPasswords();
-		const sourceNames = Object.keys(cachedPasswords);
+		const currentUser = UserAuthManager.getCurrentUser();
 
-		// Update the cached sources display
-		if (sourceNames.length === 0) {
-			listDiv.innerHTML = "<p class=\"text-muted\"><em>No accounts found</em></p>";
-		} else {
-			let html = "<div class=\"list-group\">";
-			sourceNames.forEach(sourceName => {
-				html += `
-					<div class="list-group-item d-flex justify-content-between align-items-center flex-column">
+		if (currentUser) {
+			// User is logged in
+			listDiv.innerHTML = `
+				<div class="list-group">
+					<div class="list-group-item d-flex justify-content-between align-items-center">
 						<div>
-								<strong>${this.escapeHtml(sourceName)}</strong>
+							<strong>${this.escapeHtml(currentUser.username)}</strong>
+							<small class="text-muted d-block">Logged in</small>
 						</div>
 						<div>
-								<button class="ve-btn ve-btn-xs ve-btn-danger" onclick="sourceManager.removeCachedSource('${this.escapeHtml(sourceName)}')">
-									Logout
-								</button>
-								<a class="ve-btn ve-btn-xs ve-btn-primary" href="charactereditor.html?level=0&source=${encodeURIComponent(sourceName)}" style="margin-left:8px;">Create Character</a>
+							<button class="ve-btn ve-btn-xs ve-btn-danger" onclick="userManager.logout()">
+								Logout
+							</button>
+							<a class="ve-btn ve-btn-xs ve-btn-primary" href="charactereditor.html?level=0&source=${encodeURIComponent(currentUser.username)}" style="margin-left:8px;">Create Character</a>
 						</div>
 					</div>
-				`;
-			});
-			html += "</div>";
-			listDiv.innerHTML = html;
+				</div>
+			`;
+		} else {
+			// User is not logged in
+			listDiv.innerHTML = '<p class="text-muted"><em>Please log in or create an account to manage characters</em></p>';
 		}
-
-		// Character creation UI removed; per-source Create Character links are provided in the cached sources list.
 	}
 
-	createCharacterForSource (sourceName) {
-		// Navigate to the character editor for creating a new character.
-		// Use level=0 and pass only the source; the editor will manage all form defaults.
-		window.location.href = `charactereditor.html?level=0&source=${encodeURIComponent(sourceName)}`;
-	}
-
-	removeCachedSource (sourceName) {
-		if (confirm(`Remove cached password for source "${sourceName}"?`)) {
-			SourcePasswordManager.removeCachedPassword(sourceName);
-			this.updateCachedSourcesList();
-		}
+	async logout () {
+		const result = await UserAuthManager.logout();
+		this.updateLoginStatus();
+		this.showMessage("login-message", "Logged out successfully", "green");
 	}
 
 	showMessage (elementId, message, color) {
@@ -385,14 +396,14 @@ class SourceManager {
 	}
 }
 
-// Initialize the source manager when the page loads
-let sourceManager;
+// Initialize the user manager when the page loads
+let userManager;
 
 window.addEventListener("load", () => {
-	sourceManager = new SourceManager();
-	// Make sourceManager available globally immediately
-	window.sourceManager = sourceManager;
+	userManager = new UserManager();
+	// Make userManager available globally immediately
+	window.userManager = userManager;
 });
 
 // Export for global access
-window.SourcePasswordManager = SourcePasswordManager;
+window.UserAuthManager = UserAuthManager;

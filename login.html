@@ -11,7 +11,7 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 	<meta name="mobile-web-app-capable" content="yes">
 
-	<title>Character authentication - 5etools</title>
+	<title>User Authentication - 5etools</title>
 
 	<link rel="stylesheet" href="css/bootstrap.css">
 	<link rel="stylesheet" href="css/main.css">
@@ -67,8 +67,8 @@
 
 	<header class="hidden-xs hidden-sm page__header">
 		<div class="container ve-flex-v-baseline">
-			<h1 class="page__title no-wrap my-0" id="page__title">Source Management</h1>
-			<p class="page__subtitle no-wrap my-0" id="page__subtitle">Create and manage character sources with password protection.</p>
+			<h1 class="page__title no-wrap my-0" id="page__title">User Authentication</h1>
+			<p class="page__subtitle no-wrap my-0" id="page__subtitle">Login or register to manage your characters.</p>
 		</div>
 	</header>
 
@@ -78,13 +78,13 @@
 	</nav>
 
 	<div class="container">
-		<!-- Login to Source Section -->
+		<!-- Login Section -->
 		<div class="ve-flex-col mb-4 p-3" style=" border: 1px solid #dee2e6; border-radius: 6px;">
-			<h2 class="mb-3">Login to account</h2>
+			<h2 class="mb-3">Login to your account</h2>
 			<div class="ve-flex-h mb-3 align-items-end">
 				<div class="mr-3">
-					<label for="login-source-name" class="form-label"><strong>Account Name:</strong></label>
-					<input type="text" id="login-source-name" class="form-control" placeholder="Enter source name" style="width: 250px;">
+					<label for="login-source-name" class="form-label"><strong>Username:</strong></label>
+					<input type="text" id="login-source-name" class="form-control" placeholder="Enter your username" style="width: 250px;">
 				</div>
 				<div class="mr-3 mb-3">
 					<label for="login-source-password" class="form-label"><strong>Password:</strong></label>
@@ -97,18 +97,18 @@
 			<div id="login-message" class="mt-2" style="font-weight: bold;"></div>
 		</div>
 
-		<!-- Create New Source Section -->
+		<!-- Create New Account Section -->
 		<div class="ve-flex-col mb-4 p-3" style=" border: 1px solid #dee2e6; border-radius: 6px;">
-			<h2 class="mb-3">Create Character account</h2>
+			<h2 class="mb-3">Create New Account</h2>
 			<div class="mb-3">
-				<label for="new-source-name" class="form-label"><strong>Account Name:</strong></label>
-				<input type="text" id="new-source-name" class="form-control" placeholder="Enter account name (letters, numbers, underscores, hyphens only)" style="max-width: 400px;">
-				<small class="form-text text-muted">Account names can only contain letters, numbers, underscores, and hyphens.</small>
+				<label for="new-source-name" class="form-label"><strong>Username:</strong></label>
+				<input type="text" id="new-source-name" class="form-control" placeholder="Choose a username (3+ characters)" style="max-width: 400px;">
+				<small class="form-text text-muted">Username must be at least 3 characters long.</small>
 			</div>
 			<div class="mb-3">
 				<label for="new-source-password" class="form-label"><strong>Password:</strong></label>
-				<input type="password" id="new-source-password" class="form-control" placeholder="Set a secure password for this account" style="max-width: 400px;">
-				<small class="form-text text-muted">This password will be required to save characters to this account.</small>
+				<input type="password" id="new-source-password" class="form-control" placeholder="Set a secure password (6+ characters)" style="max-width: 400px;">
+				<small class="form-text text-muted">Password must be at least 6 characters long.</small>
 			</div>
 			<div class="mb-3">
 				<label for="confirm-source-password" class="form-label"><strong>Confirm Password:</strong></label>
@@ -122,15 +122,13 @@
 
 
 
-		<!-- Cached Sources Section -->
+		<!-- Login Status Section -->
 		<div class="ve-flex-col mb-4 p-3" style=" border: 1px solid #dee2e6; border-radius: 6px;">
-			<h2 class="mb-3">Logins</h2>
-			<p class="text-muted mb-3">System allows login to more than one account at a time. </p>
+			<h2 class="mb-3">Login Status</h2>
+			<p class="text-muted mb-3">Your current login status and character management options.</p>
 			<div id="cached-sources-list">
-				<p class="text-muted"><em>No cached accounts found</em></p>
+				<p class="text-muted"><em>Please log in or create an account to manage characters</em></p>
 			</div>
-
-			<!-- Character creation links are available per cached source in the Logins section -->
 		</div>
 	</div>
 </div>

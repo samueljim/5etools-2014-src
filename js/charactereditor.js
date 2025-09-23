@@ -7,92 +7,44 @@ let isEditMode = false;
 let currentSource = null;
 let hasSourceAccess = false;
 
+// Helper function to update currentCharacterData and sync with global reference
+function updateCurrentCharacterData(data) {
+	currentCharacterData = data;
+	if (typeof window !== 'undefined') {
+		window.currentCharacterData = data;
+	}
+}
 
-// Source Password Management
-class CharacterSourcePasswordManager {
-	static STORAGE_KEY = 'sourcePasswords';
 
-	// Get all cached passwords from localStorage
-	static getCachedPasswords() {
+// User Authentication Manager (imported from login.js)
+class UserAuthManager {
+	static SESSION_TOKEN_KEY = "sessionToken";
+	static USER_DATA_KEY = "currentUser";
+
+	// Get current session token
+	static getSessionToken() {
 		try {
-			const stored = localStorage.getItem(this.STORAGE_KEY);
-			return stored ? JSON.parse(stored) : {};
+			return localStorage.getItem(this.SESSION_TOKEN_KEY);
 		} catch (e) {
-			console.error('Error loading cached passwords:', e);
-			return {};
+			console.error("Error loading session token:", e);
+			return null;
 		}
 	}
 
-	// Cache a password for a source
-	static cachePassword(sourceName, password) {
+	// Get current user data
+	static getCurrentUser() {
 		try {
-			const passwords = this.getCachedPasswords();
-			passwords[sourceName] = password;
-			localStorage.setItem(this.STORAGE_KEY, JSON.stringify(passwords));
-			return true;
+			const stored = localStorage.getItem(this.USER_DATA_KEY);
+			return stored ? JSON.parse(stored) : null;
 		} catch (e) {
-			console.error('Error caching password:', e);
-			return false;
+			console.error("Error loading user data:", e);
+			return null;
 		}
 	}
 
-	// Get cached password for a source
-	static getCachedPassword(sourceName) {
-		const passwords = this.getCachedPasswords();
-		return passwords[sourceName] || null;
-	}
-
-	// Remove cached password for a source
-	static removeCachedPassword(sourceName) {
-		try {
-			const passwords = this.getCachedPasswords();
-			delete passwords[sourceName];
-			localStorage.setItem(this.STORAGE_KEY, JSON.stringify(passwords));
-			return true;
-		} catch (e) {
-			console.error('Error removing cached password:', e);
-			return false;
-		}
-	}
-
-	// Check if password is valid for a source
-	static async validatePassword(sourceName, password) {
-		try {
-			const response = await fetch(`${API_BASE_URL}/sources/validate`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ source: sourceName, password })
-			});
-
-			if (response.ok) {
-				const result = await response.json();
-				return result.valid === true;
-			}
-			return false;
-		} catch (e) {
-			console.error('Error validating password:', e);
-			return false;
-		}
-	}
-
-	// Create a new source with password
-	static async createSource(sourceName, password) {
-		try {
-			const response = await fetch(`${API_BASE_URL}/sources/create`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ source: sourceName, password })
-			});
-
-			if (response.ok) {
-				const result = await response.json();
-				return result.success === true;
-			}
-			return false;
-		} catch (e) {
-			console.error('Error creating source:', e);
-			return false;
-		}
+	// Check if user is currently logged in
+	static isLoggedIn() {
+		return !!(this.getSessionToken() && this.getCurrentUser());
 	}
 }
 
@@ -174,7 +126,7 @@ class CharacterEditorPage {
 		const characterData = localStorage.getItem('editingCharacter');
 		if (characterData) {
 			try {
-				currentCharacterData = JSON.parse(characterData);
+				updateCurrentCharacterData(JSON.parse(characterData));
 				this.ace.setValue(JSON.stringify(currentCharacterData, null, 2), 1);
 				document.getElementById('message').textContent = 'Loaded character for editing';
 			} catch (e) {
@@ -2190,7 +2142,7 @@ class CharacterEditorPage {
 							if (!characterTemplate.spells.levels[actualSpellLevel]) {
 								characterTemplate.spells.levels[actualSpellLevel] = {
 									maxSlots: actualSpellLevel === '0' ? 0 : 0, // Will be set by class progression later
-									slotsUsed: 0,
+									slotsRemaining: 0,
 									spells: []
 								};
 							}
@@ -2768,7 +2720,7 @@ class CharacterEditorPage {
 			if (!characterTemplate.spells.levels[level]) {
 				characterTemplate.spells.levels[level] = {
 					maxSlots: 0, // Will be set correctly by spell slot progression
-					slotsUsed: 0, // Will be set correctly by spell slot progression  
+					slotsRemaining: 0, // Will be set correctly by spell slot progression  
 					spells: []
 				};
 			}
@@ -2836,7 +2788,7 @@ class CharacterEditorPage {
 		// Ensure cantrips (level 0) never have spell slots
 		if (characterTemplate.spells.levels['0']) {
 			delete characterTemplate.spells.levels['0'].maxSlots;
-			delete characterTemplate.spells.levels['0'].slotsUsed;
+			delete characterTemplate.spells.levels['0'].slotsRemaining;
 		}
 	}
 
@@ -2857,14 +2809,14 @@ class CharacterEditorPage {
 			if (!characterTemplate.spells.levels[spellLevel]) {
 				characterTemplate.spells.levels[spellLevel] = {
 					maxSlots: 0,
-					slotsUsed: 0,
+					slotsRemaining: 0,
 					spells: []
 				};
 			}
 
 			const currentLevel = characterTemplate.spells.levels[spellLevel];
 			const oldMaxSlots = currentLevel.maxSlots || 0;
-			const oldSlotsUsed = currentLevel.slotsUsed || 0;
+			const oldslotsRemaining = currentLevel.slotsRemaining || 0;
 			
 			// Calculate the difference in slots
 			const slotDifference = warlockSlots.slots - oldMaxSlots;
@@ -2872,18 +2824,18 @@ class CharacterEditorPage {
 			// Update max slots
 			currentLevel.maxSlots = warlockSlots.slots;
 			
-			// When gaining slots, add the same amount to slotsUsed (new slots start as "used")
-			// Special case: if this is the first time getting slots for this level, set slotsUsed = maxSlots
+			// When gaining slots, add the same amount to slotsRemaining (new slots start as "used")
+			// Special case: if this is the first time getting slots for this level, set slotsRemaining = maxSlots
 			if (oldMaxSlots === 0 && warlockSlots.slots > 0) {
 				// First time getting slots at this level - all slots should be "used" (available)
-				currentLevel.slotsUsed = warlockSlots.slots;
-				console.log(`✨ New Warlock spell level ${spellLevel}: 0 → ${warlockSlots.slots} max slots, 0 → ${currentLevel.slotsUsed} used (first time)`);
+				currentLevel.slotsRemaining = warlockSlots.slots;
+				console.log(`✨ New Warlock spell level ${spellLevel}: 0 → ${warlockSlots.slots} max slots, 0 → ${currentLevel.slotsRemaining} used (first time)`);
 			} else if (slotDifference > 0) {
-				currentLevel.slotsUsed = oldSlotsUsed + slotDifference;
-				console.log(`🧙‍♀️ Warlock Level ${spellLevel}: ${oldMaxSlots} → ${warlockSlots.slots} max slots, ${oldSlotsUsed} → ${currentLevel.slotsUsed} used`);
+				currentLevel.slotsRemaining = oldslotsRemaining + slotDifference;
+				console.log(`🧙‍♀️ Warlock Level ${spellLevel}: ${oldMaxSlots} → ${warlockSlots.slots} max slots, ${oldslotsRemaining} → ${currentLevel.slotsRemaining} used`);
 			} else if (slotDifference < 0) {
-				currentLevel.slotsUsed = Math.max(0, Math.min(oldSlotsUsed, warlockSlots.slots));
-				console.log(`🧙‍♀️ Warlock Level ${spellLevel}: ${oldMaxSlots} → ${warlockSlots.slots} max slots, ${oldSlotsUsed} → ${currentLevel.slotsUsed} used`);
+				currentLevel.slotsRemaining = Math.max(0, Math.min(oldslotsRemaining, warlockSlots.slots));
+				console.log(`🧙‍♀️ Warlock Level ${spellLevel}: ${oldMaxSlots} → ${warlockSlots.slots} max slots, ${oldslotsRemaining} → ${currentLevel.slotsRemaining} used`);
 			}
 			// If slotDifference === 0, no change needed (don't log)
 		}
@@ -2911,14 +2863,14 @@ class CharacterEditorPage {
 				if (!characterTemplate.spells.levels[spellLevel.toString()]) {
 					characterTemplate.spells.levels[spellLevel.toString()] = {
 						maxSlots: maxSlots, // Set to the correct max slots immediately
-						slotsUsed: maxSlots, // All slots should start as "used" (available)
+						slotsRemaining: maxSlots, // All slots should start as "used" (available)
 						spells: []
 					};
-					console.log(`🆕 Created new spell level ${spellLevel}: maxSlots: ${maxSlots}, slotsUsed: ${maxSlots}`);
+					console.log(`🆕 Created new spell level ${spellLevel}: maxSlots: ${maxSlots}, slotsRemaining: ${maxSlots}`);
 				} else {
 					const currentLevel = characterTemplate.spells.levels[spellLevel.toString()];
 					const oldMaxSlots = currentLevel.maxSlots || 0;
-					const oldSlotsUsed = currentLevel.slotsUsed || 0;
+					const oldslotsRemaining = currentLevel.slotsRemaining || 0;
 					
 					// Calculate the difference in slots
 					const slotDifference = maxSlots - oldMaxSlots;
@@ -2926,21 +2878,21 @@ class CharacterEditorPage {
 					// Update max slots
 					currentLevel.maxSlots = maxSlots;
 					
-					// When gaining slots, add the same amount to slotsUsed (new slots start as "used")
-					// Special case: if this is the first time getting slots for this level, set slotsUsed = maxSlots
+					// When gaining slots, add the same amount to slotsRemaining (new slots start as "used")
+					// Special case: if this is the first time getting slots for this level, set slotsRemaining = maxSlots
 					if (oldMaxSlots === 0 && maxSlots > 0) {
 						// First time getting slots at this level - all slots should be "used" (available)
-						currentLevel.slotsUsed = maxSlots;
-						console.log(`✨ New spell level ${spellLevel}: 0 → ${maxSlots} max slots, 0 → ${currentLevel.slotsUsed} used (first time)`);
+						currentLevel.slotsRemaining = maxSlots;
+						console.log(`✨ New spell level ${spellLevel}: 0 → ${maxSlots} max slots, 0 → ${currentLevel.slotsRemaining} used (first time)`);
 					} else if (slotDifference > 0) {
-						// Gained additional slots - add the difference to slotsUsed
+						// Gained additional slots - add the difference to slotsRemaining
 						// This ensures that if you had 1/2 slots, you now have 2/3 slots (both increased by 1)
-						currentLevel.slotsUsed = oldSlotsUsed + slotDifference;
-						console.log(`📊 Level ${spellLevel}: ${oldMaxSlots} → ${maxSlots} max slots, ${oldSlotsUsed} → ${currentLevel.slotsUsed} used`);
+						currentLevel.slotsRemaining = oldslotsRemaining + slotDifference;
+						console.log(`📊 Level ${spellLevel}: ${oldMaxSlots} → ${maxSlots} max slots, ${oldslotsRemaining} → ${currentLevel.slotsRemaining} used`);
 					} else if (slotDifference < 0) {
-						// Lost slots - reduce slotsUsed but don't go below 0
-						currentLevel.slotsUsed = Math.max(0, Math.min(oldSlotsUsed, maxSlots));
-						console.log(`📊 Level ${spellLevel}: ${oldMaxSlots} → ${maxSlots} max slots, ${oldSlotsUsed} → ${currentLevel.slotsUsed} used`);
+						// Lost slots - reduce slotsRemaining but don't go below 0
+						currentLevel.slotsRemaining = Math.max(0, Math.min(oldslotsRemaining, maxSlots));
+						console.log(`📊 Level ${spellLevel}: ${oldMaxSlots} → ${maxSlots} max slots, ${oldslotsRemaining} → ${currentLevel.slotsRemaining} used`);
 					}
 					// If slotDifference === 0, no change needed (don't log)
 				}
@@ -2957,7 +2909,7 @@ class CharacterEditorPage {
 			if (!characterTemplate.spells.levels[level]) {
 				characterTemplate.spells.levels[level] = {
 					maxSlots: level === '0' ? 0 : 0, // Will be set by class progression
-					slotsUsed: 0,
+					slotsRemaining: 0,
 					spells: []
 				};
 			}
@@ -3113,12 +3065,12 @@ class CharacterEditorPage {
 			if (!characterTemplate.spells.levels[spellLevel]) {
 				characterTemplate.spells.levels[spellLevel] = {
 					maxSlots: 0,
-					slotsUsed: 0,
+					slotsRemaining: 0,
 					spells: []
 				};
 			}
 
-			// Set the max slots but preserve existing slotsUsed and spells
+			// Set the max slots but preserve existing slotsRemaining and spells
 			characterTemplate.spells.levels[spellLevel].maxSlots = maxSlots;
 		});
 	}
@@ -4840,7 +4792,7 @@ class CharacterEditorPage {
 			if (maxSlots > 0) {
 				levels[level] = {
 					maxSlots: maxSlots,
-					slotsUsed: maxSlots,
+					slotsRemaining: maxSlots,
 					spells: this.getRandomSpells(casterClass, level)
 				};
 			}
@@ -5079,7 +5031,7 @@ class CharacterEditorPage {
 				if (maxSlots > 0) {
 					levels[level] = {
 						maxSlots: maxSlots,
-						slotsUsed: 0,
+						slotsRemaining: 0,
 						spells: []
 					};
 				}
@@ -7967,6 +7919,14 @@ class CharacterEditorPage {
 			});
 		}
 
+		// Refresh button
+		const refreshBtn = document.getElementById('refreshCharacter');
+		if (refreshBtn) {
+			refreshBtn.addEventListener('click', async () => {
+				await this.refreshCharacter();
+			});
+		}
+
 		// Delete button with triple confirmation
 		const deleteBtn = document.getElementById('deleteCharacter');
 		if (deleteBtn) {
@@ -8011,51 +7971,13 @@ class CharacterEditorPage {
 
 		// Spell selection is now part of the level up process
 
-		// Set up listener for character updates from WebSocket/P2P sync
-		if (typeof CharacterManager !== 'undefined' && CharacterManager.addListener) {
-			CharacterManager.addListener((characters) => {
-				// Check if the currently loaded character was updated
-				if (currentCharacterData && currentCharacterData.id) {
-					const updatedCharacter = characters.find(c => c.id === currentCharacterData.id);
-					if (updatedCharacter) {
-						// Update the JSON editor with the new data (preserving scroll position)
-						const currentScrollPos = this.ace.session.getScrollTop();
-						this.ace.setValue(JSON.stringify(updatedCharacter, null, 2), 1);
-						this.ace.session.setScrollTop(currentScrollPos);
+		// DISABLED: CharacterManager listener auto-updates to prevent interrupting manual editing
+		// User can manually refresh if they want to see updates from other devices
+		console.log('CharacterEditor: Auto-updates from CharacterManager disabled - use refresh button to get updates');
 
-						// Update our local reference
-						currentCharacterData = updatedCharacter;
-
-						// Re-render the character preview (with scroll preservation)
-						this.renderCharacter();
-					}
-				}
-			});
-		}
-
-		// Set up listener for cross-tab sync via localStorage events
-		window.addEventListener('storage', (event) => {
-			if (event.key === 'editingCharacter' && event.newValue && currentCharacterData) {
-				try {
-					const updatedCharacter = JSON.parse(event.newValue);
-					// Only update if it's the same character we're editing
-					if (updatedCharacter.id === currentCharacterData.id) {
-						// Update the JSON editor with the new data (preserving scroll position)
-						const currentScrollPos = this.ace.session.getScrollTop();
-						this.ace.setValue(JSON.stringify(updatedCharacter, null, 2), 1);
-						this.ace.session.setScrollTop(currentScrollPos);
-
-						// Update our local reference
-						currentCharacterData = updatedCharacter;
-
-						// Re-render the character preview (with scroll preservation)
-						this.renderCharacter();
-					}
-				} catch (e) {
-					console.warn('Error handling cross-tab character sync:', e);
-				}
-			}
-		});
+		// DISABLED: Cross-tab sync auto-updates to prevent interrupting manual editing
+		// User can manually refresh if they want to see updates from other tabs
+		console.log('CharacterEditor: Cross-tab sync auto-updates disabled - use refresh button to get updates');
 
 		// Note: Source password management moved to sources.html page
 
@@ -8094,20 +8016,18 @@ class CharacterEditorPage {
 				migrationPerformed = true;
 			}
 
-			// Update the editor content if migration was performed
+			// DISABLED: Auto-update editor after migration to prevent interrupting manual editing
 			if (migrationPerformed) {
-				this._safeSetAceValue(JSON.stringify(characterData, null, 2), 1);
+				console.log('CharacterEditor: Item migration performed but editor not auto-updated - user can save to apply changes');
+				// Don't auto-update the JSON editor - let user save to apply migration
 			}
 
-			// Process the character data first to add computed fields
-			this._processCharacterData(characterData);
-
-			// Update spell slot progression whenever character is rendered
-			// This ensures spell slots are correct when leveling up or changing classes
+			// DISABLED: Auto-update spell slots to prevent interrupting manual editing
+			// Spell slot progression will only update during explicit level-up or spell editing
 			if (characterData.spells && characterData.class) {
-				this.updateSpellSlotProgression(characterData);
-				// Update the JSON in the editor if spell slots changed
-				this._safeSetAceValue(JSON.stringify(characterData, null, 2), 1);
+				// Only update spell slots during level-up or spell editing, not during normal rendering
+				console.log('CharacterEditor: Spell slot auto-update disabled during normal rendering');
+				// Don't auto-update the JSON editor - spell slots will be updated only during level-up
 			}
 
 			// Use the existing 5etools character rendering system
@@ -8117,8 +8037,6 @@ class CharacterEditorPage {
 				renderedContent = fn(characterData);
 			} catch (renderError) {
 				console.error('Character rendering error:', renderError);
-				// Fallback to basic character display
-				renderedContent = this._createFallbackCharacterDisplay(characterData);
 			}
 
 			// Save scroll position before content replacement
@@ -8150,69 +8068,6 @@ class CharacterEditorPage {
 
 		// Update button visibility after rendering
 		this.updateButtonVisibility();
-	}
-
-	_processCharacterData(character) {
-		// Add computed fields that the filters and rendering system expect
-		if (character.race) {
-			character._fRace = character.race.variant ? `Variant ${character.race.name}` : character.race.name;
-		}
-		if (character.class && Array.isArray(character.class)) {
-			// Create detailed class display with subclasses
-			character._fClass = character.class.map(cls => {
-				let classStr = cls.name;
-				if (cls.subclass && cls.subclass.name) {
-					classStr += ` (${cls.subclass.name})`;
-				}
-				return classStr;
-			}).join("/");
-
-			// Also create a simple class list for filtering/search
-			character._fClassSimple = character.class.map(cls => cls.name).join("/");
-
-			// Calculate total level from class levels
-			character._fLevel = CharacterEditorPage.getCharacterLevel(character);
-		} else {
-			character._fLevel = 1;
-		}
-		if (character.background) {
-			character._fBackground = character.background.name;
-		}
-
-		// Normalize alignment into the shape Parser expects (usually an array of abbrs or an object)
-		if (character.alignment) {
-			try {
-				character.alignment = this._normalizeAlignment(character.alignment);
-			} catch (e) {
-				// If normalization fails, leave the original value but avoid breaking the renderer
-				console.warn('Could not normalize alignment:', e, character.alignment);
-			}
-		}
-
-		// Ensure we have the standard character structure for rendering
-		// If the character uses the 'entries' format, convert some fields back to standard format
-		if (character.entries && !character.trait && !character.action) {
-			this._convertEntriesFormat(character);
-		}
-
-		// Normalize AC 'from' text so the player sees something meaningful
-		try {
-			if (character.ac && Array.isArray(character.ac)) {
-				character.ac = character.ac.map(entry => {
-					if (!entry || typeof entry !== 'object') return entry;
-					const from = entry.from;
-					if (Array.isArray(from) && from.some(f => String(f).toLowerCase().includes('calculated'))) {
-						// Replace 'Calculated' with a friendlier description
-						const friendly = this._deriveAcFromText(character, entry);
-						return Object.assign({}, entry, { from: friendly });
-					}
-					return entry;
-				});
-			}
-		} catch (e) {
-			// Don't let this break rendering; log for debugging
-			console.warn('Error normalizing AC from-text:', e);
-		}
 	}
 
 	_convertEntriesFormat(character) {
@@ -8362,6 +8217,124 @@ class CharacterEditorPage {
 		}
 	}
 
+	async refreshCharacter() {
+		try {
+			// Show loading state
+			const messageEl = document.getElementById('message');
+			messageEl.textContent = 'Clearing all caches and refreshing from server...';
+			messageEl.style.color = 'orange';
+
+			// Disable the refresh button to prevent multiple clicks
+			const refreshBtn = document.getElementById('refreshCharacter');
+			if (refreshBtn) {
+				refreshBtn.disabled = true;
+				refreshBtn.textContent = '🔄 Clearing Caches...';
+			}
+
+			console.log(`🔄 CHARACTER EDITOR FULL CACHE CLEAR: Clearing ALL character data`);
+			
+			// STEP 1: Clear ALL character caches completely (same as characters page)
+			try {
+				// Clear CharacterManager's localStorage cache
+				if (typeof CharacterManager._STORAGE_KEY !== 'undefined') {
+					localStorage.removeItem(CharacterManager._STORAGE_KEY);
+					console.log('✅ Cleared CharacterManager localStorage cache');
+				}
+				
+				// Clear CharacterManager's summaries cache  
+				if (typeof CharacterManager._SUMMARIES_STORAGE_KEY !== 'undefined') {
+					localStorage.removeItem(CharacterManager._SUMMARIES_STORAGE_KEY);
+					console.log('✅ Cleared CharacterManager summaries cache');
+				}
+				
+				// Clear CharacterManager's memory caches
+				if (typeof CharacterManager._characters !== 'undefined') {
+					CharacterManager._characters.clear();
+					console.log('✅ Cleared CharacterManager memory cache');
+				}
+				
+				if (typeof CharacterManager._charactersArray !== 'undefined') {
+					CharacterManager._charactersArray.length = 0;
+					console.log('✅ Cleared CharacterManager array cache');
+				}
+				
+				// Force clear summaries cache using CharacterManager method
+				if (typeof CharacterManager._clearSummariesCache === 'function') {
+					CharacterManager._clearSummariesCache();
+					console.log('✅ Called CharacterManager._clearSummariesCache()');
+				}
+				
+				// Clear any other character-related localStorage keys
+				const keysToRemove = [];
+				for (let i = 0; i < localStorage.length; i++) {
+					const key = localStorage.key(i);
+					if (key && (key.includes('character') || key.includes('Character'))) {
+						keysToRemove.push(key);
+					}
+				}
+				keysToRemove.forEach(key => {
+					localStorage.removeItem(key);
+					console.log(`✅ Cleared additional character-related key: ${key}`);
+				});
+				
+			} catch (clearError) {
+				console.error('Error clearing caches:', clearError);
+			}
+
+			// STEP 2: If we're in edit mode, refresh the current character from server
+			if (isEditMode && currentCharacterData) {
+				const characterId = currentCharacterData.id || 
+					CharacterManager._generateCompositeId(currentCharacterData.name, currentCharacterData.source);
+				
+				console.log(`🔄 Refreshing character: ${characterId}`);
+				
+				if (refreshBtn) {
+					refreshBtn.textContent = '🔄 Loading from server...';
+				}
+				
+				// Reload the character from server (cache is already cleared)
+				const refreshedCharacter = await CharacterManager.ensureFullCharacter(characterId);
+				if (refreshedCharacter) {
+					// Update the current character reference
+					updateCurrentCharacterData(refreshedCharacter);
+					
+					// Update the JSON editor with fresh data
+					this._safeSetAceValue(JSON.stringify(refreshedCharacter, null, 2));
+					
+					// Re-render the character display
+					this.renderCharacter();
+					
+					messageEl.textContent = `✅ All caches cleared! Character "${refreshedCharacter.name}" refreshed from server`;
+					messageEl.style.color = 'green';
+					
+					console.log(`✅ Successfully refreshed character: ${refreshedCharacter.name}`);
+					console.log(`🎉 All character data is now fresh from server!`);
+				} else {
+					messageEl.textContent = `❌ Failed to refresh character from server`;
+					messageEl.style.color = 'red';
+					console.warn(`❌ Failed to refresh character: ${characterId}`);
+				}
+			} else {
+				// Not in edit mode - still clear caches but show appropriate message
+				messageEl.textContent = '✅ All character caches cleared! No character loaded to refresh.';
+				messageEl.style.color = 'orange';
+				console.log('✅ All caches cleared, but no character loaded to refresh');
+			}
+		} catch (error) {
+			console.error('❌ Error refreshing character:', error);
+			const messageEl = document.getElementById('message');
+			messageEl.textContent = 'Refresh Error: ' + error.message;
+			messageEl.style.color = 'red';
+		} finally {
+			// Restore button state
+			const refreshBtn = document.getElementById('refreshCharacter');
+			if (refreshBtn) {
+				refreshBtn.disabled = false;
+				refreshBtn.innerHTML = '🔄 Refresh';
+			}
+		}
+	}
+
 	// REMOVED: updateCharacterInAPI - now handled by CharacterManager.saveCharacter()
 
 
@@ -8387,9 +8360,6 @@ class CharacterEditorPage {
 	async _updateCharacterInCache(updatedCharacter) {
 		// Update the character in the DataLoader cache so it's immediately available
 		if (typeof DataLoader !== 'undefined' && DataLoader._pCache_addEntityToCache) {
-			// Process the character data to match the expected format
-			this._processCharacterData(updatedCharacter);
-
 			// Add/update the character in the cache
 			const hashBuilder = UrlUtil.URL_TO_HASH_BUILDER['character'];
 			if (hashBuilder) {
@@ -8708,11 +8678,10 @@ class CharacterEditorPage {
 			return newCharacterSource;
 		}
 
-		// Check for any cached sources - use the first one
-		const cachedPasswords = CharacterSourcePasswordManager.getCachedPasswords();
-		const availableSources = Object.keys(cachedPasswords);
-		if (availableSources.length > 0) {
-			return availableSources[0];
+		// Use current user's username as source
+		const currentUser = UserAuthManager.getCurrentUser();
+		if (currentUser) {
+			return currentUser.username;
 		}
 
 		// Fallback to 'MyCharacters'
@@ -8755,23 +8724,19 @@ class CharacterEditorPage {
 		}
 
 		const detectedSource = characterData?.source || 'MyCharacters';
-			const cachedSources = Object.keys(CharacterSourcePasswordManager.getCachedPasswords());
+		const currentUser = UserAuthManager.getCurrentUser();
+		const isLoggedIn = UserAuthManager.isLoggedIn();
 
 		if (!currentSource) {
 			currentSource = detectedSource;
 		}
 
-		// Check if this source has a cached password (using sanitized name)
-		const sanitizedDetectedSource = this.sanitizeSourceName(detectedSource);
-			const cachedPassword = CharacterSourcePasswordManager.getCachedPassword(sanitizedDetectedSource);
-		if (cachedPassword) {
-			statusEl.innerHTML = `Detected password for: "<strong>${detectedSource}</strong>" (authenticated). <a href="sources.html">Manage sources</a>.`;
+		// Check if user is authenticated
+		if (isLoggedIn && currentUser) {
+			statusEl.innerHTML = `Authenticated as: "<strong>${currentUser.username}</strong>". <a href="login.html">Manage account</a>.`;
 			hasSourceAccess = true;
-		} else if (cachedSources.length > 0) {
-			statusEl.innerHTML = `No password found for: "<strong>${detectedSource}</strong>" (not authenticated). Available sources: ${cachedSources.join(', ')}. <a href="sources.html">Login here</a>.`;
-			hasSourceAccess = false;
 		} else {
-			statusEl.innerHTML = `No authenticated character sources found. <a href="sources.html">Create and login to a source</a> to save characters.`;
+			statusEl.innerHTML = `Not authenticated. <a href="login.html">Login or register</a> to save characters.`;
 			hasSourceAccess = false;
 		}
 	}
@@ -8789,15 +8754,21 @@ class CharacterEditorPage {
 			return false;
 		}
 
-		// Check if we have a cached password for this source (using sanitized name)
-		const sanitizedSource = this.sanitizeSourceName(sourceName);
-			const cachedPassword = CharacterSourcePasswordManager.getCachedPassword(sanitizedSource);
-		if (cachedPassword) {
+		// Check if user is authenticated
+		const isLoggedIn = UserAuthManager.isLoggedIn();
+		const currentUser = UserAuthManager.getCurrentUser();
+		
+		if (isLoggedIn && currentUser) {
+			// User is authenticated, check if the source matches their username
+			if (sourceName === currentUser.username) {
+				return true;
+			}
+			// For backward compatibility, also allow if user is logged in
 			return true;
 		}
 
-		// No cached password found
-		console.warn(`No cached password found for source: "${sourceName}" (sanitized: "${sanitizedSource}")`);
+		// No authentication found
+		console.warn(`User not authenticated for source: "${sourceName}"`);
 		return false;
 	}
 
@@ -10738,7 +10709,7 @@ class CharacterEditorPage {
 				
 				spellStructure.levels[level] = {
 					maxSlots: maxSlots,
-					slotsUsed: 0, // Start with fresh spell slots
+					slotsRemaining: 0, // Start with fresh spell slots
 					spells: userSpells[levelKey].map(spell => 
 						typeof spell === 'string' ? spell : spell.name || spell
 					) // Ensure consistent string format
@@ -15151,7 +15122,7 @@ class CharacterEditorPage {
 			for (let spellLevel = 1; spellLevel <= 9; spellLevel++) {
 				if (character.spells.levels[spellLevel.toString()]) {
 					character.spells.levels[spellLevel.toString()].maxSlots = 0;
-					character.spells.levels[spellLevel.toString()].slotsUsed = 0;
+					character.spells.levels[spellLevel.toString()].slotsRemaining = 0;
 				}
 			}
 
@@ -15161,13 +15132,13 @@ class CharacterEditorPage {
 				if (!character.spells.levels[levelStr]) {
 					character.spells.levels[levelStr] = {
 						maxSlots: 0,
-						slotsUsed: 0,
+						slotsRemaining: 0,
 						spells: []
 					};
 				}
 				// Set Warlock slots to full (unused) since they get all slots back on short rest
 				character.spells.levels[levelStr].maxSlots = slots;
-				character.spells.levels[levelStr].slotsUsed = 0;
+				character.spells.levels[levelStr].slotsRemaining = 0;
 			}
 		} else {
 			// Standard handling for other classes
@@ -15180,7 +15151,7 @@ class CharacterEditorPage {
 					if (!character.spells.levels[spellLevel.toString()]) {
 						character.spells.levels[spellLevel.toString()] = {
 							maxSlots: 0,
-							slotsUsed: 0,
+							slotsRemaining: 0,
 							spells: []
 						};
 					}
@@ -16846,33 +16817,6 @@ class CharacterEditorPage {
 		}
 	}
 
-	_createFallbackCharacterDisplay(character) {
-		// Create a simple fallback display when the main renderer fails
-		const name = character.name || "Unnamed Character";
-		const level = character._fLevel || 1;
-		const race = character.race?.name || "Unknown Race";
-		const classes = character._fClass || "Unknown Class";
-		const background = character.background?.name || "Unknown Background";
-
-		return $(`
-			<div class="ve-flex-col w-100">
-				<h3>${name}</h3>
-				<p><strong>Level ${level} ${race} ${classes}</strong></p>
-				<p><strong>Background:</strong> ${background}</p>
-				<h4>Abilities</h4>
-				<ul>
-					<li>STR: ${character.abilities?.str || 10}</li>
-					<li>DEX: ${character.abilities?.dex || 10}</li>
-					<li>CON: ${character.abilities?.con || 10}</li>
-					<li>INT: ${character.abilities?.int || 10}</li>
-					<li>WIS: ${character.abilities?.wis || 10}</li>
-					<li>CHA: ${character.abilities?.cha || 10}</li>
-				</ul>
-				<p><em>Character rendering is using fallback display due to error.</em></p>
-			</div>
-		`);
-	}
-
 	async applyLevelUpFeaturesToCharacter(character) {
 		// Initialize both entries and trait arrays if they don't exist
 		if (!character.entries) {
@@ -17248,7 +17192,7 @@ class CharacterEditorPage {
 							if (!character.spells.levels[spellLevel]) {
 								character.spells.levels[spellLevel] = {
 									maxSlots: spellLevel === '0' ? 0 : 0, // Will be updated by spell slot progression
-									slotsUsed: 0,
+									slotsRemaining: 0,
 									spells: []
 								};
 							}
@@ -17507,33 +17451,33 @@ class CharacterEditorPage {
 				if (!character.spells) character.spells = {};
 				if (!character.spells.levels) character.spells.levels = {};
 				
-				// Update spell levels with proper maxSlots/slotsUsed structure
+				// Update spell levels with proper maxSlots/slotsRemaining structure
 				Object.entries(spellSlots).forEach(([spellLevel, maxSlots]) => {
 					const currentLevel = character.spells.levels[spellLevel];
 					if (!currentLevel) {
-						// Create new spell level with maxSlots = slotsUsed (all slots available)
+						// Create new spell level with maxSlots = slotsRemaining (all slots available)
 						character.spells.levels[spellLevel] = {
 							spells: [],
 							maxSlots: maxSlots,
-							slotsUsed: maxSlots // All slots start as "used" (available)
+							slotsRemaining: maxSlots // All slots start as "used" (available)
 						};
-						console.log(`🆕 Created spell level ${spellLevel}: maxSlots=${maxSlots}, slotsUsed=${maxSlots}`);
+						console.log(`🆕 Created spell level ${spellLevel}: maxSlots=${maxSlots}, slotsRemaining=${maxSlots}`);
 					} else {
 						// Update existing level, preserving spells and increasing slots proportionally
 						const oldMaxSlots = currentLevel.maxSlots || 0;
-						const oldSlotsUsed = currentLevel.slotsUsed || 0;
+						const oldslotsRemaining = currentLevel.slotsRemaining || 0;
 						
 						currentLevel.maxSlots = maxSlots;
 						
 						if (oldMaxSlots === 0) {
 							// First time getting slots for this level
-							currentLevel.slotsUsed = maxSlots;
-							console.log(`✨ First-time slots for level ${spellLevel}: maxSlots=${maxSlots}, slotsUsed=${maxSlots}`);
+							currentLevel.slotsRemaining = maxSlots;
+							console.log(`✨ First-time slots for level ${spellLevel}: maxSlots=${maxSlots}, slotsRemaining=${maxSlots}`);
 						} else {
 							// Proportional increase: add the same number of slots to both max and used
 							const increase = maxSlots - oldMaxSlots;
-							currentLevel.slotsUsed = Math.min(maxSlots, oldSlotsUsed + increase);
-							console.log(`📊 Level up! Spell level ${spellLevel}: ${oldMaxSlots}→${maxSlots} max, ${oldSlotsUsed}→${currentLevel.slotsUsed} used (+${increase} to both)`);
+							currentLevel.slotsRemaining = Math.min(maxSlots, oldslotsRemaining + increase);
+							console.log(`📊 Level up! Spell level ${spellLevel}: ${oldMaxSlots}→${maxSlots} max, ${oldslotsRemaining}→${currentLevel.slotsRemaining} used (+${increase} to both)`);
 						}
 					}
 				});
@@ -17659,7 +17603,7 @@ class CharacterEditorPage {
 								const spellLevel = level === '0' ? '0' : '2'; // Wind Caller is a 2nd level spell
 								
 								if (!character.spells.levels[spellLevel]) {
-									character.spells.levels[spellLevel] = { spells: [], maxSlots: 0, slotsUsed: 0 };
+									character.spells.levels[spellLevel] = { spells: [], maxSlots: 0, slotsRemaining: 0 };
 								}
 
 								for (const spellName of spells) {
@@ -17695,7 +17639,7 @@ class CharacterEditorPage {
 				// Add cantrips if missing
 				if (!character.spells.levels[cantripLevel] || character.spells.levels[cantripLevel].spells.length === 0) {
 					if (!character.spells.levels[cantripLevel]) {
-						character.spells.levels[cantripLevel] = { spells: [], maxSlots: 0, slotsUsed: 0 };
+						character.spells.levels[cantripLevel] = { spells: [], maxSlots: 0, slotsRemaining: 0 };
 					}
 					
 					// Arcane Trickster gets 3 cantrips at 3rd level (2 from enchantment/illusion, 1 from any school)
@@ -17714,7 +17658,7 @@ class CharacterEditorPage {
 				// Add 1st level spells if missing
 				if (!character.spells.levels[firstLevel] || character.spells.levels[firstLevel].spells.length === 0) {
 					if (!character.spells.levels[firstLevel]) {
-						character.spells.levels[firstLevel] = { spells: [], maxSlots: 0, slotsUsed: 0 };
+						character.spells.levels[firstLevel] = { spells: [], maxSlots: 0, slotsRemaining: 0 };
 					}
 					
 					// Arcane Trickster gets 2 first-level spells at 3rd level (from enchantment/illusion)
@@ -18042,4 +17986,8 @@ if (!window['characterCache']) {
 // Initialize when page loads
 window.addEventListener('load', () => {
 	editor = new CharacterEditorPage();
+	
+	// Expose globals for WebSocket character updates
+	window.characterEditorInstance = editor;
+	window.currentCharacterData = currentCharacterData;
 });

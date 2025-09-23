@@ -100,10 +100,10 @@ class CharactersPage extends ListPageMultiSource {
 		return [];
 	}
 
-	// Override the entire data loading process to use CharacterManager
+	// Override the entire data loading process to use CharacterManager with lazy loading
 	async _pOnLoad_pGetData () {
 		// Skip the traditional source-based loading entirely for characters
-		// We handle character loading in _pOnLoad_pPreDataLoad via CharacterManager
+		// We handle character loading in _pOnLoad_pPreDataLoad via CharacterManager summaries
 		return {};
 	}
 
@@ -158,30 +158,47 @@ class CharactersPage extends ListPageMultiSource {
 		// Ensure Example source is loaded for hover/popout functionality
 		await this._pLoadSource("Example", "yes");
 
-		// Use centralized character manager to load characters
+		// Use lazy loading with character summaries for list display
 		try {
-			const characters = await CharacterManager.loadCharacters();
-			if (characters.length > 0) {
-				// Format for 5etools compatibility
-				const formattedData = { character: characters };
+			let summaries = await CharacterManager.loadCharacterSummaries();
+			// Defensive: filter out any falsy/undefined entries that may have
+			// accidentally been inserted into the cache.
+			summaries = (summaries || []).filter(c => c);
+			if (summaries.length > 0) {
+				// Format for 5etools compatibility - summaries work like full characters for list display
+				const formattedData = { character: summaries };
 				this._addData(formattedData);
-				console.log(`Loaded ${characters.length} characters via CharacterManager`);
+				console.log(`Loaded ${summaries.length} character summaries for list display`);
 			} else {
-				console.log("No characters found - this is normal for a fresh installation");
+				console.log("No character summaries found - this is normal for a fresh installation");
 			}
 		} catch (e) {
-			console.warn("Failed to load characters via CharacterManager:", e);
+			console.warn("Failed to load character summaries:", e);
 		}
 
-		// Set up listener for character updates
+		// Set up listener for character updates (handles both summaries and full characters)
 		CharacterManager.addListener((characters) => {
-			// Update the list when characters change
+			// Defensive: remove falsy entries
+			characters = (characters || []).filter(c => c);
+			// Update the list when characters change - summaries work for list display
 			if (this._list) {
-				const formattedData = { character: characters };
-				// Clear existing data and add fresh data
-				this._dataList.length = 0;
-				this._addData(formattedData);
-				this._list.update();
+				// Get latest summaries for list display (more efficient than full characters)
+				CharacterManager.loadCharacterSummaries().then(summaries => {
+					if (summaries && summaries.length > 0) {
+						const formattedData = { character: summaries.filter(c => c) };
+						// Clear existing data and add fresh data
+						this._dataList.length = 0;
+						this._addData(formattedData);
+						this._list.update();
+					}
+				}).catch(e => {
+					console.warn("Failed to reload summaries for list update:", e);
+					// Fallback to using the full character data provided
+					const formattedData = { character: characters };
+					this._dataList.length = 0;
+					this._addData(formattedData);
+					this._list.update();
+				});
 			}
 
 			// Re-render currently displayed character if it was updated
@@ -206,8 +223,22 @@ class CharactersPage extends ListPageMultiSource {
 			}
 		});
 
-		// Start auto-refresh (like the original system)
-		CharacterManager.startAutoRefresh();
+
+		// Listen for WebSocket character update events
+		window.addEventListener('characterUpdated', (event) => {
+			console.log('Character updated via WebSocket:', event.detail);
+			const { character, characterId } = event.detail;
+			
+			if (this._currentCharacter) {
+				const currentId = CharacterManager._generateCompositeId(this._currentCharacter.name, this._currentCharacter.source);
+				if (currentId === characterId) {
+					console.log('Refreshing currently displayed character from WebSocket update');
+					// Update current character and re-render
+					this._currentCharacter = character;
+					this._renderStats_doBuildStatsTab({ent: character});
+				}
+			}
+		});
 
 		// Preload spell data so spell links work in character sheets
 		try {
@@ -249,19 +280,9 @@ class CharactersPage extends ListPageMultiSource {
 
 	async loadCharacterById (characterId) {
 		try {
-			// Try CharacterManager first for cached character
-			const character = CharacterManager.getCharacterById(characterId);
+			// Use CharacterManager's lazy loading mechanism
+			const character = await CharacterManager.ensureFullCharacter(characterId);
 			if (character) {
-				return character;
-			}
-
-			// If not in cache, fallback to direct API call
-			const response = await fetch(`/api/characters/${characterId}`);
-			if (response.ok) {
-				const character = await response.json();
-				this._processCharacterForDisplay(character);
-				// Add to CharacterManager cache
-				CharacterManager.addOrUpdateCharacter(character);
 				return character;
 			}
 		} catch (e) {
@@ -287,8 +308,52 @@ class CharactersPage extends ListPageMultiSource {
 		}
 	}
 
-	_renderStats_doBuildStatsTab ({ent}) {
-		// Use the hover renderer for character display
+	async _renderStats_doBuildStatsTab ({ent}) {
+		// Check if this is a summary (has only basic fields) or a full character
+		const isSummary = ent && !ent.class && !ent.race && !ent.background;
+		
+		if (isSummary) {
+			// Show loading state while we fetch the full character
+			this._$pgContent.empty().html(`
+				<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+				<tr><td colspan="6" class="ve-text-center p-3">
+					<i class="fas fa-spinner fa-spin"></i> Loading character details...
+				</td></tr>
+				<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+			`);
+
+			try {
+				// Lazy load the full character
+				const fullCharacter = await CharacterManager.ensureFullCharacter(ent.id);
+				if (!fullCharacter) {
+					this._$pgContent.empty().html(`
+						<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+						<tr><td colspan="6" class="ve-text-center p-3 text-danger">
+							<i class="fas fa-exclamation-triangle"></i> Failed to load character details.
+							${!navigator.onLine ? ' (You are offline - this character is not available)' : ''}
+						</td></tr>
+						<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+					`);
+					return;
+				}
+				
+				// Now render with the full character
+				await this._renderStats_doBuildStatsTab({ent: fullCharacter});
+				return;
+			} catch (error) {
+				console.warn(`Failed to load full character ${ent.id}:`, error);
+				this._$pgContent.empty().html(`
+					<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+					<tr><td colspan="6" class="ve-text-center p-3 text-danger">
+						<i class="fas fa-exclamation-triangle"></i> Error loading character: ${error.message || 'Unknown error'}
+					</td></tr>
+					<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+				`);
+				return;
+			}
+		}
+
+		// We have a full character - render it
 		const fn = Renderer.hover.getFnRenderCompact(UrlUtil.PG_CHARACTERS);
 		const renderedContent = fn(ent);
 
@@ -315,7 +380,7 @@ class CharactersPage extends ListPageMultiSource {
 	async _updateEditButtonVisibility (character) {
 		const $editBtn = $("#btn-edit-character");
 		const $loginBtn = $("#btn-login-to-edit");
-		const characterSource = character.source.toLowerCase();
+		const characterSource = character.source;
 
 		if (!characterSource || characterSource === "Unknown" || characterSource === "") {
 			// No source specified, hide edit button and show login button
@@ -324,18 +389,50 @@ class CharactersPage extends ListPageMultiSource {
 			return;
 		}
 
-		// Check if user has cached password for this source
-		const cachedPassword = this._getCachedPassword(characterSource);
+		// Check if user is authenticated and can edit this character
+		const canEdit = this._canEditCharacter(character);
 
-		if (cachedPassword) {
+		if (canEdit) {
 			// User has access, show edit button and hide login button
 			$editBtn.show();
 			$editBtn.attr("title", `Edit character from source: ${characterSource}`);
-			$loginBtn.hide();
+			if ($loginBtn.length) $loginBtn.hide();
 		} else {
-			// No access, hide edit button and show login button
+			// No access, hide edit button and show login button if it exists
 			$editBtn.hide();
-			$loginBtn.show();
+			if ($loginBtn.length) $loginBtn.show();
+		}
+	}
+
+	_canEditCharacter (character) {
+		try {
+			// Check if user is authenticated with new system
+			const sessionToken = localStorage.getItem('sessionToken');
+			const currentUserData = localStorage.getItem('currentUser');
+			
+			if (sessionToken && currentUserData) {
+				const currentUser = JSON.parse(currentUserData);
+				const characterSource = character.source;
+				
+				// User can edit if character source matches their username
+				// or for backward compatibility, if they're authenticated and source is reasonable
+				if (characterSource === currentUser.username) {
+					return true;
+				}
+				
+				// For backward compatibility, allow editing if user is authenticated
+				// and character has a valid source
+				if (characterSource && characterSource !== "Unknown" && characterSource !== "") {
+					return true;
+				}
+			}
+			
+			// Fallback: check old source-password system for backward compatibility
+			const cachedPassword = this._getCachedPassword(character.source?.toLowerCase());
+			return !!cachedPassword;
+		} catch (e) {
+			console.error("Error checking character edit permissions:", e);
+			return false;
 		}
 	}
 
@@ -387,6 +484,9 @@ class CharactersPage extends ListPageMultiSource {
 
 const charactersPage = new CharactersPage();
 charactersPage.sublistManager = new CharactersSublistManager();
+
+// Expose globally for WebSocket character updates
+window.charactersPage = charactersPage;
 window.addEventListener("load", () => {
 	charactersPage.pOnLoad();
 
@@ -394,17 +494,17 @@ window.addEventListener("load", () => {
 	$("#btn-edit-character").click(async () => {
 		if (charactersPage._currentCharacter) {
 			const character = charactersPage._currentCharacter;
-			const characterSource = character.source.toLowerCase();
+			const characterSource = character.source;
 
 			// Double-check access before allowing edit
-			if (!characterSource || characterSource === "Unknown" || characterSource === "") {
-				alert("This character has no source specified and cannot be edited.");
-				return;
-			}
-
-			const cachedPassword = charactersPage._getCachedPassword(characterSource);
-			if (!cachedPassword) {
-				alert(`You need to login to source "${characterSource}" to edit this character. Please visit the Sources page to authenticate.`);
+			if (!charactersPage._canEditCharacter(character)) {
+				// Check if user is authenticated at all
+				const sessionToken = localStorage.getItem('sessionToken');
+				if (!sessionToken) {
+					alert("You need to be logged in to edit characters. Please visit the Login page to authenticate.");
+				} else {
+					alert(`You don't have permission to edit this character from source "${characterSource}".`);
+				}
 				return;
 			}
 
@@ -423,20 +523,100 @@ window.addEventListener("load", () => {
 			const $btn = $("#btn-refresh-characters");
 			$btn.prop("disabled", true).addClass("ve-btn-loading");
 
-			// Force a fresh server list fetch, purge missing local characters, and reload
-			await CharacterManager.forceRefreshListAndReload();
+			console.log(`🔄 FULL CACHE CLEAR: Clearing ALL character data from local storage`);
+			
+			// STEP 1: Clear ALL character caches completely
+			try {
+				// Clear CharacterManager's localStorage cache
+				if (typeof CharacterManager._STORAGE_KEY !== 'undefined') {
+					localStorage.removeItem(CharacterManager._STORAGE_KEY);
+					console.log('✅ Cleared CharacterManager localStorage cache');
+				}
+				
+				// Clear CharacterManager's summaries cache  
+				if (typeof CharacterManager._SUMMARIES_STORAGE_KEY !== 'undefined') {
+					localStorage.removeItem(CharacterManager._SUMMARIES_STORAGE_KEY);
+					console.log('✅ Cleared CharacterManager summaries cache');
+				}
+				
+				// Clear CharacterManager's memory caches
+				if (typeof CharacterManager._characters !== 'undefined') {
+					CharacterManager._characters.clear();
+					console.log('✅ Cleared CharacterManager memory cache');
+				}
+				
+				if (typeof CharacterManager._charactersArray !== 'undefined') {
+					CharacterManager._charactersArray.length = 0;
+					console.log('✅ Cleared CharacterManager array cache');
+				}
+				
+				// Force clear summaries cache using CharacterManager method
+				if (typeof CharacterManager._clearSummariesCache === 'function') {
+					CharacterManager._clearSummariesCache();
+					console.log('✅ Called CharacterManager._clearSummariesCache()');
+				}
+				
+				// Clear any other character-related localStorage keys
+				const keysToRemove = [];
+				for (let i = 0; i < localStorage.length; i++) {
+					const key = localStorage.key(i);
+					if (key && (key.includes('character') || key.includes('Character'))) {
+						keysToRemove.push(key);
+					}
+				}
+				keysToRemove.forEach(key => {
+					localStorage.removeItem(key);
+					console.log(`✅ Cleared additional character-related key: ${key}`);
+				});
+				
+			} catch (clearError) {
+				console.error('Error clearing caches:', clearError);
+			}
 
-			// Rebuild the page data using the fresh character list
-			const characters = CharacterManager.getCharacters();
-			const formattedData = { character: characters };
+			// STEP 2: If a character is currently displayed, refresh it from server
+			if (charactersPage._currentCharacter) {
+				const currentCharacterId = charactersPage._currentCharacter.id || 
+					CharacterManager._generateCompositeId(charactersPage._currentCharacter.name, charactersPage._currentCharacter.source);
+				
+				console.log(`🔄 Refreshing currently displayed character: ${currentCharacterId}`);
+				
+				// Reload the character from server (cache is already cleared)
+				try {
+					const refreshedCharacter = await CharacterManager.ensureFullCharacter(currentCharacterId);
+					if (refreshedCharacter) {
+						// Update the current character reference
+						charactersPage._currentCharacter = refreshedCharacter;
+						
+						// Re-render the character display
+						charactersPage._renderStats_doBuildStatsTab({ent: refreshedCharacter});
+						
+						console.log(`✅ Successfully refreshed character: ${refreshedCharacter.name}`);
+					} else {
+						console.warn(`❌ Failed to refresh character: ${currentCharacterId}`);
+					}
+				} catch (refreshError) {
+					console.error(`❌ Error refreshing current character:`, refreshError);
+				}
+			}
+			
+			// STEP 3: Force refresh summaries from server (cache is already cleared)
+			const summaries = await CharacterManager.loadCharacterSummaries(null, true);
+
+			// STEP 4: Rebuild the page data using the fresh summaries
+			const filteredSummaries = (summaries || []).filter(c => c);
+			const formattedData = { character: filteredSummaries };
 			// Clear and add fresh data
 			charactersPage._dataList.length = 0;
 			charactersPage._addData(formattedData);
 			if (charactersPage._list) charactersPage._list.update();
 
-			console.log(`Characters refreshed: ${characters.length} entries`);
+			console.log(`✅ COMPLETE REFRESH: Cleared all caches and loaded ${filteredSummaries.length} fresh character summaries`);
+			if (charactersPage._currentCharacter) {
+				console.log(`✅ Currently displayed character also refreshed from server`);
+			}
+			console.log(`🎉 All character data is now fresh from server!`);
 		} catch (e) {
-			console.warn("Failed to refresh characters:", e);
+			console.warn("❌ Failed to refresh characters:", e);
 		} finally {
 			// Restore button state
 			const $btn = $("#btn-refresh-characters");

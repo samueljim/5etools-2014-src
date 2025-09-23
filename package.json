@@ -80,7 +80,9 @@
 		"test": "test"
 	},
 	"dependencies": {
+		"@3d-dice/dice-box": "^1.0.6",
 		"@vercel/blob": "^1.1.1",
-		"@3d-dice/dice-box": "^1.0.6"
+		"node-fetch": "^3.3.2",
+		"ws": "^8.18.3"
 	}
 }

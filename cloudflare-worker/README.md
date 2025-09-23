@@ -1,52 +1,126 @@
-# Cloudflare Workers WebSocket for 5etools Character Sync
+# 5etools Character Sync & API - Cloudflare D1 Solution
 
-This directory contains a Cloudflare Worker that provides WebSocket support for real-time character synchronization across devices.
+This directory contains a complete Cloudflare-based solution that replaces Vercel blob storage with:
+- **D1 Database**: SQL-based character and source storage
+- **Workers**: REST API endpoints for character management
+- **Durable Objects**: Real-time WebSocket synchronization
+- **Migration Tools**: Seamless transition from Vercel blob
 
-## Setup Instructions
+## 🚀 Quick Start
 
-### 1. Install Wrangler CLI
+### Prerequisites
+- Cloudflare account with Workers and D1 access
+- Existing 5etools setup with Vercel blob storage
+- Wrangler CLI installed
+
+### 1. Initial Setup
 
 ```bash
+# Install Wrangler CLI
 npm install -g wrangler
+
+# Login to Cloudflare
+wrangler login
+
+# Create D1 database
+wrangler d1 create 5etools-characters
 ```
 
-### 2. Login to Cloudflare
+### 2. Configure Database
+
+Update `wrangler.toml` with your database ID from step 1:
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "5etools-characters"
+database_id = "your-database-id-here"  # Replace with actual ID
+```
+
+### 3. Initialize Schema
 
 ```bash
-wrangler login
+# Apply database schema
+wrangler d1 execute 5etools-characters --file=schema.sql
 ```
 
-### 3. Deploy the Worker
+### 4. Deploy
 
 ```bash
 cd cloudflare-worker
 wrangler deploy
 ```
 
-This will deploy the worker and give you a URL like:
+Your worker will be available at:
 `https://5etools-character-sync.your-subdomain.workers.dev`
 
-### 4. Update Client Code
+## 📡 API Endpoints
 
-Edit `js/character-manager.js` and replace the placeholder URL:
+The new system provides comprehensive REST API endpoints:
 
-```javascript
-// Replace this line:
-const workerUrl = 'wss://5etools-character-sync.your-subdomain.workers.dev';
+### Character Management
+- **POST** `/api/characters/save` - Save/update character
+- **GET** `/api/characters/get?id={id}` - Retrieve character
+- **GET** `/api/characters/list` - List all characters
+- **DELETE** `/api/characters/delete?id={id}&password={password}` - Delete character
 
-// With your actual worker URL:
-const workerUrl = 'wss://5etools-character-sync.your-actual-subdomain.workers.dev';
+### Source Management
+- **POST** `/api/sources/create` - Create password-protected source
+- **GET** `/api/sources/list` - List all sources with stats
+- **POST** `/api/sources/validate` - Validate source password
+
+### Migration & Utilities
+- **POST** `/migrate` - Migrate data from Vercel blob
+- **GET** `/migrate/status` - Check migration status
+- **GET** `/` - Worker health check and endpoint info
+
+### WebSocket (Real-time Sync)
+- **WebSocket** `wss://your-worker-url.workers.dev/?room=character-sync`
+
+## 🔄 Migration from Vercel
+
+### 1. Set Migration Token
+
+```bash
+# Add your Vercel blob token as a worker secret
+wrangler secret put VERCEL_BLOB_TOKEN
+# Paste your BLOB_READ_WRITE_TOKEN when prompted
 ```
 
-### 5. Test
+### 2. Run Migration
 
-1. Open your 5etools site on Device A
-2. Open your 5etools site on Device B (different computer)
-3. Check console logs - you should see:
-   ```
-   CharacterP2P: WebSocket connected to Cloudflare Worker
-   CharacterP2P: Received test message: Hello from device [other-device-id]
-   ```
+```bash
+# Trigger migration via API
+curl -X POST https://your-worker-url.workers.dev/migrate
+
+# Check status
+curl https://your-worker-url.workers.dev/migrate/status
+```
+
+### 3. Update Client URLs
+
+Update your 5etools client code to use the new endpoints:
+
+```javascript
+// Replace Vercel URLs with Cloudflare Worker URLs
+const API_BASE = 'https://your-worker-url.workers.dev/api';
+const WEBSOCKET_URL = 'wss://your-worker-url.workers.dev/?room=character-sync';
+```
+
+## 🧪 Testing
+
+```bash
+# Run the test suite
+node test-api.js
+
+# Test against deployed worker
+WORKER_URL=https://your-worker-url.workers.dev node test-api.js
+
+# Local development testing
+wrangler dev
+# In another terminal:
+WORKER_URL=http://localhost:8787 node test-api.js
+```
 
 ## How It Works
 

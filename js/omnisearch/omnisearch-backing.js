@@ -100,18 +100,18 @@ export class OmnisearchBacking {
 
 	static async _pLoadCharacterIndex () {
 		try {
-			// Use centralized character manager to avoid duplication
-			const characters = await CharacterManager.loadCharacters();
+			// Use character summaries for search indexing (lightweight and efficient)
+			const characters = await CharacterManager.loadCharacterSummaries();
 
 			if (characters.length === 0) {
 				console.log("No characters found for search indexing");
 				return;
 			}
 
-			// Characters are already processed and cached by CharacterManager
-			console.log(`Loaded ${characters.length} characters for search indexing via CharacterManager`);
+			// Character summaries contain all the metadata needed for search
+			console.log(`Loaded ${characters.length} character summaries for search indexing via CharacterManager`);
 
-			// Convert characters to search index format
+			// Convert character summaries to search index format
 			const characterIndex = characters.map((character, i) => ({
 				id: this._maxId + 1 + i,
 				c: Parser.CAT_ID_CHARACTER,

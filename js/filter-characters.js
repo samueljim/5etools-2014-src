@@ -13,6 +13,7 @@ class PageFilterCharacters extends PageFilterBase {
 	}
 
 	static mutateForFilters (character) {
+		if (!character) return; // Defensive: skip if undefined/null
 		character._fRace = character.race?.name || "Unknown";
 
 		// Create detailed class display with subclasses
@@ -60,6 +61,7 @@ class PageFilterCharacters extends PageFilterBase {
 	}
 
 	toDisplay (values, character) {
+		if (!character) return false; // Defensive: do not display undefined entries
 		return this._filterBox.toDisplay(
 			values,
 			character._fSource,

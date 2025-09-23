@@ -367,11 +367,11 @@ class Board {
 
 	async _pAddCharactersToContentIndex () {
 		try {
-			// Load character data using centralized manager
-			const characters = await CharacterManager.loadCharacters();
+			// Load character summaries for search indexing (lightweight)
+			const summaries = await CharacterManager.loadCharacterSummaries();
 
-			if (!characters.length) {
-				console.log("No characters found for DM screen search indexing");
+			if (!summaries || !summaries.length) {
+				console.log("No character summaries found for DM screen search indexing");
 				return;
 			}
 
@@ -385,18 +385,25 @@ class Board {
 				SearchUtil.removeStemmer(this.availContent.Character);
 			}
 
-			// Add each character to the search indices
+			// Add each character summary to the search indices
 			let nextId = this.availContent.ALL.documentStore.length || 0;
-			characters.forEach((character, index) => {
-				if (!character.name || !character.source) return;
+			summaries.forEach((summary, index) => {
+				if (!summary.name || !summary.source) return;
+
+				// Create a minimal character-like object for URL building
+				const charForUrl = {
+					name: summary.name,
+					source: summary.source,
+					id: summary.id
+				};
 
 				const doc = {
 					id: nextId++,
-					n: character.name,
-					s: character.source,
+					n: summary.name,
+					s: summary.source,
 					c: Parser.CAT_ID_CHARACTER,
 					cf: "Character",
-					u: UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_CHARACTERS](character),
+					u: UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_CHARACTERS](charForUrl),
 					p: UrlUtil.PG_CHARACTERS,
 				};
 
@@ -405,9 +412,9 @@ class Board {
 				this.availContent.Character.addDoc(doc);
 			});
 
-			console.log(`Added ${characters.length} characters to DM screen search index`);
+			console.log(`Added ${summaries.length} character summaries to DM screen search index`);
 		} catch (error) {
-			console.warn("Failed to add characters to search index:", error);
+			console.warn("Failed to add character summaries to search index:", error);
 		}
 	}
 
@@ -1293,18 +1300,41 @@ class Panel {
 			meta,
 		);
 
-		// Handle character pages differently since they use API-based loading
+		// Handle character pages differently using lazy loading
 		if (page === UrlUtil.PG_CHARACTERS) {
-			return CharacterManager.loadCharacters()
-				.then(characters => {
-					// Find the specific character by hash
-					const character = characters.find(char =>
-						UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_CHARACTERS](char) === hash,
-					);
+			// Decode the hash in case it contains URL-encoded characters (e.g., spaces)
+			// This prevents issues with character IDs that contain special characters
+			const decodedHash = decodeURIComponent(hash);
+			return CharacterManager.ensureFullCharacter(decodedHash)
+				.then(async (character) => {
+					if (!character) {
+					// Try alternative hash formats if direct lookup fails
+					try {
+						// Check if we can find by character ID in cached characters
+						const byId = CharacterManager.getCharacterById(decodedHash);
+						if (byId) {
+							character = byId;
+						} else {
+							// Try reading summaries to find the right ID
+							const summaries = await CharacterManager.loadCharacterSummaries();
+							const summary = summaries.find(s => {
+								if (s.id === decodedHash) return true;
+								try {
+									return CharacterManager._generateCompositeId(s.name, s.source) === decodedHash;
+								} catch (e) { return false; }
+							});
+							if (summary) {
+								character = await CharacterManager.ensureFullCharacter(summary.id);
+							}
+						}
+					} catch (e) {
+						console.warn("Failed to find character using alternative lookup:", e);
+					}
+					}
 
 					if (!character) {
-						setTimeout(() => { throw new Error(`Failed to load entity: "${hash}" (${source}) from ${page}`); });
-						return this.doPopulate_Error({message: `Failed to load <code>${hash}</code> from page <code>${page}</code>! (Content does not exist.)`}, title);
+						setTimeout(() => { throw new Error(`Failed to load entity: "${decodedHash}" (${source}) from ${page}`); });
+						return this.doPopulate_Error({message: `Failed to load <code>${decodedHash}</code> from page <code>${page}</code>! (Content does not exist.)`}, title);
 					}
 
 					const fn = Renderer.hover.getFnRenderCompact(page);

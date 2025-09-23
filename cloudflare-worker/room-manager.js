@@ -10,6 +10,11 @@ export class RoomManager {
 	}
 
 	async fetch (request) {
+		// Handle internal broadcast requests
+		if (request.headers.get('X-Internal-Broadcast') === 'true') {
+			return this.handleInternalBroadcast(request);
+		}
+
 		const webSocketPair = new WebSocketPair();
 		const [client, server] = Object.values(webSocketPair);
 
@@ -31,58 +36,32 @@ export class RoomManager {
 			connected: true,
 		});
 
-		// Broadcast user joined to other sessions
-		this.broadcastToRoom(roomName, {
-			type: "USER_JOINED",
-			userId: userId,
-			timestamp: Date.now(),
-			room: roomName,
-		}, sessionId);
-
-		// Handle messages
-		server.addEventListener("message", event => {
+		// Handle client messages (optional - for heartbeat/ping)
+		server.addEventListener("message", async event => {
 			try {
 				const message = JSON.parse(event.data);
-
-				const fullMessage = {
-					...message,
-					userId: userId,
-					timestamp: Date.now(),
-					room: roomName,
-				};
-
-				console.log(`Broadcasting ${message.type} from ${userId} to room ${roomName}`);
-
-				// Special handling for dice rolls - ensure they have the required data
-				if (message.type === "DICE_ROLL") {
-					fullMessage.characterName = fullMessage.characterName || "Unknown Character";
-					fullMessage.rollType = fullMessage.rollType || "dice";
-					fullMessage.diceExpression = fullMessage.diceExpression || fullMessage.roll || "Unknown";
+				console.log(`[ROOM] Received client message: ${message.type} from ${userId}`);
+				
+				// Only handle heartbeat messages - no client-to-client forwarding
+				if (message.type === "HEARTBEAT") {
+					// Respond with heartbeat acknowledgment
+					server.send(JSON.stringify({
+						type: "HEARTBEAT_ACK",
+						timestamp: Date.now()
+					}));
+				} else {
+					console.log(`[ROOM] Ignoring client message type: ${message.type} (server-to-client only)`);
 				}
-
-				this.broadcastToRoom(roomName, fullMessage, sessionId);
 			} catch (error) {
-				console.error("Error processing message:", error);
-				server.send(JSON.stringify({
-					type: "ERROR",
-					message: "Invalid message format",
-					error: error.message,
-				}));
+				console.error(`[ROOM] Error processing client message:`, error);
 			}
 		});
 
 		// Handle disconnection
 		server.addEventListener("close", event => {
-			console.log(`User ${userId} disconnected from room ${roomName}`);
+			console.log(`[ROOM] User ${userId} disconnected from room ${roomName}`);
 			this.sessions.delete(sessionId);
-
-			// Broadcast user left
-			this.broadcastToRoom(roomName, {
-				type: "USER_LEFT",
-				userId: userId,
-				timestamp: Date.now(),
-				room: roomName,
-			}, sessionId);
+			// No need to broadcast disconnections in server-to-client model
 		});
 
 		server.addEventListener("error", event => {
@@ -93,26 +72,13 @@ export class RoomManager {
 		// Send welcome message
 		server.send(JSON.stringify({
 			type: "CONNECTED",
-			message: `Connected to room: ${roomName}`,
+			message: `Connected to character sync server`,
 			userId: userId,
 			timestamp: Date.now(),
-			connectedUsers: Array.from(this.sessions.values())
-				.filter(s => s.roomName === roomName)
-				.map(s => s.userId),
+			room: roomName
 		}));
 
-		// Send test message after delay
-		setTimeout(() => {
-			try {
-				server.send(JSON.stringify({
-					type: "TEST_MESSAGE",
-					message: `Hello from Durable Object! User: ${userId}`,
-					timestamp: Date.now(),
-				}));
-			} catch (error) {
-				console.error("Error sending test message:", error);
-			}
-		}, 1000);
+		console.log(`[ROOM] User ${userId} connected to room ${roomName}. Total sessions: ${this.sessions.size}`);
 
 		return new Response(null, {
 			status: 101,
@@ -153,6 +119,51 @@ export class RoomManager {
 			}
 		}
 
-		console.log(`Broadcasted ${message.type} to ${broadcastCount} sessions in room ${roomName}`);
+	console.log(`Broadcasted ${message.type} to ${broadcastCount} sessions in room ${roomName}`);
+	}
+
+	/**
+	 * Handle internal broadcast requests from API endpoints
+	 */
+	async handleInternalBroadcast(request) {
+		try {
+			console.log('[ROOM] Received internal broadcast request');
+			console.log('[ROOM] Request method:', request.method);
+			console.log('[ROOM] Request headers:', JSON.stringify(Object.fromEntries(request.headers.entries())));
+			
+			const message = await request.json();
+			console.log('[ROOM] Parsed message:', JSON.stringify(message));
+			
+			const roomName = message.room || "character-sync";
+			
+			console.log(`[ROOM] Internal broadcast request: ${message.type} for character ${message.characterId} in room ${roomName}`);
+			console.log(`[ROOM] Current sessions: ${this.sessions.size}`);
+			
+			// Broadcast to all sessions in the room
+			this.broadcastToRoom(roomName, message);
+			
+			console.log(`[ROOM] Broadcast completed successfully`);
+			
+			return new Response(JSON.stringify({ 
+				success: true, 
+				message: `Broadcasted ${message.type} to room ${roomName}`,
+				sessionCount: this.sessions.size
+			}), {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' }
+			});
+			
+		} catch (error) {
+			console.error('[ROOM] Error handling internal broadcast:', error);
+			console.error('[ROOM] Error stack:', error.stack);
+			return new Response(JSON.stringify({ 
+				error: 'Broadcast failed',
+				details: error.message,
+				stack: error.stack
+			}), {
+				status: 500,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
 	}
 }

@@ -1048,14 +1048,45 @@ class _DataTypeLoaderCharacter extends _DataTypeLoader {
 	_getSiteIdent ({pageClean, sourceClean}) { return "character"; }
 
 	async _pGetSiteData ({pageClean, sourceClean}) {
-		// Use centralized CharacterManager to prevent duplicate loads
+		// Use centralized CharacterManager with lazy loading
 		const CharacterManager = getCharacterManager();
 		if (CharacterManager) {
 			try {
-				const characters = await CharacterManager.loadCharacters();
+				// Load summaries first for better performance
+				const summaries = await CharacterManager.loadCharacterSummaries();
+				// DataLoader expects full character objects for search/filtering functionality
+				// We'll create enhanced summary objects that include metadata for filtering
+				const characters = [];
+				for (const summary of summaries) {
+					try {
+						// Check if we have full character data already cached
+						const cached = CharacterManager.getCharacterById(summary.id);
+						if (cached) {
+							// Use the full character data
+							characters.push(cached);
+						} else {
+							// Create an enhanced summary object for DataLoader indexing
+							// This allows search/filter to work without loading full characters
+							characters.push({
+								id: summary.id,
+								name: summary.name,
+								source: summary.source,
+								_fClass: summary._fClass,
+								_fRace: summary._fRace,
+								_fLevel: summary._fLevel,
+								_fBackground: summary._fBackground,
+								updatedAt: summary.updatedAt,
+								__prop: "character",
+								__isStub: true // Mark as stub for lazy loading
+							});
+						}
+					} catch (e) {
+						console.warn(`Failed to process character summary ${summary.id}:`, e);
+					}
+				}
 				return {character: characters};
 			} catch (error) {
-				console.warn("Failed to load characters from CharacterManager for DataLoader:", error);
+				console.warn("Failed to load character summaries from CharacterManager for DataLoader:", error);
 			}
 		}
 	}
@@ -2116,6 +2147,31 @@ class DataLoader {
 		const {page: pageClean, source: sourceClean, hash: hashClean} = _DataLoaderInternalUtil.getCleanPageSourceHash({page, source, hash});
 
 		if (this._PAGES_NO_CONTENT.has(pageClean)) return this._getVerifiedRequiredEntity({pageClean, sourceClean, hashClean, ent: null, isRequired});
+
+		// Handle character lazy loading for specific hashes
+		if (pageClean === "characters" && hash && typeof getCharacterManager === "function") {
+			try {
+				const CharacterManager = getCharacterManager();
+				if (CharacterManager) {
+					// Decode the hash to avoid double encoding issues
+					const decodedHash = decodeURIComponent(hash);
+					// Try to load the full character on demand
+					const character = await CharacterManager.ensureFullCharacter(decodedHash);
+					if (character) {
+						// Add to cache using existing infrastructure
+						this._pCache_addEntityToCache({
+							prop: "character",
+							hashBuilder: UrlUtil.URL_TO_HASH_BUILDER["character"],
+							ent: character
+						});
+						// Return the character (with copy if requested)
+						return isCopy ? MiscUtil.copyFast(character) : character;
+					}
+				}
+			} catch (e) {
+				console.warn(`Failed to lazy load character with hash ${hash}:`, e);
+			}
+		}
 
 		const dataLoader = this._pCache_getDataTypeLoader({pageClean, isSilent});
 		if (!dataLoader) return this._getVerifiedRequiredEntity({pageClean, sourceClean, hashClean, ent: null, isRequired});

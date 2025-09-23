@@ -3725,7 +3725,10 @@ UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_FEATS] = UrlUtil.URL_TO_HASH_GENERIC;
 UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_OPT_FEATURES] = UrlUtil.URL_TO_HASH_GENERIC;
 UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_PSIONICS] = UrlUtil.URL_TO_HASH_GENERIC;
 UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_RACES] = UrlUtil.URL_TO_HASH_GENERIC;
-UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_CHARACTERS] = UrlUtil.URL_TO_HASH_GENERIC;
+UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_CHARACTERS] = (character) => {
+	// Characters use their ID as the hash since IDs are already URL-safe and unique
+	return character.id || UrlUtil.encodeArrayForHash(character.name, character.source);
+};
 UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_REWARDS] = UrlUtil.URL_TO_HASH_GENERIC;
 UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_VARIANTRULES] = UrlUtil.URL_TO_HASH_GENERIC;
 UrlUtil.URL_TO_HASH_BUILDER[UrlUtil.PG_ADVENTURE] = (it) => UrlUtil.encodeForHash(it.id);
@@ -6958,14 +6961,25 @@ globalThis.DataUtil = class {
 			console.trace("DataUtil.character.loadJSON called from:");
 			const cacheKey = "site";
 			this._psLoadJson[cacheKey] ||= (async () => {
-				// Use CharacterManager for centralized character loading
+				// Use CharacterManager with lazy loading approach
 				try {
 					if (globalThis.CharacterManager) {
-						const characters = await globalThis.CharacterManager.loadCharacters();
+						// Load summaries first for better performance
+						const summaries = await globalThis.CharacterManager.loadCharacterSummaries();
+						// Convert summaries to minimal character objects for compatibility
+						const characters = summaries.map(summary => ({
+							id: summary.id,
+							name: summary.name,
+							source: summary.source,
+							_fClass: summary._fClass,
+							_fRace: summary._fRace,
+							_fLevel: summary._fLevel,
+							__prop: "character"
+						}));
 						return {character: characters};
 					}
 				} catch (error) {
-					console.error("Error loading characters:", error);
+					console.error("Error loading character summaries:", error);
 					return {character: []};
 				}
 			})();
