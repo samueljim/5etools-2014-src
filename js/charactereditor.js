@@ -295,7 +295,7 @@ class CharacterEditorPage {
 		})();
 
 		const $btnCancel = $(`<button class="ve-btn ve-btn-default">Cancel</button>`).click(() => doClose(false));
-		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary">Start Wizard</button>`).click(async () => {
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary" style="margin-bottom:12px">Start Wizard</button>`).click(async () => {
 			const selectedRace = $modalInner.find('#lvl0-race').val();
 			const selectedBg = $modalInner.find('#lvl0-background').val();
 			const selectedAl = $modalInner.find('#lvl0-alignment').val();
@@ -2309,10 +2309,11 @@ class CharacterEditorPage {
 					);
 
 					if (subclass && subclass.spellcastingAbility && !classInfo.spellcastingAbility) {
-						// Only apply subclass spellcasting if main class doesn't have it
-						if (!characterTemplate.spellcasting) characterTemplate.spellcasting = {};
-						characterTemplate.spellcasting.ability = subclass.spellcastingAbility;
-						characterTemplate.spellcasting.casterProgression = subclass.casterProgression || 'third';
+						// We do not populate `characterTemplate.spellcasting` here to avoid
+						// creating a separate/duplicated spellcasting object. Spell-related
+						// info is stored in `character.spells` (levels, cantrips, slots).
+						// If callers need subclass metadata, they should read it from the
+						// class/subclass objects directly.
 					}
 				}
 
@@ -2793,7 +2794,10 @@ class CharacterEditorPage {
 	}
 
 	updateSpellSlotProgression(characterTemplate) {
-		if (!characterTemplate.spells || !characterTemplate.class) return;
+		// Ensure expected structures exist to avoid runtime errors when rendering
+		if (!characterTemplate.spells) characterTemplate.spells = {};
+		if (!characterTemplate.spells.levels) characterTemplate.spells.levels = {};
+		if (!characterTemplate.class) return;
 
 		// Calculate total caster level for spell slot progression
 		let fullCasterLevel = 0;
@@ -8215,19 +8219,13 @@ class CharacterEditorPage {
 		// Convert from structured entries format to flat format for compatibility
 		if (!character.entries) return;
 
+		// Only convert actions into a flat array; do NOT populate `character.trait` here —
+		// keeping `Features & Traits` in the `entries` structure avoids creating
+		// duplicated/unused `trait` arrays on the character object.
 		character.action = character.action || [];
 
 		for (const entry of character.entries) {
-			if (entry.name === "Features & Traits" && entry.entries) {
-				for (const trait of entry.entries) {
-					if (trait.type === "entries" && trait.name) {
-						character.trait.push({
-							name: trait.name,
-							entries: trait.entries
-						});
-					}
-				}
-			} else if (entry.name === "Actions" && entry.entries) {
+			if (entry.name === "Actions" && entry.entries) {
 				for (const action of entry.entries) {
 					if (action.type === "entries" && action.name) {
 						character.action.push({
@@ -8237,7 +8235,7 @@ class CharacterEditorPage {
 					}
 				}
 			} else if (entry.name === "Background & Personality") {
-				// Add to fluff or customText
+				// Preserve fluff/background in-place; do not copy into `trait`.
 				if (!character.customText) {
 					character.customText = entry.entries.join(" ");
 				}
@@ -9519,7 +9517,6 @@ class CharacterEditorPage {
 
 			// Ensure character has required arrays
 			if (!character.entries) character.entries = [];
-			if (!character.trait) character.trait = [];
 
 			// Ensure single Features & Traits section exists
 			const featuresSection = this.ensureSingleFeaturesSection(character);
@@ -12702,16 +12699,44 @@ class CharacterEditorPage {
 
 		// Use spell manager with level-up integration callback
 		this.spellManager.openSpellManager(character, (selectedSpells) => {
-			console.log('Spell selection completed during level up, selected spells:', selectedSpells);
-			
-			// Store the spell choices for level up processing
-			this.levelUpState.choices.push({
-				type: 'spells',
-				feature: feature,
-				selections: selectedSpells,
-				spellList: 'any', // Allow any spells for flexibility
-				schoolRestrictions: [] // No restrictions for special campaigns
-			});
+			console.log('Spell selection completed during level up, raw selected spells:', selectedSpells);
+			// Normalize the selected spells into the schema expected by level-up processing:
+			// { "0": ["Mage Hand"], "1": ["Magic Missile"] }
+			try {
+				const normalized = {};
+				if (Array.isArray(selectedSpells)) {
+					selectedSpells.forEach(s => {
+						if (!s) return;
+						const name = s.name || (typeof s === 'string' ? s : null);
+						const lvl = String((s.level !== undefined && s.level !== null) ? s.level : 0);
+						if (!name) return;
+						normalized[lvl] = normalized[lvl] || [];
+						if (!normalized[lvl].includes(name)) normalized[lvl].push(name);
+					});
+				} else if (selectedSpells && typeof selectedSpells === 'object') {
+					// If the manager already returned a normalized object, accept it
+					Object.entries(selectedSpells).forEach(([k, arr]) => {
+						normalized[String(k)] = (arr || []).slice();
+					});
+				}
+				console.log('Spell selection normalized for level-up:', normalized);
+				this.levelUpState.choices.push({
+					type: 'spells',
+					feature: feature,
+					selections: normalized,
+					spellList: 'any', // Allow any spells for flexibility
+					schoolRestrictions: [] // No restrictions for special campaigns
+				});
+			} catch (e) {
+				console.warn('Failed to normalize selected spells for level-up, falling back to raw payload', e);
+				this.levelUpState.choices.push({
+					type: 'spells',
+					feature: feature,
+					selections: selectedSpells,
+					spellList: 'any',
+					schoolRestrictions: []
+				});
+			}
 
 			// Continue to next feature in level up flow
 			this.levelUpState.currentFeatureIndex++;
@@ -17428,9 +17453,8 @@ class CharacterEditorPage {
 		console.log('Updating spell slots for classes:', classes.map(c => `${c.name} ${c.level}`));
 
 		// Initialize spellcasting structure if needed
-		if (!character.spellcasting) {
-			character.spellcasting = {};
-		}
+		// Keep spellcasting information in `character.spells.levels`. Do not create
+		// a separate `character.spellcasting` object to avoid duplication.
 
 		// Calculate total caster level for multiclass spellcasters
 		let totalCasterLevel = 0;

@@ -271,52 +271,11 @@ export class RenderCharacters {
 	}
 
 	static _getRenderedSection_spells (character) {
-		if (!character.spellcasting) return "";
-
-		const spellcasting = character.spellcasting;
-		const $out = $$`<tr><td class="divider" colspan="6"><div></div></td></tr>`;
-
-		$out.append($$`<tr>
-			<td colspan="6" class="mon__stat-block-section-head">
-				<h3 class="mon__sect-head-inner">Spellcasting</h3>
-			</td>
-		</tr>`);
-
-		const spellText = `The character is a ${spellcasting.level}${Parser.getOrdinalForm(spellcasting.level)}-level spellcaster. Its spellcasting ability is ${spellcasting.ability ? StrUtil.uppercaseFirst(spellcasting.ability) : "unknown"} (spell save DC ${spellcasting.dc || "unknown"}, ${spellcasting.mod || "+"} to hit with spell attacks).`;
-
-		$out.append($$`<tr>
-			<td colspan="6">
-				<div class="rd__b">${spellText}</div>
-			</td>
-		</tr>`);
-
-		if (spellcasting.spells) {
-			Object.entries(spellcasting.spells).forEach(([level, spellData]) => {
-				let levelText;
-				if (level === "0") {
-					levelText = "Cantrips (at will)";
-				} else {
-					const slotsUsed = spellData.slotsUsed || 0;
-					const totalSlots = spellData.slots || 0;
-					const slotDisplay = totalSlots > 0 ? `(${totalSlots - slotsUsed}/${totalSlots} slots)` : `(${totalSlots} slots)`;
-					levelText = `${RenderCharacters._getOrdinalSuffix(level)} level ${slotDisplay}`;
-				}
-
-				const spellList = spellData.spells?.map(spell =>
-					typeof spell === "string" ? spell : spell.name || spell,
-				).join(", ") || "";
-
-				$out.append($$`<tr>
-					<td colspan="6">
-						<div class="rd__b">
-							<div><b>${levelText}:</b> ${spellList}</div>
-						</div>
-					</td>
-				</tr>`);
-			});
-		}
-
-		return $out;
+		// Spellcasting display has been intentionally removed to avoid showing a
+		// duplicated/unused 'Spellcasting' block. Spell information is available
+		// via the 'Features & Traits' entries and `character.spells` where
+		// appropriate. Return empty string to suppress the section.
+		return "";
 	}
 
 	static _getRenderedSection_traits (character) {

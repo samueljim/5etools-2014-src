@@ -9950,25 +9950,9 @@ Renderer.character = class {
 			}
 		}
 
-		// Traits/Features - collapsible section
-		if (character.trait?.length) {
-			const traitInfo = {
-				type: "entries",
-				name: "Features & Traits",
-				collapsed: false,
-				entries: [],
-			};
-
-			character.trait.forEach(trait => {
-				traitInfo.entries.push({
-					type: "entries",
-					name: trait.name,
-					entries: trait.entries,
-				});
-			});
-
-			renderer.recursiveRender(traitInfo, renderStack, {depth: 1});
-		}
+		// Traits/Features section intentionally suppressed — feature entries are
+		// preserved in `character.entries` and rendered via the main features
+		// pipeline elsewhere. Do not render `character.trait` to avoid confusion.
 
 		// Equipment from character data - collapsible section
 		if (character.equipment?.length) {
