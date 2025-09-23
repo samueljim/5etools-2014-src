@@ -7,11 +7,13 @@ export class StyleSwitcher {
 	static _STYLE_NIGHT = "night";
 	static _STYLE_NIGHT_ALT = "nightAlt";
 	static _STYLE_NIGHT_CLEAN = "nightClean";
+	static _STYLE_NIGHT_OLED = "nightOled";
 
 	static _NIGHT_CLASS = "ve-night-mode";
 	static _NIGHT_CLASS_STANDARD = "ve-night-mode--standard";
 	static _NIGHT_CLASS_ALT = "ve-night-mode--classic";
 	static _NIGHT_CLASS_CLEAN = "ve-night-mode--clean";
+	static _NIGHT_CLASS_OLED = "ve-night-mode--oled";
 
 	static _WIDE_ID = "style-switch__wide";
 
@@ -21,6 +23,7 @@ export class StyleSwitcher {
 		[this._STYLE_NIGHT]: "Night Mode",
 		[this._STYLE_NIGHT_ALT]: "Night Mode (Classic)",
 		[this._STYLE_NIGHT_CLEAN]: "Night Mode (Clean)",
+		[this._STYLE_NIGHT_OLED]: "Night Mode (OLED)",
 	};
 
 	static _STYLE_CLASSES = [
@@ -28,6 +31,7 @@ export class StyleSwitcher {
 		this._NIGHT_CLASS_STANDARD,
 		this._NIGHT_CLASS_ALT,
 		this._NIGHT_CLASS_CLEAN,
+		this._NIGHT_CLASS_OLED,
 	];
 
 	/* -------------------------------------------- */
@@ -115,6 +119,11 @@ export class StyleSwitcher {
 				document.documentElement.classList.add(StyleSwitcher._NIGHT_CLASS_CLEAN);
 				break;
 			}
+			case StyleSwitcher._STYLE_NIGHT_OLED: {
+				document.documentElement.classList.add(StyleSwitcher._NIGHT_CLASS);
+				document.documentElement.classList.add(StyleSwitcher._NIGHT_CLASS_OLED);
+				break;
+			}
 		}
 
 		StyleSwitcher.storage.setItem(StyleSwitcher._STORAGE_DAY_NIGHT, this._style);
@@ -128,6 +137,7 @@ export class StyleSwitcher {
 			case StyleSwitcher._STYLE_NIGHT: return [StyleSwitcher._NIGHT_CLASS, StyleSwitcher._NIGHT_CLASS_STANDARD].join(" ");
 			case StyleSwitcher._STYLE_NIGHT_ALT: return [StyleSwitcher._NIGHT_CLASS, StyleSwitcher._NIGHT_CLASS_ALT].join(" ");
 			case StyleSwitcher._STYLE_NIGHT_CLEAN: return [StyleSwitcher._NIGHT_CLASS, StyleSwitcher._NIGHT_CLASS_CLEAN].join(" ");
+			case StyleSwitcher._STYLE_NIGHT_OLED: return [StyleSwitcher._NIGHT_CLASS, StyleSwitcher._NIGHT_CLASS_OLED].join(" ");
 		}
 	}
 	// endregion

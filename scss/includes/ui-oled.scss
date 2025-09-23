@@ -1,0 +1,119 @@
+@use "../vars/vars-oled";
+
+@layer vetools {
+	.ve-night-mode--oled {
+		// Form controls
+		.form-control {
+			background-color: vars-oled.$rgb-form-control-bg--oled;
+			border-color: vars-oled.$rgb-border-grey--oled;
+			color: vars-oled.$rgb-font--oled;
+
+			&:focus {
+				border-color: vars-oled.$rgb-link-blue--oled;
+				box-shadow: 0 0 8px 0 rgba(51, 221, 255, 0.6);
+			}
+		}
+
+		// Buttons with vibrant OLED colors
+		.btn-primary {
+			background-color: vars-oled.$rgb-btn-primary-blue--oled;
+			border-color: vars-oled.$rgb-btn-primary-blue--oled;
+		}
+
+		.btn-danger {
+			background-color: vars-oled.$rgb-btn-danger-red--oled;
+			border-color: vars-oled.$rgb-btn-danger-red--oled;
+		}
+
+		.btn-warning {
+			background-color: vars-oled.$rgb-btn-warning-orange--oled;
+			border-color: vars-oled.$rgb-btn-warning-orange--oled;
+		}
+
+		.btn-info {
+			background-color: vars-oled.$rgb-btn-info-blue--oled;
+			border-color: vars-oled.$rgb-btn-info-blue--oled;
+		}
+
+		.btn-success {
+			background-color: vars-oled.$rgb-btn-success-green--oled;
+			border-color: vars-oled.$rgb-btn-success-green--oled;
+		}
+
+		// Alerts with vibrant colors
+		.alert-info {
+			background-color: vars-oled.$rgb-alert-info-blue--oled;
+			border-color: vars-oled.$rgb-alert-info-border-blue--oled;
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		.alert-danger {
+			background-color: vars-oled.$rgb-alert-danger-red--oled;
+			border-color: vars-oled.$rgb-alert-danger-border-red--oled;
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		.alert-warning {
+			background-color: vars-oled.$rgb-alert-warning-orange--oled;
+			border-color: vars-oled.$rgb-alert-warning-border-orange--oled;
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		.alert-success {
+			background-color: vars-oled.$rgb-alert-success-green--oled;
+			border-color: vars-oled.$rgb-alert-success-border-green--oled;
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		// Custom checkboxes
+		.cb-custom {
+			@include vars-oled.mix-cb-custom--oled;
+		}
+
+		// Links
+		a {
+			color: vars-oled.$rgb-link-blue--oled;
+
+			&:hover,
+			&:focus {
+				color: vars-oled.$rgb-link-blue--oled;
+				text-shadow: 0 0 5px rgba(51, 221, 255, 0.8);
+			}
+		}
+
+		// Background elements
+		.bg-light {
+			background-color: vars-oled.$rgb-bg--oled !important;
+		}
+
+		.bg-dark {
+			background-color: vars-oled.$rgb-bg--oled !important;
+		}
+
+		// Text colors
+		.text-muted {
+			color: vars-oled.$rgb-font--muted-oled !important;
+		}
+
+		// Borders
+		.border {
+			border-color: vars-oled.$rgb-border-grey--oled !important;
+		}
+
+		.border-top {
+			border-top-color: vars-oled.$rgb-border-grey--oled !important;
+		}
+
+		.border-bottom {
+			border-bottom-color: vars-oled.$rgb-border-grey--oled !important;
+		}
+
+		.border-left {
+			border-left-color: vars-oled.$rgb-border-grey--oled !important;
+		}
+
+		.border-right {
+			border-right-color: vars-oled.$rgb-border-grey--oled !important;
+		}
+	}
+}

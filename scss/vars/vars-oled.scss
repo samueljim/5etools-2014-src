@@ -1,0 +1,89 @@
+@use "sass:color";
+
+@use "../vars/vars";
+
+// OLED theme - Pitch black with vibrant colors for OLED displays
+$rgb-name-red--oled: #ff8533;
+$rgb-name-alt--oled: #f0f0f0;
+
+$rgb-link-blue--oled: #33ddff;
+$rgb-link-blue--muted-oled: #1ac6ea;
+
+$rgb-border-grey--oled: #666;
+$rgb-border-grey--trans-oled: #666666a0;
+$rgb-border-grey--list-row-oled: #444;
+$rgb-border-grey--statblock-oled: #777;
+
+$rgb-stripe-grey--oled: #fff3;
+
+// Pure black backgrounds for that pitch black OLED experience
+$rgb-bg--body-oled: #000000;
+$rgb-bg--oled: #000000;
+$rgb-bg--alt-oled: #0a0a0a;
+$rgb-bg-homebrew--oled: rgb(255 30 30 / 25%);
+
+$rgb-bg-highlight--oled: #00ff41;
+
+// High contrast fonts for readability
+$rgb-font--oled: #ffffff;
+$rgb-font--muted-oled: #e0e0e0;
+
+$rgb-form-control-bg--oled: #000000;
+
+$rgb-btn-default-active--oled: #ffffff80;
+
+$rgb-btn-danger-bg-red--oled: #ff4444;
+
+// Vibrant class colors
+$rgb-class-variant--oled: #ffaa00;
+$rgb-class-ua--oled: #33ff55;
+$rgb-subclass--oled: #33ddff;
+$rgb-subclass--oled-stale: #1ac6ea;
+$rgb-subclass-ua--oled: #44ff99;
+$rgb-subclass-ua--oled-stale: #22dd77;
+$rgb-class-brew--oled: #ff33ff;
+$rgb-class-variant-brew--oled: #ff77ff;
+
+// Vibrant button colors against black background
+$rgb-btn-primary-blue--oled: #3377ff;
+$rgb-btn-danger-red--oled: #ff4444;
+$rgb-btn-warning-orange--oled: #ffaa00;
+$rgb-btn-info-blue--oled: #33ddff;
+$rgb-btn-success-green--oled: #33ff55;
+
+// Vibrant alert colors
+$rgb-alert-info-blue--oled: #3377ff;
+$rgb-alert-danger-red--oled: #ff4444;
+$rgb-alert-warning-orange--oled: #ffaa00;
+$rgb-alert-success-green--oled: #33ff55;
+
+$rgb-alert-info-border-blue--oled: color.adjust($rgb-alert-info-blue--oled, $lightness: vars.$pct-darken-border);
+$rgb-alert-danger-border-red--oled: color.adjust($rgb-alert-danger-red--oled, $lightness: vars.$pct-darken-border);
+$rgb-alert-warning-border-orange--oled: color.adjust($rgb-alert-warning-orange--oled, $lightness: vars.$pct-darken-border);
+$rgb-alert-success-border-green--oled: color.adjust($rgb-alert-success-green--oled, $lightness: vars.$pct-darken-border);
+
+@mixin mix-shadow-active--oled {
+	box-shadow: 0 0 8px 0 #33ff55;
+}
+
+@mixin mix-cb-custom--oled {
+	background: $rgb-bg--oled;
+	border-color: $rgb-border-grey--oled;
+
+	&:active {
+		@include mix-shadow-active--oled;
+	}
+
+	&.active {
+		background: $rgb-border-grey--oled;
+		border-color: color.adjust($rgb-border-grey--oled, $lightness: 15%);
+
+		&.disabled {
+			background-color: color.adjust($rgb-border-grey--oled, $lightness: 25%);
+		}
+	}
+
+	&.disabled {
+		box-shadow: none;
+	}
+}

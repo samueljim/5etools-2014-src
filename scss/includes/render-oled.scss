@@ -1,0 +1,116 @@
+@use "../vars/vars-oled";
+
+@layer vetools {
+	.ve-night-mode--oled {
+		// Main content background
+		.rd__b {
+			background: vars-oled.$rgb-bg--oled;
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		// Content blocks
+		.rd__b--0,
+		.rd__b--1,
+		.rd__b--2,
+		.rd__b--3 {
+			background: vars-oled.$rgb-bg--oled;
+		}
+
+		// Headers with vibrant glow
+		.rd__h--0,
+		.rd__h--1,
+		.rd__h--2,
+		.rd__h--3 {
+			color: vars-oled.$rgb-font--oled;
+			text-shadow: 0 0 5px rgba(51, 255, 85, 0.6);
+		}
+
+		// Stat blocks
+		.rd__stats {
+			background: vars-oled.$rgb-bg--oled;
+			border-color: vars-oled.$rgb-border-grey--statblock-oled;
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		.rd__stat-name {
+			color: vars-oled.$rgb-name-red--oled;
+			text-shadow: 0 0 4px rgba(255, 133, 51, 0.5);
+		}
+
+		// Tables
+		.rd__table {
+			background: vars-oled.$rgb-bg--oled;
+			color: vars-oled.$rgb-font--oled;
+
+			th {
+				background: vars-oled.$rgb-bg--oled;
+				border-color: vars-oled.$rgb-border-grey--oled;
+				color: vars-oled.$rgb-font--oled;
+			}
+
+			td {
+				border-color: vars-oled.$rgb-border-grey--oled;
+			}
+
+			// Striped table rows
+			&.table-striped tbody tr:nth-child(odd) {
+				background: rgba(255, 255, 255, 0.02);
+			}
+		}
+
+		// Quotes and insets
+		.rd__quote {
+			background: vars-oled.$rgb-bg--oled;
+			border-left-color: vars-oled.$rgb-link-blue--oled;
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		.rd__inset {
+			background: vars-oled.$rgb-bg--alt-oled;
+			border-color: vars-oled.$rgb-border-grey--oled;
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		// List items
+		.rd__li {
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		// Special tags
+		.rd__dc {
+			color: vars-oled.$rgb-font--oled;
+		}
+
+		// Spell and ability tags
+		.rd__spell,
+		.rd__creature,
+		.rd__item {
+			color: vars-oled.$rgb-link-blue--oled;
+			text-shadow: 0 0 3px rgba(51, 221, 255, 0.5);
+		}
+
+		// Homebrew content
+		.rd__homebrew {
+			background: vars-oled.$rgb-bg-homebrew--oled;
+			border-left-color: vars-oled.$rgb-btn-danger-red--oled;
+		}
+
+		// Page numbers and metadata
+		.rd__p-cont-indent {
+			color: vars-oled.$rgb-font--muted-oled;
+		}
+
+		// Code blocks
+		code,
+		.rd__code {
+			background: vars-oled.$rgb-bg--oled;
+			color: vars-oled.$rgb-font--oled;
+			border: 1px solid vars-oled.$rgb-border-grey--oled;
+		}
+
+		// HR elements
+		hr {
+			border-color: vars-oled.$rgb-border-grey--oled;
+		}
+	}
+}
