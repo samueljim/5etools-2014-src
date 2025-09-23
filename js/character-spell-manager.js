@@ -23,6 +23,33 @@ class CharacterSpellManager extends ListPage {
 		this._characterData = null; // Store character context for filtering
 		this._existingSpellNames = new Set();
 		this._existingSpellHashes = new Set();
+		this._characterFilterValues = null; // stored defaults for Reset
+		this._seenHashes = new Set();
+		this._isDebug = false; // set to true for verbose logging during development
+		this._handleFilterChangeDebounced = null;
+	}
+
+	// Bind the modal Reset button so it restores character-specific defaults (shift+click still does full reset)
+	_bindResetButtonToCharacterDefaults () {
+		if (!this._$modalInner || !this._filterBox) return;
+		try {
+			const $btnReset = this._$modalInner.find('#reset');
+			if (!$btnReset || !$btnReset.length) return;
+			$btnReset.off('click').click((evt) => {
+				if (evt.shiftKey || !this._characterFilterValues) {
+					// perform full reset (preserve original behaviour on shift-click)
+					this._filterBox.reset({isResetAll: !!evt.shiftKey});
+				} else {
+					// restore character defaults
+					this._filterBox.setFromValues(this._characterFilterValues);
+				}
+				// re-render and re-apply filters
+				try { this._filterBox.render(); } catch (e) {}
+				this.handleFilterChange();
+			});
+		} catch (e) {
+			/* swallow any errors silently */
+		}
 	}
 
 	// Parse existing spells from character data to pre-select them
@@ -64,7 +91,29 @@ class CharacterSpellManager extends ListPage {
 		
 		this._characterData = characterData; // Store for filter context
 		this._onComplete = onComplete;
-		
+
+		// Ensure we start with a fresh filter/list state each time the modal opens.
+		// This prevents filters from being cached between modal opens (e.g., when editing different characters).
+		try {
+			this._characterFilterValues = null;
+			this._selectedSpells = new Map();
+			this._seenHashes = new Set();
+			this._existingSpellNames = new Set();
+			this._existingSpellHashes = new Set();
+			if (this._filterBox && this._filterBox.reset) {
+				try { this._filterBox.reset({isResetAll: true}); } catch (e) { /* ignore */ }
+			}
+			// Recreate the page filter so it doesn't carry previous filter items
+			this._pageFilter = new PageFilterSpells({
+				sourceFilterOpts: {
+					pFnOnChange: (...args) => this._pLoadSource.apply(this, args),
+				},
+			});
+			console.log('♻️ Reset filter and page state for fresh modal open');
+		} catch (e) {
+			console.warn('Error while resetting modal filter state:', e);
+		}
+
 		// Parse existing spells from character data
 		this._parseExistingSpells(characterData);
 		
@@ -290,7 +339,17 @@ class CharacterSpellManager extends ListPage {
 		}
 		
 		const f = this._filterBox.getValues();
-		console.log(`🔄 Applying filters to ${this._dataList?.length ?? 0} spells...`, f);
+		// Avoid expensive console logging unless debugging
+		if (this._isDebug) console.log(`🔄 Applying filters to ${this._dataList?.length ?? 0} spells...`, f);
+
+		// Skip re-applying if values unchanged
+		try {
+			const curValsStr = JSON.stringify(f);
+			if (this._lastFilterValuesStr === curValsStr) return;
+			this._lastFilterValuesStr = curValsStr;
+		} catch (e) {
+			// If serialization fails for any reason, continue and apply filters
+		}
 
 		const beforeCount = this._list.visibleItems.length;
 		this._list.filter(item => {
@@ -304,16 +363,25 @@ class CharacterSpellManager extends ListPage {
 				return false;
 			}
 
-			// Debug: occasionally log mismatches for investigation
-			if ((item.ix !== undefined) && this._dataList && this._dataList[item.ix] && this._dataList[item.ix] !== ent) {
-				console.debug(`ℹ️ Filter: using item.data.entity rather than this._dataList[item.ix] (ix=${item.ix})`);
-			}
+				// Debug: occasionally log mismatches for investigation
+				if ((item.ix !== undefined) && this._dataList && this._dataList[item.ix] && this._dataList[item.ix] !== ent) {
+					console.debug(`ℹ️ Filter: using item.data.entity rather than this._dataList[item.ix] (ix=${item.ix})`);
+				}
 
-			return this._pageFilter.toDisplay(f, ent);
+				const pass = this._pageFilter.toDisplay(f, ent);
+				// If debug mode is enabled, log cases where an entity passes despite its level not being in the Level filter
+				if (this._isDebug && pass && f && f.Level && Object.keys(f.Level).length) {
+					const lvlKeys = Object.keys(f.Level).map(k => Number.parseInt(k));
+					if (!lvlKeys.includes(ent.level)) {
+						console.debug(`🐞 Debug: spell passed filters despite level ${ent.level} not in active Level keys`, {name: ent.name, level: ent.level, levelKeys: lvlKeys, values: f});
+					}
+				}
+
+				return pass;
 		});
 		const afterCount = this._list.visibleItems.length;
 
-		console.log(`🎯 Filter applied: ${beforeCount} -> ${afterCount} visible spells`);
+		if (this._isDebug) console.log(`🎯 Filter applied: ${beforeCount} -> ${afterCount} visible spells`);
 		
 		FilterBox.selectFirstVisible(this._dataList);
 		// Update selection count after filtering
@@ -432,6 +500,20 @@ class CharacterSpellManager extends ListPage {
 			$wrpFormTop: $modal.find(`#filter-search-group`),
 			$btnReset: $btnReset,
 		});
+
+		// Ensure any persisted state is fully loaded before attempting to reset it.
+		// pInitFilterBox calls pDoLoadState internally, but some environments may load async
+		// data afterward; call pDoLoadState explicitly here to be defensive.
+		try {
+			if (this._filterBox && this._filterBox.pDoLoadState) await this._filterBox.pDoLoadState();
+			// Now clear persisted state for modal usage so the character defaults below are authoritative.
+			if (this._filterBox && this._filterBox.reset) {
+				this._filterBox.reset({isResetAll: true});
+				console.log('🧹 Cleared persisted FilterBox state for modal (after load)');
+			}
+		} catch (e) {
+			/* ignore */
+		}
 		
 		console.log(`🎛️ FilterBox initialized with ${this._filterBox.filters.length} filters`);
 		
@@ -450,7 +532,14 @@ class CharacterSpellManager extends ListPage {
 		this._list.init();
 		
 		// Connect filter box to handle changes
-		this._filterBox.on(FILTER_BOX_EVNT_VALCHANGE, this.handleFilterChange.bind(this));
+		// Use a debounced handler to avoid CPU spikes when many filter events fire in quick succession
+		try {
+			this._handleFilterChangeDebounced = MiscUtil.debounce(this.handleFilterChange.bind(this), 50);
+			this._filterBox.on(FILTER_BOX_EVNT_VALCHANGE, this._handleFilterChangeDebounced);
+		} catch (e) {
+			// Fallback to direct binding if debounce or event binding fails
+			this._filterBox.on(FILTER_BOX_EVNT_VALCHANGE, this.handleFilterChange.bind(this));
+		}
 		
 		// Initialize sorting
 		const wrpBtnsSort = $modal.find(`#filtertools`)[0];
@@ -458,39 +547,30 @@ class CharacterSpellManager extends ListPage {
 			SortUtil.initBtnSortHandlers(wrpBtnsSort, this._list);
 		}
 		
-		// Update list when items change
-		this._list.on("updated", () => {
-			this._updateSelectedCount();
-		});
 
-		// If List.js updated but did not render DOM nodes into the container, run fallback
+		// Consolidated handler for list updates: update counts, run fallback if needed, and optional debug logging
+		const $outVisibleResults = $modal.find(`.lst__wrp-search-visible`);
 		this._list.on("updated", () => {
 			try {
+				this._updateSelectedCount();
 				const $lc = $listContainer;
 				const vis = this._list.visibleItems.length;
-				const domCount = $lc.find('.lst__row').length;
+				const domCount = $lc.find('.lst__Row, .lst__row').length; // allow slightly flexible class naming
 				if (vis > 0 && domCount === 0) {
 					console.warn(`⚠️ List updated but DOM empty (visible ${vis}). Running fallback.`);
 					this._fallbackToDirectDOM($listContainer);
 				}
+				$outVisibleResults.html(`${this._list.visibleItems.length}/${this._list.items.length}`);
+				if (this._isDebug) {
+					try {
+						const names = (this._list.visibleItems || []).slice(0, 10).map(it => it.name);
+						console.log(`📦 List updated: ${this._list.visibleItems.length}/${this._list.items.length} visible. First:`, names);
+					} catch (e) { /* ignore debug errors */ }
+				}
 			} catch (e) {
-				console.error(`Error during updated fallback check:`, e);
+				console.error(`Error during consolidated updated handler:`, e);
 			}
 		});
-
-		// Debug: log first few visible item names when the list updates
-		this._list.on("updated", () => {
-			try {
-				const names = (this._list.visibleItems || []).slice(0, 10).map(it => it.name);
-				console.log(`📦 List updated: ${this._list.visibleItems.length}/${this._list.items.length} visible. First:`, names);
-			} catch (e) {
-				/* ignore logging errors */
-			}
-		});
-		
-		// Initialize visible items display
-		const $outVisibleResults = $modal.find(`.lst__wrp-search-visible`);
-		this._list.on("updated", () => $outVisibleResults.html(`${this._list.visibleItems.length}/${this._list.items.length}`));
 		
 		console.log(`📋 List and Filter system initialized`);
 	}
@@ -527,28 +607,11 @@ class CharacterSpellManager extends ListPage {
 		// Now apply initial filtering to show all appropriate spells
 		setTimeout(() => {
 			console.log("🔄 Applying initial filtering...");
-			// Force all items to be visible initially by bypassing List.js filtering
-			if (this._list && this._list.items) {
-				console.log("🔓 Forcing all spells to be visible initially");
-				
-				// Update List.js internal visibility state directly
-				this._list.items.forEach(item => {
-					if (item.elm || item.ele) {
-						   // Removed: do not call item.visible(true)
-					}
-				});
-				
-				// Force a List.js update
-				this._list.update();
-				console.log(`🚀 Forced visibility: ${this._list.visibleItems.length} of ${this._list.items.length} spells visible`);
-
-				// If still 0 visible, show all items directly in DOM
-				if (this._list.visibleItems.length === 0) {
-					console.log("🎯 Bypassing List.js entirely - showing all DOM items");
-					const $listContainer = this._$modalInner.find('#list');
-					$listContainer.find('.lst__row').show(); // Show all DOM items
-					console.log(`📝 Showed ${$listContainer.find('.lst__row').length} DOM items directly`);
-				}
+			// Apply the filter state determined above instead of forcing all items visible.
+			try {
+				this.handleFilterChange();
+			} catch (e) {
+				console.warn('Error applying initial filters:', e);
 			}
 		}, 100);
 		
@@ -821,27 +884,38 @@ class CharacterSpellManager extends ListPage {
 				// Apply the classes selection to the filter box along with level below
 			}
 			
-			// Determine allowed spell levels per-class and build filter values
+			// Determine allowed spell levels from the character's spell data (preferred)
 			const levelsAllowed = new Set();
-			const characterLevel = characterClasses.length ? Math.max(...characterClasses.map(cls => cls.level || 1)) : 1;
-			// Helper: caster progression
-			const fullCasters = new Set(['Bard','Cleric','Druid','Sorcerer','Wizard','Warlock']);
-			const halfCasters = new Set(['Paladin','Ranger']);
-			// Eldritch Knight and Arcane Trickster act as one-third casters
-			characterClasses.forEach(cls => {
-				const name = cls.name;
-				const lvl = cls.level || 1;
-				let maxForClass = 0;
-				if (fullCasters.has(name)) maxForClass = Math.min(9, Math.floor(lvl));
-				else if (halfCasters.has(name)) maxForClass = Math.min(9, Math.floor(lvl / 2));
-				else if (name === 'Fighter' && cls.subclass?.name === 'Eldritch Knight') maxForClass = Math.min(9, Math.floor(lvl / 3));
-				else if (name === 'Rogue' && cls.subclass?.name === 'Arcane Trickster') maxForClass = Math.min(9, Math.floor(lvl / 3));
-				else maxForClass = Math.min(9, Math.floor(lvl / 2)); // Conservative default: treat as half-caster
-				if (maxForClass < 1) maxForClass = 1; // show at least 1st-level spells for low-level casters
-				for (let L = 0; L <= maxForClass; ++L) levelsAllowed.add(L);
-			});
-
-			console.log(`🎚️ Character level ${characterLevel}, per-class allowed max levels: ${[...levelsAllowed].sort((a,b)=>a-b).join(',')}`);
+			if (this._characterData.spells && this._characterData.spells.levels && Object.keys(this._characterData.spells.levels).length) {
+				// Use explicit spell-level entries (these include known spells and maxSlots info)
+				Object.keys(this._characterData.spells.levels).forEach(k => {
+					const lvl = Number.parseInt(k);
+					if (!Number.isNaN(lvl)) levelsAllowed.add(lvl);
+				});
+				// Always include cantrips (level 0) by default
+				levelsAllowed.add(0);
+				console.log(`🎚️ Using character.spells.levels keys for allowed spell levels (including cantrips): ${[...levelsAllowed].sort((a,b)=>a-b).join(',')}`);
+			} else {
+				// Fallback: approximate allowed levels from class progression (legacy behaviour)
+				const characterLevel = characterClasses.length ? Math.max(...characterClasses.map(cls => cls.level || 1)) : 1;
+				// Helper: caster progression
+				const fullCasters = new Set(['Bard','Cleric','Druid','Sorcerer','Wizard','Warlock']);
+				const halfCasters = new Set(['Paladin','Ranger']);
+				// Eldritch Knight and Arcane Trickster act as one-third casters
+				characterClasses.forEach(cls => {
+					const name = cls.name;
+					const lvl = cls.level || 1;
+					let maxForClass = 0;
+					if (fullCasters.has(name)) maxForClass = Math.min(9, Math.floor(lvl));
+					else if (halfCasters.has(name)) maxForClass = Math.min(9, Math.floor(lvl / 2));
+					else if (name === 'Fighter' && cls.subclass?.name === 'Eldritch Knight') maxForClass = Math.min(9, Math.floor(lvl / 3));
+					else if (name === 'Rogue' && cls.subclass?.name === 'Arcane Trickster') maxForClass = Math.min(9, Math.floor(lvl / 3));
+					else maxForClass = Math.min(9, Math.floor(lvl / 2)); // Conservative default: treat as half-caster
+					if (maxForClass < 1) maxForClass = 1; // show at least 1st-level spells for low-level casters
+					for (let L = 0; L <= maxForClass; ++L) levelsAllowed.add(L);
+				});
+				console.log(`🎚️ Fallback character level approximation, per-class allowed max levels: ${[...levelsAllowed].sort((a,b)=>a-b).join(',')}`);
+			}
 
 			// Build the values object for FilterBox.setFromValues
 			const values = {};
@@ -849,15 +923,88 @@ class CharacterSpellManager extends ListPage {
 			values.Level = {};
 			[...levelsAllowed].forEach(l => values.Level[l] = 1);
 			// Classes filter: pick the character's classes (if computed above)
-			if (typeof classesFilterValues !== 'undefined' && Object.keys(classesFilterValues).length) values.Classes = classesFilterValues;
+			if (typeof classesFilterValues !== 'undefined' && Object.keys(classesFilterValues).length) {
+				// Apply to both the MultiFilter header and the child Class filter to ensure both recognise the selection
+				values.Classes = classesFilterValues;
+				values.Class = classesFilterValues;
+			}
+
+			// Subclass filter: if the character has subclasses, include those as well
+			const subclassFilterValues = {};
+			characterClasses.forEach(cls => {
+				try {
+					const classSource = cls.source || Parser.SRC_PHB;
+					// Always include the base class pill for this class
+					const baseClassFi = PageFilterSpells._getClassFilterItem({
+						className: cls.name,
+						classSource: classSource,
+						isVariantClass: false,
+						definedInSource: classSource,
+					});
+					if (baseClassFi && baseClassFi.item) subclassFilterValues[baseClassFi.item] = 1;
+
+					const sc = cls.subclass;
+					if (sc && sc.name) {
+						const subclassSource = sc.source || classSource;
+						const subclassShort = sc.shortName || sc.name;
+						const fi = PageFilterSpells._getSubclassFilterItem({
+							className: cls.name,
+							classSource: classSource,
+							subclassShortName: subclassShort,
+							subclassName: sc.name,
+							subclassSource: subclassSource,
+							subSubclassName: sc.subSubclass,
+							isVariantClass: false,
+							definedInSource: subclassSource,
+						});
+						if (fi && fi.item) subclassFilterValues[fi.item] = 1;
+					}
+				} catch (e) {
+					console.warn(`Could not map subclass for filter: ${cls.name}`, e);
+				}
+			});
+			if (Object.keys(subclassFilterValues).length) values.Subclass = subclassFilterValues;
+
+			// Debug: log the exact pill keys we will apply for classes and subclass
+			try {
+				console.log(`🔎 Class pill keys applied:`, Object.keys(values.Classes || {}));
+				console.log(`🔎 Subclass pill keys applied:`, Object.keys(values.Subclass || {}));
+			} catch (e) { /* ignore logging errors */ }
 
 			if (Object.keys(values).length) {
 				console.log(`🔧 Applying filter defaults:`, values);
-				this._filterBox.setFromValues(values);
-				// Ensure filter UI renders (so class pills are visible)
+				// Store the character defaults so we can restore them on Reset
+				this._characterFilterValues = values;
+				// Apply immediately using a "fast path" directly against the page filter values so the
+				// list updates instantly for the user (avoids waiting for FilterBox UI population).
+				try {
+					const fastValues = this._characterFilterValues;
+					this._list.filter(item => {
+						if (!item) return false;
+						const ent = item.data && item.data.entity ? item.data.entity : (this._dataList && this._dataList[item.ix]);
+						if (!ent) return false;
+						return this._pageFilter.toDisplay(fastValues, ent);
+					});
+					console.log('⚡ Fast-path applied character defaults directly to the list');
+					this._updateSelectedCount();
+				} catch (e) {
+					console.warn('Fast-path filter apply failed; will fallback to waiting for FilterBox sync', e);
+				}
+				// Still render/bind reset and attempt to sync the FilterBox UI when it finishes loading
 				try { this._filterBox.render(); } catch (e) { /* ignore if not present */ }
-				// Trigger filter application
-				this.handleFilterChange();
+				this._bindResetButtonToCharacterDefaults();
+				const applyWhenReady = async () => {
+					try { if (this._filterBox && this._filterBox.pDoLoadState) await this._filterBox.pDoLoadState(); } catch (e) { /* ignore */ }
+					try {
+						this._filterBox.setFromValues(this._characterFilterValues);
+						console.log(`🔎 Post-render FilterBox values:`, this._filterBox.getValues());
+					} catch (e) {
+						console.warn('Failed to set filter values after waiting:', e);
+					}
+					// Re-run the canonical handler to ensure full internal state sync
+					this.handleFilterChange();
+				};
+				applyWhenReady();
 			}
 
 			console.log("✅ Filters configured for character spell selection");
