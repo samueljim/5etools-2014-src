@@ -692,7 +692,7 @@ Use the `skillProficiencies` array for better automation:
 "levels": {
   "1": {
     "maxSlots": 4,
-    "slotsUsed": 2,
+    "slotsRemaining": 2,
     "spells": [
       "magic missile",
       "shield",
@@ -702,7 +702,7 @@ Use the `skillProficiencies` array for better automation:
   },
   "2": {
     "maxSlots": 3,
-    "slotsUsed": 0,
+    "slotsRemaining": 0,
     "spells": [
       "misty step",
       "web",
@@ -739,17 +739,17 @@ Use the `skillProficiencies` array for better automation:
     },
     "1": {
       "maxSlots": 4,
-      "slotsUsed": 2,
+      "slotsRemaining": 2,
       "spells": ["magic missile", "shield", "identify", "detect magic", "alarm"]
     },
     "2": {
       "maxSlots": 3,
-      "slotsUsed": 1,
+      "slotsRemaining": 1,
       "spells": ["misty step", "web", "scorching ray", "invisibility"]
     },
     "3": {
       "maxSlots": 2,
-      "slotsUsed": 0,
+      "slotsRemaining": 0,
       "spells": ["fireball", "counterspell"]
     }
   }
@@ -772,7 +772,7 @@ Use the `skillProficiencies` array for better automation:
     },
     "2": {
       "maxSlots": 2,
-      "slotsUsed": 0,
+      "slotsRemaining": 0,
       "spells": ["darkness", "invisibility"]
     }
   }
@@ -788,12 +788,12 @@ Use the `skillProficiencies` array for better automation:
   "levels": {
     "1": {
       "maxSlots": 4,
-      "slotsUsed": 1,
+      "slotsRemaining": 1,
       "spells": ["cure wounds", "divine favor", "protection from evil and good"]
     },
     "2": {
       "maxSlots": 2,
-      "slotsUsed": 0,
+      "slotsRemaining": 0,
       "spells": ["aid", "find steed"]
     }
   }
@@ -1417,7 +1417,7 @@ Flexible system for any trackable resource:
           },
           "2": {
             "maxSlots": 2,
-            "slotsUsed": 0,
+            "slotsRemaining": 0,
             "spells": ["darkness", "scorching ray"]
           }
         }
@@ -1744,7 +1744,7 @@ The spell system supports all caster types with flexible slot tracking.
       },
       "1": {
         "maxSlots": 4,
-        "slotsUsed": 1,
+        "slotsRemaining": 1,
         "spells": ["spell1", "spell2"]
       }
     }
@@ -1785,12 +1785,12 @@ The spell system supports all caster types with flexible slot tracking.
       },
       "1": {
         "maxSlots": 4,
-        "slotsUsed": 2,
+        "slotsRemaining": 2,
         "spells": ["magic missile", "shield"]
       },
       "2": {
         "maxSlots": 3,
-        "slotsUsed": 0,
+        "slotsRemaining": 0,
         "spells": ["misty step", "web"]
       }
     }
@@ -1815,7 +1815,7 @@ The spell system supports all caster types with flexible slot tracking.
       },
       "3": {
         "maxSlots": 2,
-        "slotsUsed": 0,
+        "slotsRemaining": 0,
         "spells": ["counterspell", "fireball"]
       }
     }
@@ -2262,7 +2262,7 @@ For active effects, advantages, or status conditions:
           },
           "2": {
             "maxSlots": 2,
-            "slotsUsed": 0,
+            "slotsRemaining": 0,
             "spells": ["darkness", "scorching ray"]
           }
         }

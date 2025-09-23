@@ -111,7 +111,7 @@
       },
       "1": {
         "maxSlots": 0,
-        "slotsUsed": 0,
+        "slotsRemaining": 0,
         "spells": [
           {
             "name": "Alarm",

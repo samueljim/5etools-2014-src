@@ -140,7 +140,7 @@
           },
           "3": {
             "maxSlots": 2,
-            "slotsUsed": 0,
+            "slotsRemaining": 0,
             "spells": [
               "create food and water",
               "vampiric touch"

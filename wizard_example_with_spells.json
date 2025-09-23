@@ -87,7 +87,7 @@
           },
           "1": {
             "maxSlots": 4,
-            "slotsUsed": 2,
+            "slotsRemaining": 2,
             "spells": [
               "magic missile",
               "shield",
@@ -99,7 +99,7 @@
           },
           "2": {
             "maxSlots": 3,
-            "slotsUsed": 1,
+            "slotsRemaining": 1,
             "spells": [
               "misty step",
               "web",
@@ -109,7 +109,7 @@
           },
           "3": {
             "maxSlots": 2,
-            "slotsUsed": 0,
+            "slotsRemaining": 0,
             "spells": [
               "fireball",
               "counterspell",
