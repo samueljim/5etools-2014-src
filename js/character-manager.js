@@ -1496,20 +1496,7 @@ class CharacterManager {
 				const { summaries, timestamp } = this._loadSummariesFromCache();
 				const age = Date.now() - timestamp;
 				
-			// Check if cached summaries have proper metadata - if not, force refresh
-			// Temporarily relaxed validation for debugging
-			const hasBadMetadata = summaries.length === 0;
-			// Log what we found for debugging
-			if (summaries.length > 0) {
-				console.log(`📊 Cached summaries metadata check:`, summaries.map(s => ({
-					name: s.name,
-					_fClass: s._fClass,
-					_fRace: s._fRace,
-					_fLevel: s._fLevel
-				})));
-			}
-				
-				if (summaries.length > 0 && age < this._SUMMARIES_CACHE_TTL && !hasBadMetadata) {
+				if (summaries.length > 0 && age < this._SUMMARIES_CACHE_TTL) {
 					console.log(`CharacterManager: Using cached summaries (age: ${Math.round(age / 60000)} minutes)`);
 					// Apply source filter if requested
 					if (sources) {
@@ -1517,16 +1504,13 @@ class CharacterManager {
 						return summaries.filter(s => sourceList.includes(s.source));
 					}
 					return [...summaries]; // Return copy to avoid mutation
-				} else if (hasBadMetadata) {
-					console.log('CharacterManager: Cached summaries have bad metadata, forcing refresh');
-					forceRefresh = true;
 				}
 			}
 
 			console.log(`CharacterManager: Loading character summaries from server${forceRefresh ? ' (forced)' : ''}`);
 
 			// Get blob list from server (this handles caching and purging internally)
-			const blobs = await this._getBlobList(null, forceRefresh); // Use forceRefresh parameter
+			const blobs = await this._getBlobList(null, forceRefresh); // Always get full list for proper deletion detection
 			
 			if (!blobs || blobs.length === 0) {
 				console.log("CharacterManager: No character blobs available, using any cached summaries");
@@ -1535,7 +1519,8 @@ class CharacterManager {
 			}
 
 			// Build summaries from available data sources:
-			// Prioritize API blob metadata over localStorage data to ensure we get the latest metadata
+			// 1. Existing full characters in memory/localStorage (most accurate)
+			// 2. Blob metadata (fallback with placeholders)
 			const summaries = [];
 			const fullCharacters = this._loadFromLocalStorage();
 			const fullCharMap = new Map();
@@ -1550,60 +1535,39 @@ class CharacterManager {
 			for (const blob of blobs) {
 				const fullChar = fullCharMap.get(blob.id);
 				
-				// Always prioritize API metadata when available, even if we have full character data
-				// This ensures the list display shows the most up-to-date server metadata
-				if (blob.character_name && (blob.race || blob.class || (blob.level && blob.level > 0))) {
-					// Use API-provided metadata (preferred for list display)
-					const name = blob.character_name;
-					const source = blob.owner || 'Unknown';
-					
-					console.log(`CharacterManager: Using API metadata for ${name}: ${blob.race} ${blob.class} level ${blob.level}`);
-					
-					// Ensure we have valid metadata
-					const raceValue = blob.race && blob.race !== '' ? blob.race : 'Unknown';
-					const classValue = blob.class && blob.class !== '' ? blob.class : 'Unknown';
-					const levelValue = (blob.level && typeof blob.level === 'number' && blob.level > 0) ? blob.level : 1;
-					summaries.push({
-						id: blob.id,
-						name: name,
-						source: source,
-						_fClass: classValue, // Use API metadata
-						_fRace: raceValue,   // Use API metadata  
-						_fLevel: levelValue, // Use API metadata
-						_fBackground: blob.background || null, // Use API metadata
-						updatedAt: blob.uploadedAt ? new Date(blob.uploadedAt).getTime() : Date.now(),
-						_isLocallyModified: false
-					});
-				} else if (fullChar) {
-					// Fallback: We have full character data but no API metadata - extract summary
+				if (fullChar) {
+					// We have full character data - extract accurate summary
 					const summary = this._extractCharacterSummary(fullChar);
-					if (summary) {
-						console.log(`CharacterManager: Using extracted summary for ${fullChar.name}:`, summary);
-						summaries.push(summary);
-					}
+					if (summary) summaries.push(summary);
 				} else {
-					// Last resort: Only have blob metadata - create basic summary from ID
-					const parts = blob.id.split('-');
-					const source = parts.length > 1 ? parts[parts.length - 1] : 'Unknown';
-					const name = parts.length > 1 ? parts.slice(0, -1).join('-') : blob.id;
+					// Only have blob metadata - create summary from available API data
+					// Use metadata from API response if available, otherwise extract from blob ID
+					let name, source;
 					
-					console.log(`CharacterManager: Using basic blob data for ${name}`);
+					if (blob.character_name && blob.owner) {
+						// Use API-provided metadata (preferred)
+						name = blob.character_name;
+						source = blob.owner;
+					} else {
+						// Fallback to extracting from blob ID (format: name-source)
+						const parts = blob.id.split('-');
+						source = parts.length > 1 ? parts[parts.length - 1] : 'Unknown';
+						name = parts.length > 1 ? parts.slice(0, -1).join('-') : blob.id;
+					}
 					
 					summaries.push({
 						id: blob.id,
 						name: name,
 						source: source,
-						_fClass: 'Unknown',
-						_fRace: 'Unknown',   
-						_fLevel: 1,
-						_fBackground: null,
+						_fClass: blob.class || 'Unknown', // Use API metadata if available
+						_fRace: blob.race || 'Unknown',   // Use API metadata if available  
+						_fLevel: blob.level || 0,        // Use API metadata if available
+						_fBackground: blob.background || null, // Use API metadata if available
 						updatedAt: blob.uploadedAt ? new Date(blob.uploadedAt).getTime() : Date.now(),
 						_isLocallyModified: false
 					});
 				}
 			}
-			
-			console.log(`CharacterManager: Created ${summaries.length} summaries:`, summaries);
 
 			// Cache the summaries
 			this._saveSummariesToCache(summaries);
@@ -2282,12 +2246,11 @@ class CharacterManager {
 		if (processed._isLocallyModified === undefined) processed._isLocallyModified = false;
 
 		// Add computed fields that the filters and display expect
-		// Only process if we don't already have the display fields (preserves API metadata from summaries)
-		if (processed.race && !processed._fRace) {
+		if (processed.race) {
 			processed._fRace = processed.race.variant ? `Variant ${processed.race.name}` : processed.race.name;
 		}
 
-		if (processed.class && Array.isArray(processed.class) && !processed._fClass) {
+		if (processed.class && Array.isArray(processed.class)) {
 			// Create detailed class display with subclasses
 			processed._fClass = processed.class.map(cls => {
 				let classStr = cls.name;
@@ -2304,24 +2267,12 @@ class CharacterManager {
 			processed._fLevel = processed.class.reduce((total, cls) => {
 				return total + (cls.level || 0);
 			}, 0);
-		} else if (!processed._fLevel) {
-			// Only set default level if we don't already have one (preserves API metadata)
+		} else {
 			processed._fLevel = 1;
 		}
 
-		if (processed.background && !processed._fBackground) {
+		if (processed.background) {
 			processed._fBackground = processed.background.name;
-		}
-		
-		// Ensure we have fallback values for display if neither full object processing nor summary data worked
-		if (!processed._fRace) {
-			processed._fRace = "Unknown";
-		}
-		if (!processed._fClass) {
-			processed._fClass = "Unknown";
-		}
-		if (!processed._fLevel) {
-			processed._fLevel = 1;
 		}
 
 		// Ensure __prop is set for DataLoader compatibility

@@ -2654,7 +2654,14 @@ class CharacterEditorPage {
 	async showSpellSelectionModal(className, classLevel, characterTemplate, subclass = null) {
 		// Use the new CharacterSpellManager with 5etools UI
 		if (!this.spellManager) {
-			this.spellManager = new CharacterSpellManager();
+			// Get the CharacterSpellManager class using the factory function
+			const CharacterSpellManagerClass = window.CharacterSpellManager || getCharacterSpellManager();
+			if (CharacterSpellManagerClass) {
+				this.spellManager = new CharacterSpellManagerClass();
+			} else {
+				console.error('CharacterSpellManager is not available. ListPage may not be loaded yet.');
+				return;
+			}
 		}
 
 		// Use spell manager for spell selection
@@ -2939,7 +2946,14 @@ class CharacterEditorPage {
 
 			// Use the new CharacterSpellManager with 5etools UI
 			if (!this.spellManager) {
-				this.spellManager = new CharacterSpellManager();
+				// Get the CharacterSpellManager class using the factory function
+				const CharacterSpellManagerClass = window.CharacterSpellManager || getCharacterSpellManager();
+				if (CharacterSpellManagerClass) {
+					this.spellManager = new CharacterSpellManagerClass();
+				} else {
+					console.error('CharacterSpellManager is not available. ListPage may not be loaded yet.');
+					return;
+				}
 			}
 
 			// Use spell manager for spell selection
@@ -7749,7 +7763,13 @@ class CharacterEditorPage {
 			speed: {
 				walk: 30 // Default speed, will be overridden by race data
 			},
-			...randomAbilityScores,
+			// Apply ability scores as individual properties (not nested object)
+			str: randomAbilityScores.str,
+			dex: randomAbilityScores.dex,
+			con: randomAbilityScores.con,
+			int: randomAbilityScores.int,
+			wis: randomAbilityScores.wis,
+			cha: randomAbilityScores.cha,
 			passive: 10 + Math.floor((randomAbilityScores.wis - 10) / 2) + (this.hasSkillProficiency("perception", randomClasses) ? profBonus : 0),
 			saveProficiencies: await this.generateRandomSaves(randomAbilityScores, randomClasses, profBonus),
 			skillProficiencies: await this.generateRandomSkills(randomAbilityScores, randomClasses, profBonus, randomRace, randomBackground),
@@ -7783,6 +7803,12 @@ class CharacterEditorPage {
 		// Ensure source is set to the detected/selected source (avoid keeping placeholder values)
 		if (!template.source || template.source === 'RANDOM_GENERATED' || template.source === 'MyCharacters' || template.source === 'ADD_YOUR_NAME_HERE') {
 			template.source = finalSource || 'MyCharacters';
+		}
+		
+		// Safety check: Remove any accidentally created nested abilities object or array
+		if (template.abilities) {
+			console.log('Removing nested abilities object/array to ensure proper format');
+			delete template.abilities;
 		}
 		try {
 			localStorage.setItem('newCharacterSource', template.source);
@@ -7955,7 +7981,14 @@ class CharacterEditorPage {
 				console.log('🔮 Edit Spells button clicked');
 				// Initialize spell manager if not already created
 				if (!this.spellManager) {
-					this.spellManager = new CharacterSpellManager();
+					// Get the CharacterSpellManager class using the factory function
+					const CharacterSpellManagerClass = window.CharacterSpellManager || getCharacterSpellManager();
+					if (CharacterSpellManagerClass) {
+						this.spellManager = new CharacterSpellManagerClass();
+					} else {
+						console.error('CharacterSpellManager is not available. ListPage may not be loaded yet.');
+						return;
+					}
 				}
 				// Get current character data from the editor
 				const characterData = JSON.parse(this.ace.getValue());
@@ -9573,15 +9606,20 @@ class CharacterEditorPage {
 	showASIChoice() {
 		console.log('Showing ASI choice');
 
-		const character = this.levelUpState.characterData;
-		const abilities = character.abilities || {
-			str: character.str || 10,
-			dex: character.dex || 10,
-			con: character.con || 10,
-			int: character.int || 10,
-			wis: character.wis || 10,
-			cha: character.cha || 10
-		};
+	const character = this.levelUpState.characterData;
+	// Get abilities using the same pattern as used elsewhere in the codebase
+	const getAbilityScore = (ability) => {
+		return character.abilities?.[ability] || character[ability] || 10;
+	};
+	
+	const abilities = {
+		str: getAbilityScore('str'),
+		dex: getAbilityScore('dex'),
+		con: getAbilityScore('con'),
+		int: getAbilityScore('int'),
+		wis: getAbilityScore('wis'),
+		cha: getAbilityScore('cha')
+	};
 
 		const modalContent = `
 			<h5>Ability Score Improvement</h5>
@@ -9660,13 +9698,12 @@ class CharacterEditorPage {
 			changes[secondAbility] = 1;
 		}
 
-		// Apply to character
+		// Apply to character - use direct properties (not nested abilities object)
 		Object.entries(changes).forEach(([ability, increase]) => {
-			if (character.abilities) {
-				character.abilities[ability] = Math.min(20, (character.abilities[ability] || 10) + increase);
-			} else {
-				character[ability] = Math.min(20, (character[ability] || 10) + increase);
-			}
+			const currentValue = character[ability] || 10;
+			const newValue = Math.min(20, currentValue + increase);
+			character[ability] = newValue;
+			console.log(`ASI Applied: ${ability} ${currentValue} -> ${newValue} (+${increase})`);
 		});
 
 		// Record changes
@@ -9676,6 +9713,12 @@ class CharacterEditorPage {
 				increase: increase
 			});
 		});
+		
+		// Update the editor with the modified character
+		this.ace.setValue(JSON.stringify(character, null, 2), 1);
+		
+		// Re-render the character to show updated stats immediately
+		this.renderCharacter();
 
 		console.log('Applied ASI:', changes);
 	}
@@ -11709,15 +11752,20 @@ class CharacterEditorPage {
 		console.log('ASI Modal - STR field exists?', 'str' in currentCharacterData);
 		console.log('ASI Modal - Direct str value:', currentCharacterData.str);
 
-		// Check if abilities are in nested object or as direct properties
-		const abilities = currentCharacterData.abilities || {
-			str: currentCharacterData.str || 10,
-			dex: currentCharacterData.dex || 10,
-			con: currentCharacterData.con || 10,
-			int: currentCharacterData.int || 10,
-			wis: currentCharacterData.wis || 10,
-			cha: currentCharacterData.cha || 10
-		};
+	// Get abilities using the same pattern as used elsewhere in the codebase
+	// Prioritize direct properties (character.str) over nested object (character.abilities.str)
+	const getAbilityScore = (ability) => {
+		return currentCharacterData.abilities?.[ability] || currentCharacterData[ability] || 10;
+	};
+	
+	const abilities = {
+		str: getAbilityScore('str'),
+		dex: getAbilityScore('dex'),
+		con: getAbilityScore('con'),
+		int: getAbilityScore('int'),
+		wis: getAbilityScore('wis'),
+		cha: getAbilityScore('cha')
+	};
 
 		console.log('ASI Modal - Final abilities used for modal:', abilities);
 
@@ -12665,7 +12713,14 @@ class CharacterEditorPage {
 
 		// Initialize spell manager if not already created
 		if (!this.spellManager) {
-			this.spellManager = new CharacterSpellManager();
+			// Get the CharacterSpellManager class using the factory function
+			const CharacterSpellManagerClass = window.CharacterSpellManager || getCharacterSpellManager();
+			if (CharacterSpellManagerClass) {
+				this.spellManager = new CharacterSpellManagerClass();
+			} else {
+				console.error('CharacterSpellManager is not available. ListPage may not be loaded yet.');
+				return;
+			}
 		}
 
 		// Use spell manager with level-up integration callback
@@ -12811,8 +12866,20 @@ class CharacterEditorPage {
 
 	// Keep the old method name for compatibility
 	showOldAbilityScoreImprovementModal(feature) {
-		const character = this.levelUpState.characterData;
-		const abilities = character.abilities || { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 };
+	const character = this.levelUpState.characterData;
+	// Get abilities using the same pattern as used elsewhere in the codebase
+	const getAbilityScore = (ability) => {
+		return character.abilities?.[ability] || character[ability] || 10;
+	};
+	
+	const abilities = {
+		str: getAbilityScore('str'),
+		dex: getAbilityScore('dex'),
+		con: getAbilityScore('con'),
+		int: getAbilityScore('int'),
+		wis: getAbilityScore('wis'),
+		cha: getAbilityScore('cha')
+	};
 
 		const modalContent = `
 			<p class="mb-3"><strong>Current Level:</strong> ${this.levelUpState.currentLevel}</p>
@@ -13020,53 +13087,29 @@ class CharacterEditorPage {
 		console.log('Applying ASI changes to levelUpState.characterData:');
 		console.log('Character format - has nested abilities:', hasNestedAbilities);
 
-		if (hasNestedAbilities) {
-			// Handle nested abilities format
-			if (!currentCharacterData.abilities) {
-				currentCharacterData.abilities = { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 };
-			}
+	// Always use direct properties format (not nested abilities object)
+	console.log('Before ASI - direct properties:');
+	['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ability => {
+		console.log(`${ability}: ${currentCharacterData[ability] || 10}`);
+	});
+	
+	Object.entries(abilityChanges).forEach(([ability, increase]) => {
+		const oldValue = currentCharacterData[ability] || 10;
+		const newValue = Math.min(20, oldValue + increase);
+		console.log(`ASI: ${ability} ${oldValue} -> ${newValue} (+${increase})`);
+		currentCharacterData[ability] = newValue;
+	});
 
-			console.log('Before (nested):', JSON.stringify(currentCharacterData.abilities));
-
-			Object.entries(abilityChanges).forEach(([ability, increase]) => {
-				const oldValue = currentCharacterData.abilities[ability] || 10;
-				const newValue = Math.min(20, oldValue + increase);
-				console.log(`ASI: ${ability} ${oldValue} -> ${newValue} (+${increase})`);
-				currentCharacterData.abilities[ability] = newValue;
-			});
-
-			console.log('After (nested):', JSON.stringify(currentCharacterData.abilities));
-		} else {
-			// Handle direct properties format
-			const beforeAbilities = {
-				str: currentCharacterData.str || 10,
-				dex: currentCharacterData.dex || 10,
-				con: currentCharacterData.con || 10,
-				int: currentCharacterData.int || 10,
-				wis: currentCharacterData.wis || 10,
-				cha: currentCharacterData.cha || 10
-			};
-
-			console.log('Before (direct):', JSON.stringify(beforeAbilities));
-
-			Object.entries(abilityChanges).forEach(([ability, increase]) => {
-				const oldValue = currentCharacterData[ability] || 10;
-				const newValue = Math.min(20, oldValue + increase);
-				console.log(`ASI: ${ability} ${oldValue} -> ${newValue} (+${increase})`);
-				currentCharacterData[ability] = newValue;
-			});
-
-			const afterAbilities = {
-				str: currentCharacterData.str || 10,
-				dex: currentCharacterData.dex || 10,
-				con: currentCharacterData.con || 10,
-				int: currentCharacterData.int || 10,
-				wis: currentCharacterData.wis || 10,
-				cha: currentCharacterData.cha || 10
-			};
-
-			console.log('After (direct):', JSON.stringify(afterAbilities));
-		}
+	console.log('After ASI - direct properties:');
+	['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ability => {
+		console.log(`${ability}: ${currentCharacterData[ability] || 10}`);
+	});
+	
+	// Remove any nested abilities object that might have been created accidentally
+	if (currentCharacterData.abilities) {
+		console.log('Removing nested abilities object to avoid conflicts');
+		delete currentCharacterData.abilities;
+	}
 
 		// Update the editor with modified character data from levelUpState
 		this.ace.setValue(JSON.stringify(currentCharacterData, null, 2), 1);
@@ -16931,50 +16974,29 @@ class CharacterEditorPage {
 					// Check if character uses nested abilities object or direct properties
 					const hasNestedAbilities = 'abilities' in character;
 
-					if (hasNestedAbilities) {
-						// Handle nested abilities format
-						if (!character.abilities) {
-							character.abilities = { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 };
-						}
+					// Always use direct properties format (not nested abilities object)
+					console.log('Before ASI application - direct properties:');
+					['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ability => {
+						console.log(`${ability}: ${character[ability] || 10}`);
+					});
+					
+					Object.entries(choice.abilityChanges).forEach(([ability, increase]) => {
+						const oldValue = character[ability] || 10;
+						const newValue = Math.min(20, oldValue + increase);
+						console.log(`ASI: ${ability} ${oldValue} -> ${newValue} (+${increase})`);
+						character[ability] = newValue;
+					});
 
-						console.log('Before ASI application (nested):', JSON.stringify(character.abilities));
-						Object.entries(choice.abilityChanges).forEach(([ability, increase]) => {
-							const oldValue = character.abilities[ability] || 10;
-							const newValue = Math.min(20, oldValue + increase);
-							console.log(`ASI: ${ability} ${oldValue} -> ${newValue} (+${increase})`);
-							character.abilities[ability] = newValue;
-						});
-						console.log('After ASI application (nested):', JSON.stringify(character.abilities));
-					} else {
-						// Handle direct properties format
-						const beforeAbilities = {
-							str: character.str || 10,
-							dex: character.dex || 10,
-							con: character.con || 10,
-							int: character.int || 10,
-							wis: character.wis || 10,
-							cha: character.cha || 10
-						};
-
-						console.log('Before ASI application (direct):', JSON.stringify(beforeAbilities));
-						Object.entries(choice.abilityChanges).forEach(([ability, increase]) => {
-							const oldValue = character[ability] || 10;
-							const newValue = Math.min(20, oldValue + increase);
-							console.log(`ASI: ${ability} ${oldValue} -> ${newValue} (+${increase})`);
-							character[ability] = newValue;
-						});
-
-						const afterAbilities = {
-							str: character.str || 10,
-							dex: character.dex || 10,
-							con: character.con || 10,
-							int: character.int || 10,
-							wis: character.wis || 10,
-							cha: character.cha || 10
-						};
-						console.log('After ASI application (direct):', JSON.stringify(afterAbilities));
+					console.log('After ASI application - direct properties:');
+					['str', 'dex', 'con', 'int', 'wis', 'cha'].forEach(ability => {
+						console.log(`${ability}: ${character[ability] || 10}`);
+					});
+					
+					// Remove any nested abilities object that might have been created accidentally
+					if (character.abilities) {
+						console.log('Removing nested abilities object to avoid conflicts');
+						delete character.abilities;
 					}
-
 					// Add entry describing the improvement
 					const improvementText = Object.entries(choice.abilityChanges)
 						.map(([ability, increase]) => `${ability.toUpperCase()} +${increase}`)

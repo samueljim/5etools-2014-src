@@ -1,8 +1,13 @@
 // CharacterSpellManager - provides spell selection UI matching spells.html exactly
-// Only define this class if ListPage is available (i.e., on pages that need it like charactereditor.html)
-if (typeof ListPage !== 'undefined') {
+// Use a function to define the class when needed to handle timing issues with ListPage
 
-class CharacterSpellManager extends ListPage {
+function createCharacterSpellManager() {
+	if (typeof ListPage === 'undefined') {
+		console.warn('ListPage is not available yet. CharacterSpellManager will be created when ListPage is loaded.');
+		return null;
+	}
+
+	class CharacterSpellManager extends ListPage {
 	constructor() {
 		super({
 			pageFilter: new PageFilterSpells({
@@ -1017,4 +1022,43 @@ class CharacterSpellManager extends ListPage {
 	}
 }
 
-} // End of ListPage check
+} // End of CharacterSpellManager class
+
+	return CharacterSpellManager;
+}
+
+// Make CharacterSpellManager available globally
+window.CharacterSpellManager = null;
+
+// Function to get the CharacterSpellManager class (creates it if needed)
+function getCharacterSpellManager() {
+	if (!window.CharacterSpellManager) {
+		window.CharacterSpellManager = createCharacterSpellManager();
+	}
+	return window.CharacterSpellManager;
+}
+
+// Make the function globally available
+window.getCharacterSpellManager = getCharacterSpellManager;
+
+// Try to create it immediately if ListPage is available
+if (typeof ListPage !== 'undefined') {
+	window.CharacterSpellManager = createCharacterSpellManager();
+} else {
+	// Listen for when ListPage becomes available
+	if (typeof window.addEventListener !== 'undefined') {
+		window.addEventListener('DOMContentLoaded', () => {
+			// Check periodically until ListPage is available
+			const checkListPage = setInterval(() => {
+				if (typeof ListPage !== 'undefined' && !window.CharacterSpellManager) {
+					window.CharacterSpellManager = createCharacterSpellManager();
+					clearInterval(checkListPage);
+					console.log('✅ CharacterSpellManager created after ListPage became available');
+				}
+			}, 100); // Check every 100ms
+			
+			// Stop checking after 10 seconds to prevent infinite loop
+			setTimeout(() => clearInterval(checkListPage), 10000);
+		});
+	}
+}
