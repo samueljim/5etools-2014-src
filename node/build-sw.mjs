@@ -50,6 +50,11 @@ const workboxPrecacheBuildResult = await injectManifest({
 		"fonts/glyphicons-halflings-regular.woff2",
 		"fonts/Convergence-Regular.woff2",
 		"fonts/Roboto-Regular.woff2",
+		// dice-box 3D dice assets for offline support
+		"lib/dice-box-assets/**/*.js", // dice-box JavaScript files
+		"lib/dice-box-assets/**/*.json", // dice-box theme configurations
+		"lib/dice-box-assets/**/*.wasm", // WebAssembly physics engine
+		"lib/dice-box-assets/**/*.css", // dice-box styles
 		// we need to cache the sw-injector or we won't be injected
 		"sw-injector.js",
 	],
@@ -77,6 +82,12 @@ const workboxRuntimeBuildResult = await injectManifest({
 		"icon/*.png", // all icons
 		"*.png", // root images
 		"*.svg", // root svg
+		// dice-box texture and model assets
+		"lib/dice-box-assets/**/*.jpg", // dice-box textures
+		"lib/dice-box-assets/**/*.png", // dice-box textures
+		"lib/dice-box-assets/**/*.webp", // dice-box textures
+		"lib/dice-box-assets/**/*.gltf", // dice-box 3D models
+		"lib/dice-box-assets/**/*.glb", // dice-box 3D models
 	],
 	manifestTransforms: [
 		(manifest) =>
