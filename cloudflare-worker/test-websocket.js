@@ -132,7 +132,6 @@ async function testWebSocketBroadcasting() {
             race: 'Human',
             hp: { max: 8, current: 8 },
             ac: [{ ac: 12, from: ['Unarmored'] }],
-            abilities: [10, 14, 12, 16, 13, 11] // STR, DEX, CON, INT, WIS, CHA
         };
 
         const characterSave = await apiRequest('/api/characters/save', {

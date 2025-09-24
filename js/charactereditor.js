@@ -2155,8 +2155,9 @@ class CharacterEditorPage {
 				}
 			}
 
-			// Handle innate spells - add as Features & Traits entries instead of separate spell section
-			if (spellGroup.innate) {
+			// Handle innate spells - only add to Features & Traits during initial character creation
+			// During level up, these are handled separately to avoid cluttering Features & Traits
+			if (spellGroup.innate && characterLevel === 1) {
 				if (!characterTemplate.entries) characterTemplate.entries = [];
 
 				for (const [level, spellsOrData] of Object.entries(spellGroup.innate)) {
@@ -8985,8 +8986,8 @@ class CharacterEditorPage {
 		console.log(`🎯 LEVEL UP FLOW - ${classEntry.name} ${isSpellcaster ? 'is' : 'is not'} a spellcasting class`);
 
 		if (isSpellcaster) {
-			// For spellcasters, show spell selection before other features
-			console.log(`✅ Adding spell selection for ${classEntry.name} level ${newLevel}`);
+			// For spellcasters, initialize spell structure but don't show spell selection UI
+			console.log(`✅ Initializing spell structure for ${classEntry.name} level ${newLevel} (no UI shown)`);
 
 			// Initialize spells structure if it doesn't exist (for first-time spellcasters/multiclass)
 			if (!character.spells) {
@@ -9006,26 +9007,9 @@ class CharacterEditorPage {
 				this.ace.setValue(JSON.stringify(character, null, 2));
 			}
 
-			this.levelUpState.pendingFeatures = [{
-				type: 'spells',
-				feature: {
-					name: 'Spell Selection',
-					entries: [`Choose spells for your ${classEntry.name} spell list. You can learn new spells and replace existing ones when leveling up.`],
-					requiresChoice: true,
-					choiceType: 'spells'
-				},
-				className: classEntry.name,
-				classLevel: newLevel
-			}];
-			this.levelUpState.currentFeatureIndex = 0;
-			this.levelUpState.choices = [];
-
-			// Set flag to continue with other level up features after spell selection
-			this.levelUpState.continueAfterSpells = true;
-
-			// Show spell selection first
-			await this.showNextFeatureChoice();
-			return;
+			// Note: Spell selection UI and Features & Traits entries removed as requested
+			// Spells are managed through dedicated spell management system
+			console.log('Skipping spell selection UI for level up as requested');
 		}
 
 		// Check for class-specific ASI levels (Fighter gets bonus at 6,14; Rogue at 10)
@@ -10997,7 +10981,7 @@ class CharacterEditorPage {
 		console.log(`🎯 NEW CLASS SPELL CHECK - ${className} ${isSpellcaster ? 'is' : 'is not'} a spellcasting class`);
 		
 		if (isSpellcaster) {
-			console.log(`✅ Adding spell selection for ${className} level 1`);
+			console.log(`✅ Initializing spell structure for ${className} level 1 (no UI shown)`);
 			
 			// Initialize spells structure if it doesn't exist
 			if (!this.levelUpState.characterData.spells) {
@@ -11010,18 +10994,9 @@ class CharacterEditorPage {
 				};
 			}
 
-			// Add spell selection feature
-			allFeatures.push({
-				type: 'spells',
-				feature: {
-					name: 'Spell Selection',
-					entries: [`Choose spells for your ${className} spell list. At level 1, you can learn cantrips and 1st-level spells.`],
-					requiresChoice: true,
-					choiceType: 'spells'
-				},
-				className: className,
-				classLevel: 1
-			});
+			// Note: Spell selection UI and Features & Traits entries removed as requested
+			// Spells are managed through dedicated spell management system
+			console.log('Skipping spell selection UI for new class as requested');
 		}
 
 		// Process all features (ability scores + level 1 features + spells if applicable)
@@ -11294,106 +11269,32 @@ class CharacterEditorPage {
 			}
 		}
 
-		// Add spell selection for spellcasting classes
-		console.log('=== CHECKING FOR SPELL SELECTION IN getNewFeaturesForLevel ===');
-		console.log('Class info:', classInfo);
-		console.log('Class name:', classInfo.name);
-		console.log('Has spellcastingAbility:', !!classInfo.spellcastingAbility);
-		console.log('isSpellcastingClass result:', this.isSpellcastingClass(classInfo.name));
-		console.log('New level:', newLevel);
+		// Note: Spell selection features removed from level up as requested
+		// Spells are managed through dedicated spell management system
+		console.log('=== SPELL SELECTION SKIPPED IN getNewFeaturesForLevel ===');
+		console.log('Spell selection features are no longer added to Features & Traits during level up');
+		console.log('Class info:', classInfo.name, 'Level:', newLevel);
+		console.log('Spells will be managed through dedicated spell UI instead');
 
-		// Enhanced spellcasting detection - prioritize known class names over data properties
-		const isKnownSpellcaster = this.isSpellcastingClass(classInfo.name);
-		const hasSpellcastingAbility = !!classInfo.spellcastingAbility;
+	console.log('Final features array:', features);
 
-		console.log(`Spellcasting detection for ${classInfo.name}:`);
-		console.log(`- isKnownSpellcaster: ${isKnownSpellcaster}`);
-		console.log(`- hasSpellcastingAbility: ${hasSpellcastingAbility}`);
-
-		if (isKnownSpellcaster || hasSpellcastingAbility) {
-			console.log(`✅ Adding spell selection feature for ${classInfo.name} at level ${newLevel}`);
-			
-			// Check if we already have a spell selection feature to avoid duplicates
-			const existingSpellFeature = features.find(f => 
-				f.type === 'spells' || 
-				(f.choiceType === 'spells' && f.feature?.name?.toLowerCase().includes('spell selection'))
-			);
-			
-			if (!existingSpellFeature) {
-				// This is a spellcasting class, add spell selection feature
-				features.push({
-					type: 'spells',
-					feature: {
-						name: 'Spell Selection',
-						entries: [`Choose spells for your ${classInfo.name} spell list. You can learn new spells and replace existing ones.`],
-						requiresChoice: true,
-						choiceType: 'spells'
-					},
-					className: classInfo.name,
-					classLevel: newLevel
-				});
-			} else {
-				console.log(`⚠️ Spell selection feature already exists, skipping duplicate`);
-			}
-		} else {
-			console.log(`❌ No spell selection for ${classInfo.name} - not detected as spellcaster`);
-		}
-
-		// COMPREHENSIVE FALLBACK: If we didn't add spell selection above, force it for any possible spellcaster
-		const hasSpellFeature = features.some(f => f.type === 'spells');
-		if (!hasSpellFeature) {
-			console.log('=== FALLBACK SPELL DETECTION ===');
-			// Check class name with more aggressive matching
-			const className = classInfo.name || classEntry?.name || 'Unknown';
-			const classNameLower = className.toLowerCase();
-
-			// Very broad detection - if ANY of these terms appear in the class name
-			const spellTerms = ['bard', 'cleric', 'druid', 'sorcerer', 'warlock', 'wizard', 'paladin', 'ranger', 'artificer'];
-			const isLikelySpellcaster = spellTerms.some(term => classNameLower.includes(term));
-
-			console.log(`🚨 FALLBACK DETECTION FOR: "${className}"`);
-			console.log(`🚨 Class name lower: "${classNameLower}"`);
-			console.log(`🚨 Spell terms: ${spellTerms.join(", ")}`);
-			console.log(`🚨 Is likely spellcaster: ${isLikelySpellcaster}`);
-
-			// Also check if the character already has spells (indicating they're a spellcaster)
-			const character = this.levelUpState?.characterData;
-			const hasExistingSpells = character?.spells || character?.spell;
-
-			console.log('Class name for fallback:', className);
-			console.log('Is likely spellcaster:', isLikelySpellcaster);
-			console.log('Has existing spells:', !!hasExistingSpells);
-
-			if (isLikelySpellcaster || hasExistingSpells) {
-				console.log('🚨 FORCING spell selection via fallback detection');
-				features.push({
-					type: 'spells',
-					feature: {
-						name: 'Spell Selection (Fallback)',
-						entries: [`Choose spells for your ${className} spell list.`],
-						requiresChoice: true,
-						choiceType: 'spells'
-					},
-					className: className,
-					classLevel: newLevel,
-					isFallback: true
-				});
-			}
-		}
-
-		console.log('Final features array:', features);
-
-		console.log('=== FEATURES FOR LEVEL UP SUMMARY ===');
-		console.log('Total features found:', features.length);
-		features.forEach((feature, index) => {
-			console.log(`Feature ${index}:`, {
-				type: feature.type,
-				name: feature.feature?.name,
-				choiceType: feature.feature?.choiceType,
-				requiresChoice: feature.feature?.requiresChoice
-			});
+	console.log('=== FEATURES FOR LEVEL UP SUMMARY ===');
+	console.log('Total features found:', features.length);
+	features.forEach((feature, index) => {
+		console.log(`Feature ${index}:`, {
+			type: feature.type,
+			name: feature.feature?.name,
+			choiceType: feature.feature?.choiceType,
+			requiresChoice: feature.feature?.requiresChoice,
+			source: feature.source?.name || feature.source?.shortName
 		});
-		console.log('==================');
+		
+		// Extra logging for subclass features
+		if (feature.type === 'subclass') {
+			console.log(`🔥 SUBCLASS FEATURE FOUND: "${feature.feature?.name}" from ${feature.source?.name || feature.source?.shortName}`);
+		}
+	});
+	console.log('==================');
 
 		return features;
 	}
@@ -11526,6 +11427,30 @@ class CharacterEditorPage {
 				}
 			}
 
+			// Also try to find the feature in subclassFeature array if we have a subclass
+			if (subclassName && classData && classData.subclassFeature) {
+				console.log(`Searching in subclassFeature array with ${classData.subclassFeature.length} features for subclass: ${subclassName}`);
+				const feature = classData.subclassFeature.find(f => {
+					const nameMatch = f.name === featureName;
+					const classMatch = f.className === className;
+					const subclassMatch = f.subclassShortName === subclassName || f.subclassName === subclassName;
+					const levelMatch = f.level === level;
+					const sourceMatch = !source || f.source === source || source === 'PHB';
+
+					console.log(`Checking subclass feature: ${f.name}, nameMatch: ${nameMatch}, classMatch: ${classMatch}, subclassMatch: ${subclassMatch}, levelMatch: ${levelMatch}, sourceMatch: ${sourceMatch}`);
+
+					return nameMatch && classMatch && subclassMatch && levelMatch && sourceMatch;
+				});
+
+				if (feature) {
+					console.log(`Found feature in subclassFeature array: ${feature.name}`);
+					// Enhance the feature with choice detection
+					return this.enhanceFeatureWithChoices(feature);
+				} else {
+					console.log(`Feature not found in subclassFeature array`);
+				}
+			}
+
 			// If not found, try to load the specific class file
 			try {
 				const classFileName = className.toLowerCase();
@@ -11533,7 +11458,7 @@ class CharacterEditorPage {
 				if (response.ok) {
 					const classFileData = await response.json();
 
-					// Find the matching feature
+					// Find the matching feature in class features first
 					if (classFileData.classFeature) {
 						const feature = classFileData.classFeature.find(f =>
 							f.name === featureName &&
@@ -11544,7 +11469,31 @@ class CharacterEditorPage {
 						);
 
 						if (feature) {
+							console.log(`Found feature in classFeature array: ${feature.name}`);
 							return this.enhanceFeatureWithChoices(feature);
+						}
+					}
+
+					// If not found in class features and we have a subclass, search subclass features
+					if (subclassName && classFileData.subclassFeature) {
+						console.log(`Searching in subclassFeature array with ${classFileData.subclassFeature.length} features for subclass: ${subclassName}`);
+						const feature = classFileData.subclassFeature.find(f => {
+							const nameMatch = f.name === featureName;
+							const classMatch = f.className === className;
+							const subclassMatch = f.subclassShortName === subclassName || f.subclassName === subclassName;
+							const levelMatch = f.level === level;
+							const sourceMatch = !source || f.source === source || source === 'PHB';
+
+							console.log(`Checking subclass feature: ${f.name}, nameMatch: ${nameMatch}, classMatch: ${classMatch}, subclassMatch: ${subclassMatch}, levelMatch: ${levelMatch}, sourceMatch: ${sourceMatch}`);
+
+							return nameMatch && classMatch && subclassMatch && levelMatch && sourceMatch;
+						});
+
+						if (feature) {
+							console.log(`Found feature in subclassFeature array: ${feature.name}`);
+							return this.enhanceFeatureWithChoices(feature);
+						} else {
+							console.log(`Feature not found in subclassFeature array`);
 						}
 					}
 				}
@@ -13812,6 +13761,14 @@ class CharacterEditorPage {
 		// Final consolidation to ensure no duplicate Features & Traits sections
 		this.ensureSingleFeaturesSection(updatedCharacter);
 
+		// Ensure computed level field is up to date for list/summaries
+		try {
+			const finalTotalLevel = CharacterEditorPage.getCharacterLevel(updatedCharacter);
+			updatedCharacter._fLevel = finalTotalLevel;
+		} catch (e) {
+			console.warn('Could not set _fLevel on character:', e);
+		}
+
 		// Update the editor with new character data
 		console.log('Setting ACE editor value with character data:', updatedCharacter);
 		console.log('Character JSON string length:', JSON.stringify(updatedCharacter, null, 2).length);
@@ -14093,22 +14050,35 @@ class CharacterEditorPage {
 	}
 
 	addSpellsToCharacter(character, spells) {
-		// Add spells to character's spell sections
-		if (spells.cantrips?.length > 0 || spells.spells?.length > 0) {
-			if (!character.entries) character.entries = [];
-
-			const spellEntries = [];
-			if (spells.cantrips?.length > 0) {
-				spellEntries.push(`**Cantrips Known:** ${spells.cantrips.join(', ')}`);
+		// Note: This function no longer adds spell entries to Features & Traits section during level up
+		// Spells are managed through the character.spells structure instead
+		console.log('addSpellsToCharacter called but not adding to Features & Traits section as requested');
+		
+		// Store spells directly in character.spells structure if needed
+		if (!character.spells) character.spells = {};
+		if (!character.spells.levels) character.spells.levels = {};
+		
+		if (spells.cantrips?.length > 0) {
+			if (!character.spells.levels['0']) {
+				character.spells.levels['0'] = { maxSlots: 0, slotsRemaining: 0, spells: [] };
 			}
-			if (spells.spells?.length > 0) {
-				spellEntries.push(`**Spells Known:** ${spells.spells.join(', ')}`);
+			// Add cantrips without duplicates
+			spells.cantrips.forEach(cantrip => {
+				if (!character.spells.levels['0'].spells.includes(cantrip)) {
+					character.spells.levels['0'].spells.push(cantrip);
+				}
+			});
+		}
+		
+		if (spells.spells?.length > 0) {
+			if (!character.spells.levels['1']) {
+				character.spells.levels['1'] = { maxSlots: 0, slotsRemaining: 0, spells: [] };
 			}
-
-			character.entries.push({
-				type: "entries",
-				name: "Spells",
-				entries: spellEntries
+			// Add level 1 spells without duplicates
+			spells.spells.forEach(spell => {
+				if (!character.spells.levels['1'].spells.includes(spell)) {
+					character.spells.levels['1'].spells.push(spell);
+				}
 			});
 		}
 	}
@@ -16872,46 +16842,31 @@ class CharacterEditorPage {
 
 		// Apply automatic features from levelUpState.pendingFeatures
 		if (this.levelUpState && this.levelUpState.pendingFeatures) {
+			console.log(`🔍 PROCESSING ${this.levelUpState.pendingFeatures.length} PENDING FEATURES`);
 			this.levelUpState.pendingFeatures.forEach((featureData, index) => {
 				console.log(`Processing pending feature ${index + 1}:`, featureData);
+				
+				// Enhanced logging for subclass features
+				if (featureData.type === 'subclass') {
+					console.log(`🔥 PROCESSING SUBCLASS FEATURE: "${featureData.feature?.name}"`);
+				}
 
 				if (featureData.type !== 'optional') {
 					// Add features to the existing Features & Traits section
 					const featureName = featureData.feature.name || 'Unknown Feature';
 					const featureEntries = featureData.feature.entries || [`${featureName} - Gained at level ${this.levelUpState.newLevel}.`];
 
-					// Skip spell selection for non-spellcasters
-					if (featureName.includes('Spell Selection') && character.class) {
-						// For multiclass characters, we need to be more careful about spell selection
-						// Allow spell selection if:
-						// 1. Any class in the character is a spellcaster
-						// 2. OR the current class being leveled up is a spellcaster (even if it wasn't detected in #1)
-						
-						const isAnyClassSpellcaster = character.class.some(cls => {
-							if (!cls || !cls.name) return false;
-							
-							// Check both versions of isSpellcastingClass for compatibility
-							const isSpellcaster1 = this.isSpellcastingClass(cls.name, cls);
-							const isSpellcaster2 = this.isSpellcastingClass(cls.name); // simpler version
-							
-							console.log(`Checking ${cls.name}: method1=${isSpellcaster1}, method2=${isSpellcaster2}`);
-							return isSpellcaster1 || isSpellcaster2;
-						});
-						
-						// Also check the specific class being leveled up
-						const currentClass = this.levelUpState?.selectedClassIndex !== undefined 
-							? character.class[this.levelUpState.selectedClassIndex]
-							: null;
-						const isCurrentClassSpellcaster = currentClass 
-							? (this.isSpellcastingClass(currentClass.name, currentClass) || this.isSpellcastingClass(currentClass.name))
-							: false;
-						
-						if (!isAnyClassSpellcaster && !isCurrentClassSpellcaster) {
-							console.log(`Skipped "${featureName}" for non-spellcaster. Classes checked:`, character.class.map(c => c.name));
-							return; // Skip this feature
-						} else {
-							console.log(`Allowing "${featureName}" for spellcaster. isAnyClass=${isAnyClassSpellcaster}, isCurrentClass=${isCurrentClassSpellcaster}`);
-						}
+					// Skip all spell-related selection features from being added to Features & Traits
+					const isSpellSelectionFeature = featureName.includes('Spell Selection') || 
+						featureName.includes('Spells Known') ||
+						featureName.includes('Learn Spells') ||
+						featureName.includes('Additional Magical Secrets') ||
+						featureName.includes('Cantrip Selection') ||
+						(featureName.includes('Spell') && featureName.includes('Choice'));
+					
+					if (isSpellSelectionFeature) {
+						console.log(`Filtered out spell selection feature "${featureName}" from Features & Traits section as requested`);
+						return; // Skip this feature completely
 					}
 
 					// Check for duplicate features before adding (more robust check)
@@ -17240,27 +17195,10 @@ class CharacterEditorPage {
 						}
 					}
 
-					// Create feature entry for display
-					const spellEntries = [];
-					for (const spellLevel of Object.keys(spells)) {
-						const spellsAtLevel = spells[spellLevel];
-						if (spellsAtLevel && spellsAtLevel.length > 0) {
-							const levelName = spellLevel === '0' ? 'Cantrips Known' : `Level ${spellLevel} Spells Known`;
-							spellEntries.push(`**${levelName}:** ${spellsAtLevel.join(', ')}`);
-						}
-					}
-
-					if (spellEntries.length > 0) {
-						const featureEntry = {
-							type: "entries",
-							name: "Spellcasting",
-							entries: spellEntries
-						};
-						featuresSection.entries.push(featureEntry);
-
-						const totalSpells = Object.values(spells).reduce((sum, arr) => sum + arr.length, 0);
-						console.log(`Applied ${totalSpells} spell selections across ${Object.keys(spells).length} spell levels`);
-					}
+					// Note: Removed spellcasting feature entry creation as requested
+					// Spells are stored in character.spells but not displayed in Features & Traits
+					const totalSpells = Object.values(spells).reduce((sum, arr) => sum + arr.length, 0);
+					console.log(`Applied ${totalSpells} spell selections across ${Object.keys(spells).length} spell levels (not added to Features & Traits)`);
 
 				} else if (choice.selectedOption) {
 					// Apply other feature choices

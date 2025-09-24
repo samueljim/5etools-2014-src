@@ -607,24 +607,6 @@ function _normalizeCharacterData(characterData) {
 		};
 	}
 
-	// Ensure ability scores exist
-	if (!normalized.abilities) {
-		if (normalized.stats) {
-			// Convert stats to abilities format
-			normalized.abilities = [
-				normalized.stats.str || 10, // STR
-				normalized.stats.dex || 10, // DEX
-				normalized.stats.con || 10, // CON
-				normalized.stats.int || 10, // INT
-				normalized.stats.wis || 10, // WIS
-				normalized.stats.cha || 10  // CHA
-			];
-		} else {
-			// Default abilities
-			normalized.abilities = [10, 10, 10, 10, 10, 10];
-		}
-	}
-
 	// Ensure HP structure
 	if (normalized.hp && typeof normalized.hp === 'number') {
 		normalized.hp = {
