@@ -113,6 +113,37 @@ class CharactersPage extends ListPageMultiSource {
 	}
 
 	getListItem (character, chI, isExcluded) {
+		// IMMEDIATELY capture the metadata before anything else can modify it
+		const capturedRace = character._fRace;
+		const capturedClass = character._fClass;
+		const capturedLevel = character._fLevel;
+		
+		// Store the original arguments to check different access patterns
+		const originalCharacter = character;
+		const debugInfo = {
+			_fRace: capturedRace,
+			_fClass: capturedClass,
+			_fLevel: capturedLevel,
+			fullCharacter: character
+		};
+		
+		console.log(`🎨 getListItem rendering ${character.name}:`, debugInfo);
+		console.log(`💫 Immediately captured values:`, {
+			capturedRace: capturedRace,
+			capturedClass: capturedClass,
+			capturedLevel: capturedLevel
+		});
+		
+		// Debug: Check all ways to access the metadata
+		console.log(`🔍 Property access debug for ${character.name}:`, {
+			direct_fRace: character._fRace,
+			bracket_fRace: character['_fRace'],
+			hasOwnProperty_fRace: character.hasOwnProperty('_fRace'),
+			getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor(character, '_fRace'),
+			keys: Object.keys(character),
+			allProps: Object.getOwnPropertyNames(character)
+		});
+		
 		this._pageFilter.mutateAndAddToFilters(character, isExcluded);
 
 		const eleLi = document.createElement("div");
@@ -120,16 +151,41 @@ class CharactersPage extends ListPageMultiSource {
 
 		const hash = UrlUtil.autoEncodeHash(character);
 		const source = Parser.sourceJsonToAbv(character.source || "");
-		const classText = character._fClass || "Unknown";
-		const level = character._fLevel || 0;
+		
+		// Try to find the metadata by searching all properties
+		let raceText = "Unknown";
+		let classText = "Unknown";
+		let level = 1;
+		
+		// Use the immediately captured values to avoid any modification issues
+		raceText = capturedRace || "Unknown";
+		classText = capturedClass || "Unknown";
+		level = capturedLevel || 1;
+		
+		console.log(`🔍 Using captured values:`, {
+			capturedRace: capturedRace,
+			capturedClass: capturedClass,
+			capturedLevel: capturedLevel,
+			raceText: raceText,
+			classText: classText,
+			level: level
+		});
+		
+		console.log(`🎨 Using metadata from character object for ${character.name}:`, {
+			race: raceText,
+			class: classText,
+			level: level
+		});
 
 		eleLi.innerHTML = `<a href="#${hash}" class="lst__row-border lst__row-inner">
 			<span class="bold ve-col-4-2 pl-0">${character.name}</span>
-			<span class="ve-col-1-7">${character._fRace || "Unknown"}</span>
+			<span class="ve-col-1-7">${raceText}</span>
 			<span class="ve-col-4-1">${classText}</span>
 			<span class="ve-col-1-7 ">${level}</span>
 			<span class="ve-col-1 ${Parser.sourceJsonToSourceClassname(character.source || "")} pr-0" title="${Parser.sourceJsonToFull(character.source || "")}">${source}</span>
 		</a>`;
+		
+		console.log(`🎨 Generated HTML for ${character.name}:`, eleLi.innerHTML);
 
 		const listItem = new ListItem(
 			chI,
@@ -138,7 +194,7 @@ class CharactersPage extends ListPageMultiSource {
 			{
 				hash,
 				source,
-				race: character._fRace || "Unknown",
+				race: raceText,
 				class: classText,
 				level: level,
 			},
@@ -158,39 +214,156 @@ class CharactersPage extends ListPageMultiSource {
 		await this._pLoadSource("Example", "yes");
 
 		// Use lazy loading with character summaries for list display
-		try {
-			let summaries = await CharacterManager.loadCharacterSummaries();
-			// Defensive: filter out any falsy/undefined entries that may have
-			// accidentally been inserted into the cache.
-			summaries = (summaries || []).filter(c => c);
-			if (summaries.length > 0) {
-				// Process characters for display to ensure _fRace, _fClass, etc. are set
-				const processedSummaries = summaries.map(char => {
-					this._processCharacterForDisplay(char);
-					return char;
-				});
+		// Try multiple times to ensure we get good data on cold loads
+		let summaries = [];
+		let attempts = 0;
+		const maxAttempts = 3;
+		
+		while (attempts < maxAttempts) {
+			attempts++;
+			try {
+				console.log(`Attempt ${attempts}/${maxAttempts} to load character summaries`);
+			const forceRefresh = true; // Always force refresh to see debug output
+				summaries = await CharacterManager.loadCharacterSummaries(null, forceRefresh);
 				
-				// Format for 5etools compatibility - summaries work like full characters for list display
-				const formattedData = { character: processedSummaries };
-				this._addData(formattedData);
-				console.log(`Loaded ${processedSummaries.length} character summaries for list display`);
-			} else {
-				console.log("No character summaries found - this is normal for a fresh installation");
+				// Defensive: filter out any falsy/undefined entries
+				summaries = (summaries || []).filter(c => c);
+				
+			// Temporarily accept any summaries for debugging metadata issues
+			if (summaries.length >= 0) {
+				console.log(`🛫 Got ${summaries.length} character summaries on attempt ${attempts}`);
+				if (summaries.length > 0) {
+					console.log(`📊 Raw summary metadata:`, summaries.map(s => ({
+						name: s.name,
+						_fClass: s._fClass,
+						_fRace: s._fRace,
+						_fLevel: s._fLevel
+					})));
+				}
+				break; // Always accept what we get for now
 			}
-		} catch (e) {
-			console.warn("Failed to load character summaries:", e);
+			} catch (e) {
+				console.warn(`Attempt ${attempts} failed to load character summaries:`, e);
+				if (attempts < maxAttempts) {
+					// Wait before retrying
+					await new Promise(resolve => setTimeout(resolve, 200 * attempts));
+				}
+			}
+		}
+		
+		// Process and display the summaries
+		if (summaries.length > 0) {
+			// Process characters for display to ensure _fRace, _fClass, etc. are set
+			const processedSummaries = summaries.map(char => {
+				console.log(`📊 Before processing ${char.name}:`, {
+					_fRace: char._fRace,
+					_fClass: char._fClass,
+					_fLevel: char._fLevel,
+					allKeys: Object.keys(char),
+					fullObject: char
+				});
+				this._processCharacterForDisplay(char);
+				console.log(`📊 After processing ${char.name}:`, {
+					_fRace: char._fRace,
+					_fClass: char._fClass,
+					_fLevel: char._fLevel,
+					allKeys: Object.keys(char),
+					fullObject: char
+				});
+				return char;
+			});
+			
+		// Format for 5etools compatibility - summaries work like full characters for list display
+		const formattedData = { character: processedSummaries };
+		this._addData(formattedData);
+		console.log(`✅ Loaded ${processedSummaries.length} character summaries for list display`);
+		console.log(`✅ Current list item count after _addData: ${this._list ? this._list.visibleItems.length : 'NO LIST'}`);
+		
+		// Set up listener AFTER initial data load to prevent immediate clearing
+		setTimeout(() => {
+			this._setupCharacterListener();
+		}, 200); // Small delay to ensure data is settled
+		
+		// Ensure URL fragment handling after data is loaded (fixes cold load navigation)
+		// Use a small delay to allow the list to fully render before processing hash
+		setTimeout(() => {
+			if (window.location.hash) {
+				console.log('Processing URL fragment after data load:', window.location.hash);
+				// Trigger hash processing by simulating hashchange or dispatching to the router
+				if (this._handleHashChange) {
+					this._handleHashChange();
+				} else {
+						// Fallback: dispatch hashchange event
+						window.dispatchEvent(new HashChangeEvent('hashchange'));
+				}
+			}
+		}, 100);
+		} else {
+			console.log("No character summaries to display");
 		}
 
+		// Listener setup is now handled after initial load in _setupCharacterListener()
+
+		// Preload spell data so spell links work in character sheets
+		try {
+			await DataLoader.pCacheAndGetAllSite(UrlUtil.PG_SPELLS);
+		} catch (e) {
+			console.warn("Failed to preload spell data for character page:", e);
+		}
+	}
+	
+	_setupCharacterListener() {
+		console.log('🔊 Setting up CharacterManager listener after initial load');
+		
 		// Set up listener for character updates (handles both summaries and full characters)
 		CharacterManager.addListener((characters) => {
 			// Defensive: remove falsy entries
 			characters = (characters || []).filter(c => c);
 			
-			console.log(`CharacterManager listener: Received ${characters.length} character updates`);
+			console.log(`🎧 CharacterManager listener triggered:`, {
+				charactersLength: characters.length,
+				currentListLength: this._dataList ? this._dataList.length : 'no dataList',
+				listVisible: this._list ? this._list.visibleItems.length : 'no list',
+				characterIds: characters.map(c => c.id || 'NO_ID'),
+				stackTrace: new Error().stack.split('\n').slice(1, 4).join('\n')
+			});
 			
-			// Update the list when characters change - summaries work for list display
+			// Be intelligent about when to update the list
+			// Only update if:
+			// 1. List is empty (initial load)
+			// 2. Multiple characters changed (bulk update)
+			// 3. Character count mismatch (characters added/removed)
+			const shouldUpdateList = !this._list || 
+				this._dataList.length === 0 || 
+				characters.length !== this._dataList.length ||
+				characters.length > 1;
+			
+			if (!shouldUpdateList) {
+				console.log(`🚫 Skipping list update - single character update with matching count`);
+				// Still handle individual character display updates
+				if (this._currentCharacter && characters.length === 1) {
+					const updatedChar = characters[0];
+					const currentId = CharacterManager._generateCompositeId(this._currentCharacter.name, this._currentCharacter.source);
+					const updatedId = CharacterManager._generateCompositeId(updatedChar.name, updatedChar.source);
+					
+					if (currentId === updatedId) {
+						console.log(`🔄 Updating displayed character without touching list`);
+						this._currentCharacter = updatedChar;
+						
+						if (globalThis._CHARACTER_EDIT_DATA) {
+							globalThis._CHARACTER_EDIT_DATA[currentId] = updatedChar;
+						}
+						
+						this._renderStats_doBuildStatsTab({ent: updatedChar});
+					}
+				}
+				return;
+			}
+			
+			console.log(`✅ Proceeding with list update`);
 			if (this._list) {
-				// Get latest summaries for list display (more efficient than full characters)
+				// Always get ALL character summaries to ensure we don't lose characters from the display
+				// This prevents the issue where saving one character removes others from the list
 				CharacterManager.loadCharacterSummaries().then(summaries => {
 					if (summaries && summaries.length > 0) {
 						// Process characters for display to ensure _fRace, _fClass, etc. are set
@@ -202,44 +375,33 @@ class CharactersPage extends ListPageMultiSource {
 						console.log(`Updating character list with ${processedSummaries.length} characters`);
 						
 						const formattedData = { character: processedSummaries };
-						// SMOOTHLY update data instead of clearing and re-adding
+						// Merge updates without clearing the list to avoid flicker or disappearing list
 						this._updateDataList(formattedData);
+					} else {
+						// No summaries available - ensure we keep existing characters in the list
+						console.log("No character summaries available, keeping existing list");
 					}
 				}).catch(e => {
 					console.warn("Failed to reload summaries for list update:", e);
-					// Fallback to using the full character data provided
-					const processedCharacters = characters.map(char => {
-						this._processCharacterForDisplay(char);
-						return char;
-					});
-					
-					const formattedData = { character: processedCharacters };
-					this._updateDataList(formattedData);
-				});
-			}
-
-			// Re-render currently displayed character if it was updated
-			if (this._currentCharacter) {
-				const characterId = CharacterManager._generateCompositeId(this._currentCharacter.name, this._currentCharacter.source);
-				const updatedCharacter = characters.find(c => {
-					const id = CharacterManager._generateCompositeId(c.name, c.source);
-					return id === characterId;
-				});
-
-				if (updatedCharacter) {
-					// Update the stored reference and re-render
-					this._currentCharacter = updatedCharacter;
-
-					// Update global character edit data for consistency
-					if (globalThis._CHARACTER_EDIT_DATA) {
-						globalThis._CHARACTER_EDIT_DATA[characterId] = updatedCharacter;
+					// Fallback to using the full character data provided, but ensure we get ALL characters
+					// Don't rely on the partial character array that might be passed to the listener
+					try {
+						// Get all characters from CharacterManager to ensure completeness
+						const allCharacters = Array.from(CharacterManager._characters.values());
+						const processedCharacters = allCharacters.map(char => {
+							this._processCharacterForDisplay(char);
+							return char;
+						});
+						
+						const formattedData = { character: processedCharacters };
+						this._updateDataList(formattedData);
+					} catch (fallbackError) {
+						console.warn("Fallback character loading also failed:", fallbackError);
+						// Last resort: keep existing list as-is
 					}
-
-					this._renderStats_doBuildStatsTab({ent: updatedCharacter});
-				}
+				});
 			}
 		});
-
 
 		// Listen for WebSocket character update events
 		window.addEventListener('characterUpdated', (event) => {
@@ -256,21 +418,15 @@ class CharactersPage extends ListPageMultiSource {
 				}
 			}
 		});
-
-		// Preload spell data so spell links work in character sheets
-		try {
-			await DataLoader.pCacheAndGetAllSite(UrlUtil.PG_SPELLS);
-		} catch (e) {
-			console.warn("Failed to preload spell data for character page:", e);
-		}
 	}
 
 	_processCharacterForDisplay (character) {
 		// Add computed fields that the filters and display expect
-		if (character.race) {
+		// Only process if we don't already have the display fields (to preserve summary data)
+		if (character.race && !character._fRace) {
 			character._fRace = character.race.variant ? `Variant ${character.race.name}` : character.race.name;
 		}
-		if (character.class && Array.isArray(character.class)) {
+		if (character.class && Array.isArray(character.class) && !character._fClass) {
 			// Create detailed class display with subclasses
 			character._fClass = character.class.map(cls => {
 				let classStr = cls.name;
@@ -287,11 +443,24 @@ class CharactersPage extends ListPageMultiSource {
 			character._fLevel = character.class.reduce((total, cls) => {
 				return total + (cls.level || 0);
 			}, 0);
-		} else {
+		} else if (!character._fLevel) {
+			// Only set default level if we don't already have one (preserves API metadata)
 			character._fLevel = 1;
 		}
-		if (character.background) {
+		if (character.background && !character._fBackground) {
 			character._fBackground = character.background.name;
+		}
+		
+		// Ensure we have fallback values for display if the full object processing didn't work
+		// and we don't have the summary data either (edge case protection)
+		if (!character._fRace) {
+			character._fRace = "Unknown";
+		}
+		if (!character._fClass) {
+			character._fClass = "Unknown";
+		}
+		if (!character._fLevel) {
+			character._fLevel = 1;
 		}
 	}
 
@@ -314,7 +483,26 @@ class CharactersPage extends ListPageMultiSource {
 	}
 
 	_addData (data) {
+		console.log(`📦 _addData called with:`, {
+			characterCount: data.character ? data.character.length : 0,
+			firstCharacter: data.character && data.character[0] ? {
+				name: data.character[0].name,
+				_fRace: data.character[0]._fRace,
+				_fClass: data.character[0]._fClass,
+				_fLevel: data.character[0]._fLevel,
+				allKeys: Object.keys(data.character[0])
+			} : 'no characters'
+		});
+		
 		super._addData(data);
+		
+		console.log(`📦 After super._addData, _dataList[0]:`, {
+			name: this._dataList[0]?.name,
+			_fRace: this._dataList[0]?._fRace,
+			_fClass: this._dataList[0]?._fClass,
+			_fLevel: this._dataList[0]?._fLevel,
+			allKeys: this._dataList[0] ? Object.keys(this._dataList[0]) : 'no data'
+		});
 
 		// Also populate DataLoader cache for hover/popout functionality
 		if (data.character && data.character.length) {
