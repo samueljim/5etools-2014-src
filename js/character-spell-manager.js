@@ -1,4 +1,7 @@
 // CharacterSpellManager - provides spell selection UI matching spells.html exactly
+// Only define this class if ListPage is available (i.e., on pages that need it like charactereditor.html)
+if (typeof ListPage !== 'undefined') {
+
 class CharacterSpellManager extends ListPage {
 	constructor() {
 		super({
@@ -1009,8 +1012,9 @@ class CharacterSpellManager extends ListPage {
 
 			console.log("✅ Filters configured for character spell selection");
 			
-		} catch (error) {
-			console.warn("Error setting character filters:", error);
-		}
+	} catch (error) {
+		console.warn("Error setting character filters:", error);
 	}
 }
+
+} // End of ListPage check
