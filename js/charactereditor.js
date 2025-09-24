@@ -9509,6 +9509,45 @@ class CharacterEditorPage {
 			// Ensure single Features & Traits section exists
 			const featuresSection = this.ensureSingleFeaturesSection(character);
 
+			// If the character/class has a selected subclass, add a clear "Subclass: ..." entry
+			try {
+				let subclassName = null;
+				let subclassSource = null;
+				const sc = classEntry.subclass;
+				if (sc) {
+					if (typeof sc === 'string') subclassName = sc;
+					else if (typeof sc === 'object') {
+						subclassName = sc.name || sc.shortName || null;
+						subclassSource = sc.source || sc.book || sc.sourceName || null;
+					}
+
+					if (subclassName) {
+						const display = `${subclassName}${subclassSource ? ` (${subclassSource})` : ''}`;
+						// Avoid adding duplicate subclass entries
+						const alreadyHas = (featuresSection.entries || []).some(e => e && e.name && e.name.toLowerCase().includes(display.toLowerCase()));
+						if (!alreadyHas) {
+							const subclassEntry = {
+								type: "entries",
+								name: `Subclass: ${display}`,
+								entries: [`Subclass chosen: ${display}`]
+							};
+							featuresSection.entries.push(subclassEntry);
+
+							this.levelUpState.changes.features.push({
+								name: `Subclass: ${display}`,
+								description: `Subclass assigned: ${display}`,
+								level: level,
+								className: classEntry.name,
+								type: 'subclass-assignment'
+							});
+							console.log(`Added subclass header for ${classEntry.name}: ${display}`);
+						}
+					}
+				}
+			} catch (e) {
+				console.warn('Could not add subclass header entry', e);
+			}
+
 			let addedFeatureCount = 0;
 
 			// Process each feature found for this level
@@ -9517,10 +9556,22 @@ class CharacterEditorPage {
 					const featureName = featureData.feature.name || 'Unknown Feature';
 					const featureEntries = featureData.feature.entries || [`${featureName} - Gained at level ${level}.`];
 
+					// Enhanced feature naming for subclass features to clearly indicate source
+					let enhancedFeatureName = featureName;
+					if (featureData.type === 'subclass' && featureData.source?.name) {
+						// For subclass features, include the subclass name for clarity
+						enhancedFeatureName = `${featureName} (${featureData.source.name})`;
+						console.log(`🎯 SUBCLASS FEATURE ENHANCED: "${enhancedFeatureName}"`);
+					} else if (featureData.type === 'subclass' && classEntry.subclass?.name) {
+						// Fallback: use classEntry subclass info if featureData doesn't have source
+						enhancedFeatureName = `${featureName} (${classEntry.subclass.name})`;
+						console.log(`🎯 SUBCLASS FEATURE ENHANCED (FALLBACK): "${enhancedFeatureName}"`);
+					}
+
 					// Create feature entry for the Features & Traits section
 					const featureEntry = {
 						type: "entries",
-						name: featureName,
+						name: enhancedFeatureName,
 						entries: featureEntries
 					};
 
@@ -9529,7 +9580,7 @@ class CharacterEditorPage {
 
 					// Add to changes tracking for level up summary
 					this.levelUpState.changes.features.push({
-						name: featureName,
+						name: enhancedFeatureName,
 						description: this.getFeatureDescription(featureData.feature),
 						level: level,
 						className: classEntry.name,
@@ -9537,7 +9588,11 @@ class CharacterEditorPage {
 					});
 
 					addedFeatureCount++;
-					console.log(`Added ${featureData.type} feature "${featureName}" for ${classEntry.name} level ${level}`);
+					if (featureData.type === 'subclass') {
+						console.log(`✅ Added SUBCLASS feature "${enhancedFeatureName}" for ${classEntry.name} level ${level}`);
+					} else {
+						console.log(`✅ Added CLASS feature "${enhancedFeatureName}" for ${classEntry.name} level ${level}`);
+					}
 				}
 			}
 
@@ -11232,29 +11287,94 @@ class CharacterEditorPage {
 		}
 
 		// Check subclass features
-		if (classEntry.subclass && classData.subclass) {
-			const subclass = classData.subclass.find(sc =>
-				sc.name === classEntry.subclass.name ||
-				sc.shortName === classEntry.subclass.name
-			);
+		console.log('=== SUBCLASS FEATURE DETECTION DEBUG ===');
+		console.log('classEntry.subclass:', classEntry.subclass);
+		console.log('classData.subclass available:', !!classData.subclass);
+		if (classData.subclass) {
+			console.log('Available subclasses in data:', classData.subclass.map(sc => ({name: sc.name, shortName: sc.shortName})));
+		}
 
-			if (subclass && subclass.subclassFeatures) {
-				for (const featureRef of subclass.subclassFeatures) {
-					const featureLevel = this.extractFeatureLevel(featureRef);
-					if (featureLevel === newLevel) {
-						const featureData = await this.loadFeatureData(featureRef, classData);
-						if (featureData) {
-							features.push({
-								type: 'subclass',
-								feature: featureData,
-								featureRef,
-								source: subclass
-							});
+		if (classEntry.subclass && classData.subclass) {
+			// Normalize possible subclass identifiers from classEntry (string or object)
+			let targetName = null;
+			let targetShort = null;
+			try {
+				if (typeof classEntry.subclass === 'string') {
+					targetName = classEntry.subclass.trim();
+				} else if (classEntry.subclass && typeof classEntry.subclass === 'object') {
+					targetName = (classEntry.subclass.name || classEntry.subclass.shortName || '').toString().trim();
+					targetShort = (classEntry.subclass.shortName || classEntry.subclass.name || '').toString().trim();
+				}
+			} catch (e) {
+				console.warn('Could not normalize classEntry.subclass:', classEntry.subclass, e);
+			}
+
+			console.log(`Looking for subclass (normalized): "${targetName}" / "${targetShort}"`);
+
+			const subclass = classData.subclass.find(sc => {
+				const scName = (sc.name || '').toString().trim();
+				const scShort = (sc.shortName || '').toString().trim();
+
+				const nameMatch = targetName && scName.toLowerCase() === targetName.toLowerCase();
+				const shortNameMatch = targetName && scShort.toLowerCase() === targetName.toLowerCase();
+				const reverseShortMatch = targetShort && scName.toLowerCase() === targetShort.toLowerCase();
+				const altShortMatch = targetShort && scShort.toLowerCase() === targetShort.toLowerCase();
+
+				console.log(`Checking subclass "${scName}" (${scShort}): nameMatch=${nameMatch}, shortNameMatch=${shortNameMatch}, reverseShortMatch=${reverseShortMatch}, altShortMatch=${altShortMatch}`);
+
+				return nameMatch || shortNameMatch || reverseShortMatch || altShortMatch;
+			});
+
+		if (subclass) {
+			console.log(`🎯 FOUND SUBCLASS: "${subclass.name}" (${subclass.shortName})`);
+			console.log('subclass.subclassFeatures:', subclass.subclassFeatures);
+			console.log('Full subclass object for debugging:', subclass);
+				
+				if (subclass.subclassFeatures) {
+					console.log(`Subclass has ${subclass.subclassFeatures.length} feature references`);
+					
+					for (const featureRef of subclass.subclassFeatures) {
+						console.log('Processing subclass featureRef:', featureRef);
+						const featureLevel = this.extractFeatureLevel(featureRef);
+						console.log(`Feature level: ${featureLevel}, target level: ${newLevel}`);
+						
+						if (featureLevel === newLevel) {
+							console.log(`🎯 LEVEL MATCH! Loading feature data for level ${newLevel}`);
+							const featureData = await this.loadFeatureData(featureRef, classData);
+							console.log('Loaded subclass feature data:', featureData);
+							
+							if (featureData) {
+								features.push({
+									type: 'subclass',
+									feature: featureData,
+									featureRef,
+									source: subclass
+								});
+								console.log(`✅ SUBCLASS FEATURE ADDED: "${featureData.name}"`);
+							} else {
+								console.warn(`❌ Failed to load feature data for: ${featureRef}`);
+							}
+						} else {
+							console.log(`Level mismatch: feature level ${featureLevel} != target ${newLevel}`);
 						}
 					}
+				} else {
+					console.warn('Subclass found but has no subclassFeatures array!');
 				}
+			} else {
+				console.warn('No matching subclass found in class data!');
+				console.log('Looking for:', classEntry.subclass);
+				console.log('Available subclasses:', classData.subclass.map(sc => ({name: sc.name, shortName: sc.shortName})));
+			}
+		} else {
+			if (!classEntry.subclass) {
+				console.log('No subclass defined in classEntry');
+			}
+			if (!classData.subclass) {
+				console.log('No subclass data available in classData');
 			}
 		}
+		console.log('=== END SUBCLASS FEATURE DETECTION DEBUG ===');
 
 		// Check optional features
 		if (classInfo.optionalfeatureProgression) {
@@ -11300,15 +11420,38 @@ class CharacterEditorPage {
 	}
 
 	extractFeatureLevel(feature) {
+		console.log('Extracting feature level from:', feature);
+
+		// Helper to parse a string with '|' separators and find the last numeric part
+		const parseFromString = (str) => {
+			const parts = str.split('|').map(p => p.trim());
+			console.log('String feature parts:', parts);
+			// Prefer the last numeric part (handles formats like "...||10" where level is at the end)
+			for (let i = parts.length - 1; i >= 0; --i) {
+				const v = parts[i];
+				if (/^-?\d+$/.test(v)) {
+					const level = parseInt(v, 10);
+					console.log('Extracted level:', level);
+					return level;
+				}
+			}
+			// Fallback to the old index if present
+			const fallback = parseInt(parts[3]) || 1;
+			console.log('FALLBACK Extracted level:', fallback);
+			return fallback;
+		};
+
 		if (typeof feature === 'string') {
-			// Format: "Feature Name|Class||Level" or "Feature Name|Class||Level|Source"
-			const parts = feature.split('|');
-			return parseInt(parts[3]) || 1;
-		} else if (feature.classFeature) {
-			// Format: { classFeature: "Feature Name|Class||Level", ... }
-			const parts = feature.classFeature.split('|');
-			return parseInt(parts[3]) || 1;
+			return parseFromString(feature);
+		} else if (feature && feature.classFeature) {
+			console.log('Object classFeature parts:');
+			return parseFromString(feature.classFeature);
+		} else if (feature && feature.subclassFeature) {
+			console.log('Object subclassFeature parts:');
+			return parseFromString(feature.subclassFeature);
 		}
+
+		console.log('Could not extract level, defaulting to 1');
 		return 1;
 	}
 
@@ -11381,37 +11524,69 @@ class CharacterEditorPage {
 	}
 
 	async loadFeatureData(featureRef, classData) {
+		console.log('=== LOADING FEATURE DATA ===');
+		console.log('featureRef:', featureRef);
+		console.log('classData has subclassFeature array:', !!classData?.subclassFeature);
+		
 		// Handle both string and object feature references
 		let featureString;
 		if (typeof featureRef === 'string') {
 			featureString = featureRef;
+			console.log('String featureRef:', featureString);
 		} else if (featureRef.classFeature) {
 			featureString = featureRef.classFeature;
+			console.log('Object classFeature:', featureString);
+		} else if (featureRef.subclassFeature) {
+			featureString = featureRef.subclassFeature;
+			console.log('Object subclassFeature:', featureString);
 		} else {
 			console.warn('Unknown featureRef format:', featureRef);
 			return null;
 		}
 
-		// Parse the feature reference format: "FeatureName|Class|Subclass|Level|Source"
+		// Parse the feature reference format robustly: tokens after class may include subclass, source, and level in variable positions
 		if (featureString) {
-			const parts = featureString.split('|');
-			const featureName = parts[0];
-			const className = parts[1];
-			const subclassName = parts[2] || '';
-			const level = parseInt(parts[3]) || 1;
-			const source = parts[4] || 'PHB';
+			const parts = featureString.split('|').map(p => p.trim());
+			const featureName = parts[0] || '';
+			const className = parts[1] || '';
+			// Determine level using extractFeatureLevel (handles trailing numeric tokens)
+			const level = this.extractFeatureLevel(featureString) || 1;
+			// Attempt to find a matching subclass token by comparing remaining tokens to classData.subclass entries
+			let subclassToken = '';
+			if (parts.length > 2) {
+				const candidateTokens = parts.slice(2).filter(t => t && !/^\d+$/.test(t));
+				if (classData && classData.subclass) {
+					for (const tok of candidateTokens) {
+						const lc = tok.toLowerCase();
+						const found = classData.subclass.find(sc => ((sc.name || '').toString().toLowerCase() === lc) || ((sc.shortName || '').toString().toLowerCase() === lc));
+						if (found) {
+							subclassToken = found.shortName || found.name || tok;
+							break;
+						}
+					}
+				}
+				// If no subclass found by lookup, fall back to the first non-numeric token (if any)
+				if (!subclassToken && candidateTokens.length) subclassToken = candidateTokens[0];
+			}
+			// Attempt to find a source token (common sources like PHB, XGE, TCE, etc.) by looking among tokens
+			let source = 'PHB';
+			if (parts.length > 2) {
+				const candidateTokens = parts.slice(2).filter(t => t && !/^\d+$/.test(t));
+				// Look for token that looks like an uppercase source (heuristic)
+				const srcTok = candidateTokens.find(t => /^[A-Z]{2,4}$/.test(t));
+				if (srcTok) source = srcTok;
+			}
 
-			console.log(`Loading feature data for: ${featureName}, Class: ${className}, Level: ${level}, Source: ${source}`);
+			console.log(`Loading feature data for: ${featureName}, Class: ${className}, Level: ${level}, SubclassToken: ${subclassToken}, Source: ${source}`);
 
 			// First try to find the feature in the provided class data
 			if (classData && classData.classFeature) {
 				console.log(`Searching in classFeature array with ${classData.classFeature.length} features`);
 				const feature = classData.classFeature.find(f => {
-					const nameMatch = f.name === featureName;
-					const classMatch = f.className === className;
-					const levelMatch = f.level === level;
-					// Be more flexible with source matching
-					const sourceMatch = !source || f.source === source || source === 'PHB';
+					const nameMatch = (f.name || '').toString().toLowerCase() === (featureName || '').toLowerCase();
+					const classMatch = (f.className || '').toString().toLowerCase() === (className || '').toLowerCase();
+					const levelMatch = Number(f.level) === Number(level);
+					const sourceMatch = !source || (f.source || '').toString().toLowerCase() === (source || '').toLowerCase() || source === 'PHB';
 
 					console.log(`Checking feature: ${f.name}, nameMatch: ${nameMatch}, classMatch: ${classMatch}, levelMatch: ${levelMatch}, sourceMatch: ${sourceMatch}`);
 
@@ -11420,22 +11595,29 @@ class CharacterEditorPage {
 
 				if (feature) {
 					console.log(`Found feature in classFeature array: ${feature.name}`);
-					// Enhance the feature with choice detection
-					return this.enhanceFeatureWithChoices(feature);
+					// Return a deep clone so callers can freely mutate without affecting global data
+					const clone = JSON.parse(JSON.stringify(feature));
+					// Expand any refSubclassFeature placeholders inside the cloned entries
+					await this.resolveRefSubclassFeatures(clone, classData);
+					return this.enhanceFeatureWithChoices(clone);
 				} else {
 					console.log(`Feature not found in classFeature array`);
 				}
 			}
 
 			// Also try to find the feature in subclassFeature array if we have a subclass
-			if (subclassName && classData && classData.subclassFeature) {
-				console.log(`Searching in subclassFeature array with ${classData.subclassFeature.length} features for subclass: ${subclassName}`);
+			if (classData && classData.subclassFeature) {
+				console.log(`Searching in subclassFeature array with ${classData.subclassFeature.length} features for subclass token: ${subclassToken}`);
 				const feature = classData.subclassFeature.find(f => {
-					const nameMatch = f.name === featureName;
-					const classMatch = f.className === className;
-					const subclassMatch = f.subclassShortName === subclassName || f.subclassName === subclassName;
-					const levelMatch = f.level === level;
-					const sourceMatch = !source || f.source === source || source === 'PHB';
+					const nameMatch = (f.name || '').toString().toLowerCase() === (featureName || '').toLowerCase();
+					const classMatch = (f.className || '').toString().toLowerCase() === (className || '').toLowerCase();
+					const levelMatch = Number(f.level) === Number(level);
+					let subclassMatch = true;
+					if (subclassToken) {
+						const tokenLc = subclassToken.toString().toLowerCase();
+						subclassMatch = ((f.subclassShortName || '').toString().toLowerCase() === tokenLc) || ((f.subclassName || '').toString().toLowerCase() === tokenLc);
+					}
+					const sourceMatch = !source || (f.source || '').toString().toLowerCase() === (source || '').toLowerCase() || source === 'PHB';
 
 					console.log(`Checking subclass feature: ${f.name}, nameMatch: ${nameMatch}, classMatch: ${classMatch}, subclassMatch: ${subclassMatch}, levelMatch: ${levelMatch}, sourceMatch: ${sourceMatch}`);
 
@@ -11444,8 +11626,9 @@ class CharacterEditorPage {
 
 				if (feature) {
 					console.log(`Found feature in subclassFeature array: ${feature.name}`);
-					// Enhance the feature with choice detection
-					return this.enhanceFeatureWithChoices(feature);
+					const clone = JSON.parse(JSON.stringify(feature));
+					await this.resolveRefSubclassFeatures(clone, classData);
+					return this.enhanceFeatureWithChoices(clone);
 				} else {
 					console.log(`Feature not found in subclassFeature array`);
 				}
@@ -11463,24 +11646,26 @@ class CharacterEditorPage {
 						const feature = classFileData.classFeature.find(f =>
 							f.name === featureName &&
 							f.className === className &&
-							(subclassName === '' || f.subclassShortName === subclassName) &&
+							(subclassToken === '' || f.subclassShortName === subclassToken) &&
 							f.level === level &&
 							f.source === source
 						);
 
 						if (feature) {
 							console.log(`Found feature in classFeature array: ${feature.name}`);
-							return this.enhanceFeatureWithChoices(feature);
+							const clone = JSON.parse(JSON.stringify(feature));
+							await this.resolveRefSubclassFeatures(clone, classFileData);
+							return this.enhanceFeatureWithChoices(clone);
 						}
 					}
 
 					// If not found in class features and we have a subclass, search subclass features
-					if (subclassName && classFileData.subclassFeature) {
-						console.log(`Searching in subclassFeature array with ${classFileData.subclassFeature.length} features for subclass: ${subclassName}`);
+					if (subclassToken && classFileData.subclassFeature) {
+						console.log(`Searching in subclassFeature array with ${classFileData.subclassFeature.length} features for subclass: ${subclassToken}`);
 						const feature = classFileData.subclassFeature.find(f => {
 							const nameMatch = f.name === featureName;
 							const classMatch = f.className === className;
-							const subclassMatch = f.subclassShortName === subclassName || f.subclassName === subclassName;
+							const subclassMatch = (f.subclassShortName === subclassToken) || (f.subclassName === subclassToken);
 							const levelMatch = f.level === level;
 							const sourceMatch = !source || f.source === source || source === 'PHB';
 
@@ -11491,7 +11676,9 @@ class CharacterEditorPage {
 
 						if (feature) {
 							console.log(`Found feature in subclassFeature array: ${feature.name}`);
-							return this.enhanceFeatureWithChoices(feature);
+							const clone = JSON.parse(JSON.stringify(feature));
+							await this.resolveRefSubclassFeatures(clone, classFileData);
+							return this.enhanceFeatureWithChoices(clone);
 						} else {
 							console.log(`Feature not found in subclassFeature array`);
 						}
@@ -11589,6 +11776,44 @@ class CharacterEditorPage {
 		}
 
 		return null;
+	}
+
+	// Expand any refSubclassFeature placeholders within a feature object's entries
+	async resolveRefSubclassFeatures(featureObj, classData) {
+		if (!featureObj || !featureObj.entries) return;
+
+		const resolveItem = async (item) => {
+			if (typeof item === 'string') return item;
+			if (item && item.type === 'refSubclassFeature' && item.subclassFeature) {
+				// Load the referenced subclass feature (may return a full feature object)
+				const ref = item.subclassFeature;
+				console.log('Resolving refSubclassFeature:', ref);
+				const resolved = await this.loadFeatureData(ref, classData);
+				if (resolved && resolved.entries) return resolved.entries;
+				if (resolved && resolved.name) return [resolved.name];
+				return [`${ref}`];
+			}
+			// If it's an object with nested entries, attempt to resolve recursively
+			if (item && item.entries && Array.isArray(item.entries)) {
+				const clone = JSON.parse(JSON.stringify(item));
+				clone.entries = [];
+				for (const e of item.entries) {
+					const resolved = await resolveItem(e);
+					if (Array.isArray(resolved)) clone.entries.push(...resolved);
+					else clone.entries.push(resolved);
+				}
+				return clone;
+			}
+			return item;
+		};
+
+		const newEntries = [];
+		for (const e of featureObj.entries) {
+			const r = await resolveItem(e);
+			if (Array.isArray(r)) newEntries.push(...r);
+			else newEntries.push(r);
+		}
+		featureObj.entries = newEntries;
 	}
 
 	getRacialSpells(race) {
@@ -13530,6 +13755,34 @@ class CharacterEditorPage {
 		console.log('LevelUpState:', this.levelUpState);
 		console.log('Choices:', this.levelUpState?.choices);
 		console.log('Current character data:', this.levelUpState?.characterData);
+		
+		// DEBUG: Check if character has subclass information
+		if (this.levelUpState?.characterData?.class) {
+			console.log('=== CHARACTER CLASS DEBUG ===');
+			this.levelUpState.characterData.class.forEach((classEntry, index) => {
+				console.log(`Class ${index}:`, {
+					name: classEntry.name,
+					level: classEntry.level,
+					subclass: classEntry.subclass,
+					hasSubclass: !!classEntry.subclass
+				});
+				if (classEntry.subclass) {
+					console.log(`🎯 SUBCLASS FOUND: ${classEntry.subclass.name} (${classEntry.subclass.shortName || 'no shortName'})`);
+					
+					// Special check for Circle of the Moon Druid at level 10
+					if (classEntry.name === 'Druid' && classEntry.level === 10) {
+						if (classEntry.subclass.shortName === 'Moon' || classEntry.subclass.name.includes('Moon')) {
+							console.log('🌕 CIRCLE OF THE MOON DRUID AT LEVEL 10 - Should get Elemental Wild Shape!');
+						}
+					}
+				} else {
+					console.log('❌ NO SUBCLASS FOUND for', classEntry.name);
+				}
+			});
+			console.log('=== END CHARACTER CLASS DEBUG ===');
+		} else {
+			console.log('❌ No character class data available in levelUpState');
+		}
 
 		// Check if we just completed spell selection and need to continue with other level up features
 		if (this.levelUpState?.continueAfterSpells) {
@@ -13541,13 +13794,17 @@ class CharacterEditorPage {
 			const classEntry = character.class[0]; // Assuming single class for now
 			const newLevel = classEntry.level;
 
+			console.log('🎯 CONTINUING LEVEL UP after spells - classEntry:', classEntry);
+
 			// Check for class-specific ASI levels (Fighter gets bonus at 6,14; Rogue at 10)
 			if (this.isASILevel(newLevel, [classEntry])) {
+				console.log('🎯 ASI Level detected, showing ASI choice');
 				this.showASIChoice();
 				return;
 			}
 
 			// Add any class features for this level
+			console.log('🎯 Adding class features for level', newLevel);
 			await this.addClassFeatures(classEntry, newLevel);
 
 			// Show completion
@@ -15401,6 +15658,47 @@ class CharacterEditorPage {
 						"Attack with advantage, but all attacks against you have advantage until your next turn."
 					]);
 				}
+				
+				// Add subclass features for Barbarian
+				if (classLevel >= 3 && classEntry.subclass) {
+					const subclassName = classEntry.subclass.name || classEntry.subclass.shortName;
+					console.log(`🎯 Adding Barbarian subclass features for: ${subclassName}`);
+					
+					switch (subclassName) {
+						case "Path of the Berserker":
+						case "Berserker":
+							if (classLevel >= 3) {
+								this.addOrUpdateAction(character, "Frenzy (Path of the Berserker)", [
+									"When you rage, you can go into a frenzy. Make a single melee weapon attack as a bonus action on each turn while raging. Gain 1 level of exhaustion when rage ends."
+								]);
+							}
+							break;
+						case "Path of the Totem Warrior":
+						case "Totem Warrior":
+							if (classLevel >= 3) {
+								this.addOrUpdateAction(character, "Totem Spirit (Path of the Totem Warrior)", [
+									"Choose a totem animal spirit. Bear: resistance to all damage except psychic while raging. Eagle: creatures have disadvantage on opportunity attacks, can dash as bonus action while raging. Wolf: allies have advantage on melee attacks against enemies within 5 feet while you rage."
+								]);
+							}
+							break;
+						case "Path of the Zealot":
+						case "Zealot":
+							if (classLevel >= 3) {
+								const zealotryDamage = Math.floor((classLevel + 1) / 2);
+								this.addOrUpdateAction(character, "Divine Fury (Path of the Zealot)", [
+									`When you rage, first creature you hit each turn takes an extra 1d6 + ${zealotryDamage} radiant or necrotic damage (your choice).`
+								]);
+							}
+							break;
+						default:
+							// Generic subclass feature for unknown subclasses
+							this.addOrUpdateAction(character, `${subclassName} Feature`, [
+								`${subclassName} subclass feature gained at level ${classLevel}.`
+							]);
+							console.log(`Added generic subclass feature for unknown Barbarian subclass: ${subclassName}`);
+							break;
+					}
+				}
 				break;
 
 			case "Rogue":
@@ -16803,13 +17101,29 @@ class CharacterEditorPage {
 		// Sync important actions to Features & Traits if they're not already there
 		if (character.action && character.action.length > 0) {
 			const importantActions = [
+				// Core class features
 				"Second Wind", "Action Surge", "Rage", "Reckless Attack",
 				"Sneak Attack", "Cunning Action", "Divine Sense", "Divine Smite",
-				"Turn Undead", "Martial Arts", "Ki", "Hunter's Mark"
+				"Turn Undead", "Martial Arts", "Ki", "Hunter's Mark",
+				// Barbarian subclass features
+				"Frenzy (Path of the Berserker)", "Totem Spirit (Path of the Totem Warrior)", "Divine Fury (Path of the Zealot)"
+			];
+			
+			// Also include any actions that contain subclass names (for generic fallbacks)
+			const subclassActionPatterns = [
+				"Path of the", "School of", "Circle of", "College of", "Oath of", "Domain", "Archetype"
 			];
 
 			character.action.forEach(action => {
-				if (importantActions.includes(action.name)) {
+				// Check if this is an important action OR contains subclass patterns
+				const isImportantAction = importantActions.includes(action.name);
+				const isSubclassAction = subclassActionPatterns.some(pattern => 
+					action.name.includes(pattern)
+				);
+				
+				if (isImportantAction || isSubclassAction) {
+					console.log(`🎯 Syncing action to Features & Traits: "${action.name}" (important: ${isImportantAction}, subclass: ${isSubclassAction})`);
+					
 					// Check if this feature already exists in Features & Traits
 					const featureExists = featuresSection.entries.some(entry =>
 						entry.name === action.name || (entry.entries && entry.entries.some(e =>
@@ -16824,6 +17138,9 @@ class CharacterEditorPage {
 							name: action.name,
 							entries: action.entries || [`${action.name} class feature.`]
 						});
+						console.log(`✅ Added action to Features & Traits: "${action.name}"`);
+					} else {
+						console.log(`Skipped duplicate action: "${action.name}"`);
 					}
 				}
 			});
@@ -16841,7 +17158,14 @@ class CharacterEditorPage {
 		console.log('Features & Traits section has', featuresSection.entries.length, 'entries');
 
 		// Apply automatic features from levelUpState.pendingFeatures
-		if (this.levelUpState && this.levelUpState.pendingFeatures) {
+		console.log('🔍 CHECKING PENDING FEATURES...');
+		console.log('levelUpState exists:', !!this.levelUpState);
+		if (this.levelUpState) {
+			console.log('pendingFeatures exists:', !!this.levelUpState.pendingFeatures);
+			console.log('pendingFeatures array:', this.levelUpState.pendingFeatures);
+		}
+		
+		if (this.levelUpState && this.levelUpState.pendingFeatures && this.levelUpState.pendingFeatures.length > 0) {
 			console.log(`🔍 PROCESSING ${this.levelUpState.pendingFeatures.length} PENDING FEATURES`);
 			this.levelUpState.pendingFeatures.forEach((featureData, index) => {
 				console.log(`Processing pending feature ${index + 1}:`, featureData);
@@ -16854,7 +17178,15 @@ class CharacterEditorPage {
 				if (featureData.type !== 'optional') {
 					// Add features to the existing Features & Traits section
 					const featureName = featureData.feature.name || 'Unknown Feature';
-					const featureEntries = featureData.feature.entries || [`${featureName} - Gained at level ${this.levelUpState.newLevel}.`];
+					let featureEntries = featureData.feature.entries || [`${featureName} - Gained at level ${this.levelUpState.newLevel}.`];
+
+					// Enhanced feature naming for subclass features to clearly indicate source
+					let enhancedFeatureName = featureName;
+					if (featureData.type === 'subclass' && featureData.source?.name) {
+						// For subclass features, include the subclass name for clarity
+						enhancedFeatureName = `${featureName} (${featureData.source.name})`;
+						console.log(`🎯 ENHANCED SUBCLASS FEATURE NAME: "${enhancedFeatureName}"`);
+					}
 
 					// Skip all spell-related selection features from being added to Features & Traits
 					const isSpellSelectionFeature = featureName.includes('Spell Selection') || 
@@ -16869,18 +17201,18 @@ class CharacterEditorPage {
 						return; // Skip this feature completely
 					}
 
-					// Check for duplicate features before adding (more robust check)
+					// Check for duplicate features before adding (use original name for deduplication)
 					const existingFeature = featuresSection.entries.find(entry => {
-						// Check exact name match
-						if (entry.name === featureName) return true;
+						// Check exact name match (use original feature name for comparison)
+						if (entry.name === featureName || entry.name === enhancedFeatureName) return true;
 
 						// Check if it's a string entry that contains the feature name
-						if (typeof entry === 'string' && entry.includes(featureName)) return true;
+						if (typeof entry === 'string' && (entry.includes(featureName) || entry.includes(enhancedFeatureName))) return true;
 
 						// Check nested entries for the feature name
 						if (entry.entries && Array.isArray(entry.entries)) {
 							return entry.entries.some(e =>
-								typeof e === 'string' && e.includes(featureName)
+								typeof e === 'string' && (e.includes(featureName) || e.includes(enhancedFeatureName))
 							);
 						}
 
@@ -16894,23 +17226,133 @@ class CharacterEditorPage {
 						return false;
 					});
 					if (!existingFeature) {
-						// Create feature entry for the Features & Traits section
+						// Create feature entry for the Features & Traits section using enhanced name
 						const featureEntry = {
 							type: "entries",
-							name: featureName,
+							name: enhancedFeatureName,
 							entries: featureEntries
 						};
 
 						// Add to the existing Features & Traits section
 						featuresSection.entries.push(featureEntry);
 
-						console.log(`Added feature "${featureName}" to Features & Traits section`);
+						if (featureData.type === 'subclass') {
+							console.log(`✅ Added SUBCLASS feature "${enhancedFeatureName}" to Features & Traits section`);
+						} else {
+							console.log(`✅ Added CLASS feature "${enhancedFeatureName}" to Features & Traits section`);
+						}
 					} else {
-						console.log(`Skipped duplicate feature: ${featureName}`);
+						console.log(`Skipped duplicate feature: ${enhancedFeatureName}`);
 					}
 				}
 			});
 		}
+		
+		// ALWAYS run manual feature detection to ensure subclass features are captured
+		// This is our fallback to ensure no subclass features are missed
+		console.log('🔍 RUNNING ADDITIONAL SUBCLASS FEATURE DETECTION...');
+		if (this.levelUpState && this.levelUpState.characterData && this.levelUpState.characterData.class) {
+		console.log('🔍 COMPREHENSIVE FEATURE DETECTION starting...');
+		console.log('Number of classes to check:', this.levelUpState.characterData.class.length);
+
+		for (const classEntry of this.levelUpState.characterData.class) {
+			console.log(`🎯 Checking ALL features for ${classEntry.name} level ${classEntry.level}`);
+			if (classEntry.subclass) {
+				console.log(`🎯 Character has subclass: ${classEntry.subclass.name} (${classEntry.subclass.shortName || 'no shortName'})`);
+			} else {
+				console.log(`⚠️ No subclass defined for ${classEntry.name}`);
+			}
+			
+			// Load class data and check for features at current level
+			try {
+				const classData = await this.loadClassData(classEntry.name);
+				if (classData && classData.class && classData.class[0]) {
+					console.log(`📚 Loaded class data for ${classEntry.name}`);
+					const newFeatures = await this.getNewFeaturesForLevel(classData.class[0], classData, classEntry, classEntry.level);
+					
+					console.log(`Found ${newFeatures.length} features for ${classEntry.name} level ${classEntry.level}:`);
+					newFeatures.forEach((f, i) => {
+						console.log(`  ${i + 1}. ${f.feature?.name} (${f.type})`);
+					});
+					
+					// Prioritize subclass features - add them first
+					const subclassFeatures = newFeatures.filter(f => f.type === 'subclass');
+					const classFeatures = newFeatures.filter(f => f.type === 'class');
+					
+					console.log(`Found ${subclassFeatures.length} SUBCLASS features`);
+					subclassFeatures.forEach(sf => {
+						console.log(`  - SUBCLASS: ${sf.feature?.name} (level ${sf.feature?.level})`);
+					});
+					console.log(`Found ${classFeatures.length} CLASS features`);
+					classFeatures.forEach(cf => {
+						console.log(`  - CLASS: ${cf.feature?.name} (level ${cf.feature?.level})`);
+					});
+					
+					// Process all features (subclass first)
+					for (const featureData of [...subclassFeatures, ...classFeatures]) {
+						if (featureData.feature) {
+							const featureName = featureData.feature.name || 'Unknown Feature';
+							let enhancedFeatureName = featureName;
+							
+							// Enhanced feature naming for subclass features
+							if (featureData.type === 'subclass') {
+								if (featureData.source?.name) {
+									enhancedFeatureName = `${featureName} (${featureData.source.name})`;
+									console.log(`🎯 COMPREHENSIVE SUBCLASS FEATURE: "${enhancedFeatureName}"`);
+								} else if (classEntry.subclass?.name) {
+									enhancedFeatureName = `${featureName} (${classEntry.subclass.name})`;
+									console.log(`🎯 COMPREHENSIVE SUBCLASS FEATURE (fallback): "${enhancedFeatureName}"`);
+								} else {
+									// Still mark as subclass even without specific name
+									enhancedFeatureName = `${featureName} (Subclass Feature)`;
+									console.log(`🎯 COMPREHENSIVE SUBCLASS FEATURE (generic): "${enhancedFeatureName}"`);
+								}
+							}
+							
+							// Check for duplicates with improved matching
+							const existingFeature = featuresSection.entries.find(entry => {
+								// Check exact matches
+								if (entry.name === featureName || entry.name === enhancedFeatureName) return true;
+								
+								// Check if base feature name already exists (to avoid duplicates)
+								const baseName = featureName.toLowerCase();
+								const entryBaseName = entry.name?.toLowerCase() || '';
+								if (entryBaseName.includes(baseName) || baseName.includes(entryBaseName)) return true;
+								
+								return false;
+							});
+							
+							if (!existingFeature) {
+								const featureEntry = {
+									type: "entries",
+									name: enhancedFeatureName,
+									entries: featureData.feature.entries || [`${enhancedFeatureName} - Gained at level ${classEntry.level}.`]
+								};
+								
+								featuresSection.entries.push(featureEntry);
+								
+								if (featureData.type === 'subclass') {
+									console.log(`✅ COMPREHENSIVE SUBCLASS feature added: "${enhancedFeatureName}"`);
+								} else {
+									console.log(`✅ COMPREHENSIVE CLASS feature added: "${enhancedFeatureName}"`);
+								}
+							} else {
+								console.log(`Skipped duplicate comprehensive feature: ${enhancedFeatureName}`);
+							}
+						}
+					}
+				} else {
+					console.warn(`Could not load class data for ${classEntry.name}`);
+				}
+			} catch (error) {
+				console.error(`Error in comprehensive feature detection for ${classEntry.name}:`, error);
+			}
+		}
+		
+		console.log('🔍 MANUAL FEATURE DETECTION completed');
+	} else {
+		console.warn('No character data available for manual feature detection');
+	}
 
 		// Apply chosen features from levelUpState.choices
 		if (this.levelUpState && this.levelUpState.choices) {
