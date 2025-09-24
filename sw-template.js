@@ -245,25 +245,11 @@ class RevisionCacheFirst extends Strategy {
 		console.log(`Found ${validCacheKeys.length} valid cache keys`);
 
 		const routeRegex = data.payload.routeRegex;
-		/**
-		 * These are the keys which have not been cached yet AND match the regex for routes
-		 * For external images, we'll convert local img/ paths to external URLs
-		 */
-		const routesToCache = validCacheKeys.filter((key) => (isTooManyKeys || !currentCacheKeys.has(key)) && routeRegex.test(key))
-			.map(key => {
-				// Convert local image paths to external 5e.tools URLs
-				if (key.includes("/img/") && !key.includes("5e.tools")) {
-					const cleanUrl = key.replace(/\?__WB_REVISION__=\w+$/m, "");
-					if (cleanUrl.includes(self.location.origin)) {
-						// Replace local origin with 5e.tools for images
-						const relativePath = cleanUrl.replace(`${self.location.origin}/`, "");
-						if (relativePath.startsWith("img/")) {
-							return `https://5e.tools/${relativePath}`;
-						}
-					}
-				}
-				return key;
-			});
+	/**
+	 * These are the keys which have not been cached yet AND match the regex for routes
+	 * External URLs are already properly formatted in the runtime manifest
+	 */
+	const routesToCache = validCacheKeys.filter((key) => (isTooManyKeys || !currentCacheKeys.has(key)) && routeRegex.test(key));
 		console.log(`Found ${routesToCache.length} routes to cache`);
 
 		const fetchTotal = routesToCache.length;
@@ -298,19 +284,11 @@ class RevisionCacheFirst extends Strategy {
 				if (url === undefined || signal.aborted) return;
 
 				// this regex is a very bad idea, but it trims the cache version off the url
-				let cleanUrl = url.replace(/\?__WB_REVISION__=\w+$/m, "");
+				const cleanUrl = url.replace(/\?__WB_REVISION__=\w+$/m, "");
 
-				// For external URLs (like 5e.tools images), use them directly
-				// For local URLs, keep the original behavior
-				let fetchUrl = cleanUrl;
-				let cacheKey = url;
-
-				if (cleanUrl.startsWith("https://5e.tools/")) {
-					// External URL - use as-is for fetching
-					fetchUrl = cleanUrl;
-					// But cache with a local-style key for consistency
-					cacheKey = url;
-				}
+				// Use the clean URL for fetching (works for both local and external URLs)
+				const fetchUrl = cleanUrl;
+				const cacheKey = url;
 
 				// Hack around `failed to execute 'keys' on 'Cache': Operation too large`
 				// (See above)
@@ -357,16 +335,20 @@ class RevisionCacheFirst extends Strategy {
  * Map([url, revision])
  *
  * __WB_RUNTIME_MANIFEST is injected as [route, revision] array, mapped into [url, revision], and constructed as map
+ * External URLs (like https://5e.tools/img/...) are used as-is, while local routes get the origin prefix
  */
 const runtimeManifest = new Map(self.__WB_RUNTIME_MANIFEST.map(
 	([
 		route,
 		revision,
-	]) =>
-		[
-			`${self.location.origin}/${route}`,
-			revision,
-		],
+	]) => {
+		// If route is already a full URL (external image), use as-is
+		if (route.startsWith('https://') || route.startsWith('http://')) {
+			return [route, revision];
+		}
+		// Otherwise prefix with local origin for local files
+		return [`${self.location.origin}/${route}`, revision];
+	}
 ));
 
 const revisionCacheFirst = new RevisionCacheFirst();
