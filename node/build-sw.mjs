@@ -1,5 +1,6 @@
 import {injectManifest} from "workbox-build";
 import esbuild from "esbuild";
+import fs from "fs";
 
 const args = process.argv.slice(2);
 const prod = args[0] === "prod";
@@ -78,7 +79,6 @@ const workboxRuntimeBuildResult = await injectManifest({
 	*/
 	globPatterns: [
 		"data/adventure/**/*.json", // matches all adventure json
-		"img/**/*", // matches all images
 		"icon/*.png", // all icons
 		"*.png", // root images
 		"*.svg", // root svg
@@ -90,16 +90,43 @@ const workboxRuntimeBuildResult = await injectManifest({
 		"lib/dice-box-assets/**/*.glb", // dice-box 3D models
 	],
 	manifestTransforms: [
-		(manifest) =>
-			({manifest: manifest.map(
-				entry =>
-					[
-						entry.url
-							// sanitize spaces
-							.replaceAll(" ", "%20"),
-						entry.revision,
-					],
-			)}),
+		(manifest) => {
+			// Load external image URLs and add them to the manifest
+			let externalImageUrls = [];
+			try {
+				const imageUrlsFile = "image-urls.json";
+				if (fs.existsSync(imageUrlsFile)) {
+					const imageUrlsData = JSON.parse(fs.readFileSync(imageUrlsFile, "utf8"));
+					externalImageUrls = imageUrlsData.urls || [];
+					console.log(`📸 Adding ${externalImageUrls.length} external image URLs to runtime cache manifest`);
+				} else {
+					console.warn("⚠️  image-urls.json not found. Run 'node node/generate-image-urls.mjs' first to generate external image URLs.");
+				}
+			} catch (error) {
+				console.error("Failed to load external image URLs:", error.message);
+			}
+
+			// Process the existing manifest entries
+			const processedManifest = manifest.map(entry => [
+				entry.url
+					// sanitize spaces
+					.replaceAll(" ", "%20"),
+				entry.revision,
+			]);
+
+			// Add external image URLs to the manifest
+			// These get a simple revision hash based on the URL
+			const externalImageEntries = externalImageUrls.map(url => [
+				url,
+				// Use a simple hash of the URL as revision for external images
+				// This ensures they get cached but can be updated if needed
+				encodeURIComponent(url).slice(-8) // Use last 8 chars of encoded URL as revision
+			]);
+
+			return {
+				manifest: [...processedManifest, ...externalImageEntries]
+			};
+		}
 	],
 });
 
