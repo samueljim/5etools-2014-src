@@ -366,8 +366,11 @@ const runtimeManifest = new Map(self.__WB_RUNTIME_MANIFEST.map(
 		if (route.startsWith('https://') || route.startsWith('http://')) {
 			return [route, revision];
 		}
-		// Otherwise prefix with local origin for local files
-		return [`${self.location.origin}/${route}`, revision];
+		// Otherwise normalize relative routes against the service worker origin
+		// Using `new URL(route, self.location.origin).href` avoids accidental
+		// double-slashes when `route` already begins with a '/'. This ensures
+		// the keys match `request.url` values used elsewhere.
+		return [new URL(route, self.location.origin).href, revision];
 	}
 ));
 
