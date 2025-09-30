@@ -2351,7 +2351,7 @@ globalThis.Renderer = function () {
 			}
 
 			default: {
-				const {name, source, displayText, others, page, hash, hashPreEncoded, pageHover, hashHover, hashPreEncodedHover, preloadId, linkText, subhashes, subhashesHover, isFauxPage} = Renderer.utils.getTagMeta(tag, text);
+				const {name, source, displayText, others, page, hash, hashPreEncoded, pageHover, sourceHover, hashHover, hashPreEncodedHover, preloadId, linkText, subhashes, subhashesHover, isFauxPage} = Renderer.utils.getTagMeta(tag, text);
 
 				const fauxEntry = {
 					type: "link",
@@ -2370,6 +2370,7 @@ globalThis.Renderer = function () {
 
 				if (hashPreEncoded != null) fauxEntry.href.hashPreEncoded = hashPreEncoded;
 				if (pageHover != null) fauxEntry.href.hover.page = pageHover;
+				if (sourceHover != null) fauxEntry.href.hover.source = sourceHover;
 				if (hashHover != null) fauxEntry.href.hover.hash = hashHover;
 				if (hashPreEncodedHover != null) fauxEntry.href.hover.hashPreEncoded = hashPreEncodedHover;
 				if (preloadId != null) fauxEntry.href.hover.preloadId = preloadId;
@@ -4725,16 +4726,16 @@ Renderer.utils = class {
 				if (others.length) {
 					const [subclassShortName, subclassSource, featurePart] = others;
 
-					if (subclassSource) out.source = subclassSource;
-
 					const classStateOpts = {
 						subclass: {
 							shortName: subclassShortName.trim(),
 							source: subclassSource
 								? subclassSource.trim()
-								: Parser.SRC_PHB,
+								: out.source,
 						},
 					};
+
+					out.sourceHover = classStateOpts.subclass.source;
 
 					// Don't include the feature part for hovers, as it is unsupported
 					const hoverSubhashObj = UrlUtil.unpackSubHash(UrlUtil.getClassesPageStatePart(classStateOpts));
@@ -12526,7 +12527,7 @@ Renderer.monster = class {
 
 		return e_({
 			tag: "select",
-			clazz: "input-xs form-control form-control--minimal w-initial inline-block ve-popwindow__hidden no-print",
+			clazz: "input-xs form-control form-control--minimal w-initial ve-inline-block ve-popwindow__hidden no-print",
 			name: "mon__sel-summon-spell-level",
 			children: [
 				e_({tag: "option", val: "-1", text: "\u2014"}),
@@ -12544,7 +12545,7 @@ Renderer.monster = class {
 
 		return e_({
 			tag: "select",
-			clazz: "input-xs form-control form-control--minimal w-initial inline-block ve-popwindow__hidden no-print",
+			clazz: "input-xs form-control form-control--minimal w-initial ve-inline-block ve-popwindow__hidden no-print",
 			name: "mon__sel-summon-class-level",
 			children: [
 				e_({tag: "option", val: "-1", text: "\u2014"}),
@@ -12928,33 +12929,32 @@ Renderer.monster = class {
 
 	/* -------------------------------------------- */
 
-	static getSpellcastingRenderedTraits (renderer, mon, displayAsProp = "trait") {
-		const out = [];
-		(mon.spellcasting || [])
-			.filter(it => (it.displayAs || "trait") === displayAsProp)
-			.forEach(entry => {
+	static getSpellcastingRenderedTraits (renderer, mon, {displayAsProp = "trait"} = {}) {
+		return (mon.spellcasting || [])
+			.filter(entry => (entry.displayAs || "trait") === displayAsProp)
+			.map(entry => {
 				const isLegendaryMythic = ["legendary", "mythic"].includes(displayAsProp);
 
 				// For legendary/mythic, assume list-item format
 				if (isLegendaryMythic) {
-					if (!entry.headerEntries?.length) return;
-					out.push({type: "item", name: entry.name, entries: entry.headerEntries});
-					return;
+					if (!entry.headerEntries?.length) return null;
+					return {type: "item", name: entry.name, entries: entry.headerEntries};
 				}
 
-				entry.type = entry.type || "spellcasting";
+				entry.type ||= "spellcasting";
 				const rendered = renderer.render(entry, 2);
-				if (!rendered.length) return;
-				out.push({name: entry.name, rendered});
-			});
-		return out;
+				if (!rendered.length) return null;
+
+				return {name: entry.name, rendered};
+			})
+			.filter(Boolean);
 	}
 
 	static getOrderedTraits (mon, {fnGetSpellTraits} = {}) {
 		let traits = mon.trait ? MiscUtil.copyFast(mon.trait) : null;
 
 		if (fnGetSpellTraits) {
-			const spellTraits = fnGetSpellTraits(mon, "trait");
+			const spellTraits = fnGetSpellTraits(mon, {displayAsProp: "trait"});
 			if (spellTraits.length) traits = traits ? traits.concat(spellTraits) : spellTraits;
 		}
 
@@ -12973,7 +12973,7 @@ Renderer.monster = class {
 
 		let spellActions;
 		if (fnGetSpellTraits) {
-			spellActions = fnGetSpellTraits(mon, prop);
+			spellActions = fnGetSpellTraits(mon, {displayAsProp: prop});
 		}
 
 		if (!spellActions?.length && !actions?.length) return null;
@@ -13150,7 +13150,7 @@ Renderer.monster = class {
 		renderer = renderer || Renderer.get();
 		const dragonVariant = Renderer.monster.dragonCasterVariant.getHtml(mon, {renderer});
 		const variants = mon.variant;
-		if (!variants && !dragonVariant) return null;
+		if (!variants && !dragonVariant) return "";
 
 		const rStack = [];
 		(variants || []).forEach(v => renderer.recursiveRender(v, rStack));
@@ -17537,6 +17537,9 @@ Renderer.hover = class {
 	 * @param [opts.isHideBottomBorder]
 	 */
 	static getShowWindow ($content, position, opts) {
+		// eslint-disable-next-line vet-jquery/jquery
+		$content = $($content);
+
 		opts = opts || {};
 		const {isHideBottomBorder, isResizeOnlyWidth} = opts;
 
@@ -17565,6 +17568,7 @@ Renderer.hover = class {
 		const mouseMoveId = `mousemove.${hoverId} touchmove.${hoverId}`;
 		const resizeId = `resize.${hoverId}`;
 		const drag = {};
+		const eventChannel = new EventTarget();
 
 		const brdrTopRightResize = ee`<div class="hoverborder__resize-ne"></div>`
 			.onn("mousedown", (evt) => Renderer.hover._getShowWindow_handleDragMousedown({hoverWindow, hoverId, $hov, drag, $wrpContent}, {evt, type: 1, isResizeOnlyWidth}))
@@ -17624,7 +17628,7 @@ Renderer.hover = class {
 						$wrpContent.css("max-height", "");
 						$hov.css("max-width", "");
 					}
-					Renderer.hover._getShowWindow_adjustPosition({$hov, $wrpContent, position});
+					Renderer.hover._getShowWindow_adjustPosition({$hov, $wrpContent, position, eventChannel});
 
 					if (drag.type === 9) {
 						// handle mobile button touches
@@ -17687,7 +17691,7 @@ Renderer.hover = class {
 					}
 				}
 			});
-		$(position.window).on(resizeId, () => Renderer.hover._getShowWindow_adjustPosition({$hov, $wrpContent, position}));
+		$(position.window).on(resizeId, () => Renderer.hover._getShowWindow_adjustPosition({$hov, $wrpContent, position, eventChannel}));
 
 		brdrTop.attr("data-display-title", false);
 		brdrTop.onn("dblclick", () => Renderer.hover._getShowWindow_doToggleMinimizedMaximized({$brdrTop: brdrTop, $hov}));
@@ -17756,12 +17760,12 @@ Renderer.hover = class {
 
 		$body.append($hov);
 
-		Renderer.hover._getShowWindow_setPosition({$hov, $wrpContent, position}, position);
+		Renderer.hover._getShowWindow_setPosition({$hov, $wrpContent, position, eventChannel}, position);
 
 		hoverWindow.zIndex = initialZIndex;
 		hoverWindow.setZIndex = Renderer.hover._getNextZIndex.bind(this, {$hov, hoverWindow});
 
-		hoverWindow.setPosition = Renderer.hover._getShowWindow_setPosition.bind(this, {$hov, $wrpContent, position});
+		hoverWindow.setPosition = Renderer.hover._getShowWindow_setPosition.bind(this, {$hov, $wrpContent, position, eventChannel});
 		hoverWindow.mutScroll = Renderer.hover._getShowWindow_mutScroll.bind(this, {$hov, $wrpContent, position});
 		hoverWindow.setIsPermanent = Renderer.hover._getShowWindow_setIsPermanent.bind(this, {opts, $brdrTop: brdrTop});
 		hoverWindow.doClose = Renderer.hover._getShowWindow_doClose.bind(this, {$hov, position, mouseUpId, mouseMoveId, resizeId, hoverId, opts, hoverWindow});
@@ -17772,6 +17776,7 @@ Renderer.hover = class {
 
 		hoverWindow.$setContent = ($contentNxt) => $wrpContent.empty().append($contentNxt);
 
+		hoverWindow.eventChannel = eventChannel;
 		// Store metadata for character refresh functionality
 		if (opts.sourceData) {
 			hoverWindow.sourceData = opts.sourceData;
@@ -17876,7 +17881,7 @@ Renderer.hover = class {
 		Renderer.hover._getShowWindow_doClose({$hov, position, mouseUpId, mouseMoveId, resizeId, hoverId, opts, hoverWindow});
 	}
 
-	static _getShowWindow_setPosition ({$hov, $wrpContent, position}, positionNxt) {
+	static _getShowWindow_setPosition ({$hov, $wrpContent, position, eventChannel}, positionNxt) {
 		switch (positionNxt.mode) {
 			case "autoFromElement": {
 				const bcr = $hov[0].getBoundingClientRect();
@@ -17929,7 +17934,7 @@ Renderer.hover = class {
 			default: throw new Error(`Positioning mode unimplemented: "${positionNxt.mode}"`);
 		}
 
-		Renderer.hover._getShowWindow_adjustPosition({$hov, $wrpContent, position});
+		Renderer.hover._getShowWindow_adjustPosition({$hov, $wrpContent, position, eventChannel});
 	}
 
 	static _getShowWindow_mutScroll ({$hov, $wrpContent, position}, {deltaPixelsX, deltaPixelsY}) {
@@ -17937,7 +17942,7 @@ Renderer.hover = class {
 		$wrpContent[0].scrollBy(deltaPixelsX, deltaPixelsY);
 	}
 
-	static _getShowWindow_adjustPosition ({$hov, $wrpContent, position}) {
+	static _getShowWindow_adjustPosition ({$hov, $wrpContent, position, eventChannel}) {
 		const eleHov = $hov[0];
 		const wrpContent = $wrpContent[0];
 
@@ -17981,6 +17986,8 @@ Renderer.hover = class {
 				wrpContent.style.height = `${bcr.height}px`;
 			}
 		}
+
+		eventChannel.dispatchEvent(new Event("resize"));
 	}
 
 	static _getShowWindow_getPosition ({$hov, $wrpContent}) {
