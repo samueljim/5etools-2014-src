@@ -523,7 +523,7 @@ export async function handleCharacterDelete(request, env) {
 
         // Check if character exists and verify user ownership
         const character = await env.DB
-            .prepare("SELECT character_id, character_name, user_id FROM characters WHERE character_id = ?")
+            .prepare("SELECT character_id, character_name, user_id, source_name FROM characters WHERE character_id = ?")
             .bind(id)
             .first();
 
@@ -534,17 +534,29 @@ export async function handleCharacterDelete(request, env) {
             }, 404);
         }
 
-        if (String(character.user_id) !== String(user.id)) {
+        const isOwnerById = String(character.user_id) === String(user.id);
+        const isOwnerByName = character.source_name
+            && String(character.source_name).toLowerCase() === String(user.username || "").toLowerCase();
+        const isPlaceholderStub = String(id).includes("level_0_placeholder");
+
+        if (!isOwnerById && !(isPlaceholderStub && isOwnerByName)) {
             return jsonResponse({
                 error: "Access denied: You can only delete your own characters."
             }, 403);
         }
 
-        // Delete the character
-        await env.DB
-            .prepare("DELETE FROM characters WHERE character_id = ? AND CAST(user_id AS TEXT) = ?")
-            .bind(id, String(user.id))
-            .run();
+        // Delete the character (owner match by user_id, or placeholder stub by source_name)
+        if (isOwnerById) {
+            await env.DB
+                .prepare("DELETE FROM characters WHERE character_id = ? AND CAST(user_id AS TEXT) = ?")
+                .bind(id, String(user.id))
+                .run();
+        } else {
+            await env.DB
+                .prepare("DELETE FROM characters WHERE character_id = ? AND LOWER(COALESCE(source_name, '')) = LOWER(?)")
+                .bind(id, String(user.username || ""))
+                .run();
+        }
 
 		// Create sync event for WebSocket broadcasts
 		await env.DB

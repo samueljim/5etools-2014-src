@@ -126,6 +126,36 @@
 	letter-spacing: -0.01em;
 }
 
+.character-combat__chip--text {
+	align-items: flex-start;
+	min-width: 5.5rem;
+	max-width: 11rem;
+	padding: 0.3rem 0.45rem 0.35rem;
+}
+
+.character-combat__chip--text .character-combat__value {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 0.15rem;
+	font-size: 0.72em;
+	font-weight: 500;
+	font-variant-numeric: normal;
+	letter-spacing: 0;
+	line-height: 1.25;
+	max-width: 100%;
+}
+
+.character-combat__tag {
+	display: inline-block;
+	padding: 0.05rem 0.3rem;
+	border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+	border-radius: 2px;
+	white-space: nowrap;
+	line-height: 1.25;
+	background: color-mix(in srgb, currentColor 4%, transparent);
+}
+
 .character-combat__sep {
 	opacity: 0.45;
 	font-weight: 500;
@@ -454,8 +484,44 @@
 	display: inline-block;
 }
 
-/* Equipment table */
-.character-equipment {
+/* Languages (in core) */
+.character-languages {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.25rem 0.45rem;
+	font-size: 0.88em;
+	line-height: 1.3;
+}
+
+.character-languages__label {
+	font-weight: 700;
+	font-size: 0.78em;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	opacity: 0.75;
+	flex: none;
+}
+
+.character-languages__list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.2rem 0.3rem;
+	min-width: 0;
+}
+
+.character-languages__lang {
+	display: inline-block;
+	padding: 0.05rem 0.4rem;
+	border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+	border-radius: 3px;
+	font-size: 0.95em;
+	line-height: 1.3;
+	background: color-mix(in srgb, currentColor 3%, transparent);
+}
+
+/* Shared compact data tables (equipment, trackers) */
+.character-data-table {
 	width: 100%;
 	border-collapse: collapse;
 	font-size: 0.88em;
@@ -463,14 +529,14 @@
 	margin: 0.1rem 0 0.15rem;
 }
 
-.character-equipment th,
-.character-equipment td {
-	padding: 0.12rem 0.35rem;
+.character-data-table th,
+.character-data-table td {
+	padding: 0.14rem 0.4rem;
 	border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
-	vertical-align: top;
+	vertical-align: middle;
 }
 
-.character-equipment thead th {
+.character-data-table thead th {
 	font-size: 0.78em;
 	font-weight: 700;
 	letter-spacing: 0.04em;
@@ -478,25 +544,40 @@
 	opacity: 0.75;
 	border-bottom-color: color-mix(in srgb, currentColor 18%, transparent);
 	padding-bottom: 0.2rem;
+	text-align: left;
 }
 
-.character-equipment tbody tr:nth-child(even) {
+.character-data-table tbody tr:nth-child(even) {
 	background: color-mix(in srgb, currentColor 4.5%, transparent);
 }
 
-.character-equipment__qty {
+.character-data-table__qty {
 	width: 2.75rem;
 	text-align: center;
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
 }
 
-.character-equipment__item {
+.character-data-table thead .character-data-table__qty {
+	text-align: center;
+}
+
+.character-data-table__name {
 	width: auto;
 }
 
-.character-equipment__notes {
-	width: 42%;
+.character-data-table__value {
+	width: 6.5rem;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.character-data-table__value .character-combat__max {
+	font-size: 0.85em;
+}
+
+.character-data-table__notes {
+	width: 40%;
 	opacity: 0.85;
 	font-size: 0.95em;
 }

@@ -9737,7 +9737,7 @@ Renderer.character = class {
 		const dexModValue = typeof dexMod === "number" ? dexMod : parseInt(dexMod) || 0;
 		const initMod = character.initiative || dexModValue;
 		const initStr = initMod >= 0 ? `+${initMod}` : `${initMod}`;
-		combatChipsHero.push({label: "Init", value: `{@dice 1d20${initStr}|${initStr}|Initiative}`, emphasis: true});
+		combatChipsHero.push({label: "Initiative", value: `{@dice 1d20${initStr}|${initStr}|Initiative}`, emphasis: true});
 
 		const wisScore = character.wis || 10;
 		const wisMod = Parser.getAbilityModifier(wisScore);
@@ -9753,7 +9753,7 @@ Renderer.character = class {
 		}
 
 		const passivePerception = 10 + perceptionMod;
-		combatChipsHero.push({label: "PP", value: `${passivePerception}`, emphasis: true});
+		combatChipsHero.push({label: "Passive Perception", value: `${passivePerception}`, emphasis: true});
 
 		// Calculate and display proficiency bonus
 		let profBonus = character.proficiencyBonus;
@@ -9762,7 +9762,30 @@ Renderer.character = class {
 			profBonus = `+${Math.ceil(characterLevel / 4) + 1}`;
 		}
 		if (profBonus) {
-			combatChipsHero.push({label: "Prof", value: `${profBonus}`, emphasis: true});
+			combatChipsHero.push({label: "Proficiency", value: `${profBonus}`, emphasis: true});
+		}
+
+		if (character.languages?.length) {
+			const langLabels = character.languages.map(lang => {
+				const label = typeof lang === "string" ? lang : (lang?.name || String(lang));
+				return label;
+			});
+			const languagesFull = langLabels
+				.map(l => l.replace(/\{@[^|\}]+(?:\|[^\}]+)?\}/g, (tag) => {
+					const inner = tag.slice(2, -1);
+					return inner.split("|")[0].replace(/^(?:language|filter)\s+/i, "").trim() || tag;
+				}))
+				.join(", ");
+			const tagsHtml = langLabels
+				.map(label => `<span class="character-combat__tag">${label}</span>`)
+				.join("");
+			combatChipsHero.push({
+				label: "Languages",
+				value: tagsHtml,
+				title: languagesFull,
+				emphasis: true,
+				text: true,
+			});
 		}
 
 		if (character.size) {
@@ -9854,13 +9877,13 @@ Renderer.character = class {
 					const classesData = classes.map(c => `${c.index}:${c.level}:${c.currentAvailable}`).join(",");
 					const clickableCount = `<span class="character-stat-display" data-stat-path="class.currentHitDice.${dieType}" data-character-id="${characterId}" data-current-value="${current}" data-max-value="${max}" data-classes-data="${classesData}" title="Click to edit ${dieType} hit dice available">${current}</span>`;
 					combatChipsHero.push({
-						label: "HD",
+						label: "Hit Dice",
 						value: `${clickableCount}<span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span><span class="character-combat__temp">${dieRoll}</span>`,
 						emphasis: true,
 					});
 				} else {
 					combatChipsHero.push({
-						label: "HD",
+						label: "Hit Dice",
 						value: `<span>${current}</span><span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span><span class="character-combat__temp">${dieRoll}</span>`,
 						emphasis: true,
 					});
@@ -9908,9 +9931,11 @@ Renderer.character = class {
 
 		const renderCombatChip = (chip) => {
 			const titleAttr = chip.title ? ` title="${String(chip.title).qq()}"` : "";
-			const chipClass = chip.emphasis
-				? "character-combat__chip character-combat__chip--emphasis"
-				: "character-combat__chip";
+			const chipClass = [
+				"character-combat__chip",
+				chip.emphasis ? "character-combat__chip--emphasis" : "",
+				chip.text ? "character-combat__chip--text" : "",
+			].filter(Boolean).join(" ");
 			const valueClass = chip.truncate
 				? "character-combat__value character-combat__value--truncate"
 				: "character-combat__value";
@@ -10147,7 +10172,6 @@ Renderer.character = class {
 		}
 
 		if (character.customTrackers?.length) {
-			const trackerEntries = [];
 			let characterId = null;
 
 			if (hasEditAccess && !isStatic) {
@@ -10158,48 +10182,50 @@ Renderer.character = class {
 				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
 			}
 
-			character.customTrackers.forEach((tracker, index) => {
+			const hasNotes = character.customTrackers.some(t => t.description || (t.type === "condition" && t.duration));
+			const headCells = hasNotes
+				? `<th class="character-data-table__name">Name</th><th class="character-data-table__value">Value</th><th class="character-data-table__notes">Notes</th>`
+				: `<th class="character-data-table__name">Name</th><th class="character-data-table__value">Value</th>`;
+
+			const rowsHtml = character.customTrackers.map((tracker, index) => {
 				const trackerName = tracker.name || `Tracker ${index + 1}`;
-				const description = tracker.description ? ` - ${tracker.description}` : "";
+				let valueHtml = "\u2014";
+				const noteParts = [];
 
 				if (tracker.type === "counter") {
-					// Counter type tracker (current/max)
 					const current = tracker.current || 0;
 					const max = tracker.max || 1;
-
 					if (hasEditAccess && !isStatic && characterId) {
-						// Editable counter with click handlers
 						const clickableCount = `<span class="character-stat-display" data-stat-path="customTrackers.${index}.current" data-character-id="${characterId}" data-current-value="${current}" data-max-value="${max}" title="Click to edit ${trackerName}">${current}</span>`;
-						trackerEntries.push(`<strong>${trackerName}:</strong> ${clickableCount}/${max}${description}`);
+						valueHtml = `${clickableCount}<span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span>`;
 					} else {
-						// Static display
-						trackerEntries.push(`<strong>${trackerName}:</strong> ${current}/${max}${description}`);
+						valueHtml = `${current}<span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span>`;
 					}
 				} else if (tracker.type === "condition") {
-					// Condition type tracker (active/inactive)
 					const active = tracker.active || false;
-					const duration = tracker.duration ? ` (${tracker.duration})` : "";
 					const status = active ? "✓ Active" : "✗ Inactive";
-
 					if (hasEditAccess && !isStatic && characterId) {
-						// Editable condition with click handlers
-						const clickableStatus = `<span class="character-stat-display" data-stat-path="customTrackers.${index}.active" data-character-id="${characterId}" data-current-value="${active}" data-max-value="true" title="Click to toggle ${trackerName}">${status}</span>`;
-						trackerEntries.push(`<strong>${trackerName}:</strong> ${clickableStatus}${duration}${description}`);
+						valueHtml = `<span class="character-stat-display" data-stat-path="customTrackers.${index}.active" data-character-id="${characterId}" data-current-value="${active}" data-max-value="true" title="Click to toggle ${trackerName}">${status}</span>`;
 					} else {
-						// Static display
-						trackerEntries.push(`<strong>${trackerName}:</strong> ${status}${duration}${description}`);
+						valueHtml = status;
 					}
+					if (tracker.duration) noteParts.push(tracker.duration);
 				}
-			});
 
-			if (trackerEntries.length > 0) {
-				const trackerInfo = {
-					type: "entries",
-					name: "Custom Trackers",
-					entries: trackerEntries,
-				};
-				renderer.recursiveRender(trackerInfo, renderStack, {depth: 1});
-			}
+				if (tracker.description) noteParts.push(tracker.description);
+
+				const notesCell = hasNotes
+					? `<td class="character-data-table__notes">${noteParts.length ? noteParts.map(n => String(n).qq()).join(" \u2014 ") : "\u2014"}</td>`
+					: "";
+
+				return `<tr><td class="character-data-table__name"><strong>${String(trackerName).qq()}</strong></td><td class="character-data-table__value">${valueHtml}</td>${notesCell}</tr>`;
+			}).join("");
+
+			renderer.recursiveRender({
+				type: "entries",
+				name: "Custom Trackers",
+				entries: [`<table class="character-data-table character-trackers"><thead><tr>${headCells}</tr></thead><tbody>${rowsHtml}</tbody></table>`],
+			}, renderStack, {depth: 1});
 		}
 
 		// Traits/Features section intentionally suppressed — feature entries are
@@ -10210,8 +10236,8 @@ Renderer.character = class {
 		if (character.equipment?.length) {
 			const hasNotes = character.equipment.some(item => item.description);
 			const headCells = hasNotes
-				? `<th class="character-equipment__qty">Qty</th><th class="character-equipment__item">Item</th><th class="character-equipment__notes">Notes</th>`
-				: `<th class="character-equipment__qty">Qty</th><th class="character-equipment__item">Item</th>`;
+				? `<th class="character-data-table__qty">Qty</th><th class="character-data-table__name">Item</th><th class="character-data-table__notes">Notes</th>`
+				: `<th class="character-data-table__qty">Qty</th><th class="character-data-table__name">Item</th>`;
 
 			const rowsHtml = character.equipment.map(item => {
 				const qty = item.quantity != null && item.quantity !== "" ? item.quantity : "\u2014";
@@ -10220,25 +10246,16 @@ Renderer.character = class {
 					? rawName
 					: `<strong>${String(rawName).qq()}</strong>`;
 				const notesCell = hasNotes
-					? `<td class="character-equipment__notes">${item.description ? String(item.description).qq() : "\u2014"}</td>`
+					? `<td class="character-data-table__notes">${item.description ? String(item.description).qq() : "\u2014"}</td>`
 					: "";
-				return `<tr><td class="character-equipment__qty">${qty}</td><td class="character-equipment__item">${nameCell}</td>${notesCell}</tr>`;
+				return `<tr><td class="character-data-table__qty">${qty}</td><td class="character-data-table__name">${nameCell}</td>${notesCell}</tr>`;
 			}).join("");
 
 			renderer.recursiveRender({
 				type: "entries",
 				name: "Equipment",
-				entries: [`<table class="character-equipment"><thead><tr>${headCells}</tr></thead><tbody>${rowsHtml}</tbody></table>`],
+				entries: [`<table class="character-data-table character-equipment"><thead><tr>${headCells}</tr></thead><tbody>${rowsHtml}</tbody></table>`],
 			}, renderStack, {depth: 1});
-		}
-		// Languages if available
-		if (character.languages?.length) {
-			const langInfo = {
-				type: "entries",
-				name: "Languages",
-				entries: [character.languages.join(", ")],
-			};
-			renderer.recursiveRender(langInfo, renderStack, {depth: 1});
 		}
 		// Player notes from custom content instead of hardcoded forms
 

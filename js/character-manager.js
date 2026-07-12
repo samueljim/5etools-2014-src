@@ -2482,8 +2482,23 @@ class CharacterManager {
 				this._applyServerTimestamp(fullCharacter, serverUpdatedAt);
 			}
 
+			const ownerName = apiResponse.metadata?.owner || apiResponse.metadata?.source_name || null;
+			if (ownerName) {
+				fullCharacter._owner = ownerName;
+				fullCharacter.owner = ownerName;
+				// Incomplete wizard stubs keep LEVEL_0_PLACEHOLDER as data source; expose real owner for access checks
+				if (String(fullCharacter.source || "").toUpperCase() === "LEVEL_0_PLACEHOLDER") {
+					fullCharacter._placeholderSource = fullCharacter.source;
+					// Keep placeholder source for wizard detection, but access checks use owner
+				}
+			}
+
 			const processed = this._processCharacterForDisplay(fullCharacter);
 			processed.id = id;
+			if (ownerName) {
+				processed._owner = ownerName;
+				processed.owner = ownerName;
+			}
 
 			this._characters.set(id, processed);
 
@@ -3682,9 +3697,42 @@ class CharacterManager {
 				|| this._generateCompositeId(c.name, c.source) === characterId)) || null;
 		}
 
+		// Enrich ownership from the live server list before permission checks.
+		// Incomplete wizard stubs use source "LEVEL_0_PLACEHOLDER", so client access
+		// must rely on blob owner metadata (e.g. Onyx Wildborn → owner "Sam").
+		try {
+			const blobs = await this._getBlobList(null, true);
+			const nameLc = (character?.name || "").toLowerCase();
+			const match = (blobs || []).find(blob => {
+				if (!blob?.id) return false;
+				if (characterId && blob.id === characterId) return true;
+				if (character?.id && blob.id === character.id) return true;
+				const blobName = (blob.character_name || blob.name || "").toLowerCase();
+				return nameLc && blobName === nameLc;
+			});
+			if (match) {
+				character = {
+					...(character || {name: match.character_name || match.name, id: match.id}),
+					id: character?.id || match.id,
+					_owner: character?._owner || match.owner,
+					owner: character?.owner || match.owner,
+					source: character?.source || match.owner || "Unknown",
+				};
+			}
+		} catch (e) {
+			console.warn("CharacterManager: Could not enrich ownership for delete:", e);
+		}
+
 		if (character && !this.canEditCharacter(character)) {
-			console.warn(`CharacterManager: No permission to delete character: ${character.name}`);
-			return false;
+			// For placeholder stubs, still attempt server delete when authenticated —
+			// the API enforces user_id ownership and is the source of truth.
+			const isPlaceholder = String(character.source || "").toUpperCase() === "LEVEL_0_PLACEHOLDER"
+				|| String(characterId || "").includes("level_0_placeholder");
+			if (!isPlaceholder) {
+				console.warn(`CharacterManager: No permission to delete character: ${character.name}`);
+				return false;
+			}
+			console.warn(`CharacterManager: Client ownership unclear for placeholder "${character.name}"; deferring to server delete`);
 		}
 
 		// Collect candidate server IDs — editor often has composite id while D1 uses name-userId
