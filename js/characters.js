@@ -493,12 +493,53 @@ class CharactersPage extends ListPageMultiSource {
 		];
 	}
 
-	_renderStats_doBuildJsonTab ({ent}) {
+	async _renderStats_doBuildJsonTab ({ent}) {
+		const isSummary = CharacterManager._isCharacterStub?.(ent)
+			?? (ent && !ent.class && !ent.race && !ent.background);
+
+		if (isSummary && ent?.id) {
+			this._pgContent.empty().html(`
+				<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+				<tr><td colspan="6" class="ve-text-center ve-p-3">
+					<i class="glyphicon glyphicon-refresh ve-spin"></i> Loading character JSON...
+				</td></tr>
+				<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+			`);
+
+			try {
+				const fullCharacter = await CharacterManager.ensureFullCharacter(ent.id);
+				if (!fullCharacter) {
+					this._pgContent.empty().html(`
+						<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+						<tr><td colspan="6" class="ve-text-center ve-p-3 text-danger">
+							Failed to load character JSON.
+							${!navigator.onLine ? " (You are offline - this character is not available)" : ""}
+						</td></tr>
+						<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+					`);
+					return;
+				}
+				await this._renderStats_doBuildJsonTab({ent: fullCharacter});
+				return;
+			} catch (error) {
+				console.warn(`Failed to load full character JSON for ${ent.id}:`, error);
+				this._pgContent.empty().html(`
+					<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+					<tr><td colspan="6" class="ve-text-center ve-p-3 text-danger">
+						Error loading character JSON: ${error.message || "Unknown error"}
+					</td></tr>
+					<tr><th class="ve-tbl-border" colspan="6"></th></tr>
+				`);
+				return;
+			}
+		}
+
+		const cleanEnt = DataUtil.cleanJson(MiscUtil.copyFast(ent));
 		const btnCopyJson = ee`<button class="ve-btn ve-btn-default ve-btn-xs" title="Copy JSON (SHIFT for Pretty)"><span class="glyphicon glyphicon-copy"></span></button>`
 			.onn("click", async evt => {
 				const json = evt.shiftKey
-					? JSON.stringify(ent, null, "\t")
-					: JSON.stringify(ent);
+					? JSON.stringify(cleanEnt, null, "\t")
+					: JSON.stringify(cleanEnt);
 				await MiscUtil.pCopyTextToClipboard(json);
 				JqueryUtil.showCopiedEffect(btnCopyJson);
 			});
@@ -516,7 +557,7 @@ class CharactersPage extends ListPageMultiSource {
 			.appends(btnCopyJson);
 		ee`<tr>
 			<td colspan="6" class="ve-py-0 ve-h-100 min-h-0">
-				<pre class="ve-py-0 ve-mb-0 ve-h-100 ve-w-100 resize-none"><code class="ve-h-100">${JSON.stringify(ent, null, 2).escapeQuotes()}</code></pre>
+				<pre class="ve-py-0 ve-mb-0 ve-h-100 ve-w-100 resize-none"><code class="ve-h-100">${JSON.stringify(cleanEnt, null, "\t").escapeQuotes()}</code></pre>
 			</td>
 		</tr>`.appendTo(this._pgContent);
 		this._pgContent.appends(Renderer.utils.getBorderTr());
