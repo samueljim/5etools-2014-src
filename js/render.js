@@ -9656,7 +9656,7 @@ Renderer.character = class {
 		renderStack.push(`
 			${Renderer.utils.getExcludedTr({entity: character, dataProp: "character", page: UrlUtil.PG_CHARACTERS})}
 			${Renderer.utils.getNameTr(character, {page: UrlUtil.PG_CHARACTERS})}
-			<tr><td colspan="6" class="pb-2 pt-0" data-character-name="${(character.name || "Unknown").replace(/[^a-zA-Z0-9]/g, "-")}">
+			<tr><td colspan="6" class="ve-pb-2 ve-pt-0 character-sheet" data-character-name="${(character.name || "Unknown").replace(/[^a-zA-Z0-9]/g, "-")}">
 		`);
 
 		// Character header info - more compact inline format
@@ -9676,18 +9676,18 @@ Renderer.character = class {
 		const backgroundLink = character.background ? `{@background ${character.background.name}|${character.background.source || "PHB"}}` : ptBackground;
 
 		// Inline character summary
-		const inlineSummary = `<p><em>Level ${ptLevel} ${raceLink} ${classLinks}, ${backgroundLink}, ${ptAlignment}</em></p>`;
+		const inlineSummary = `<p class="character-sheet__summary"><em>Level ${ptLevel} ${raceLink} ${classLinks}, ${backgroundLink}, ${ptAlignment}</em></p>`;
 		renderer.recursiveRender({type: "entries", entries: [inlineSummary]}, renderStack, {depth: 1});
 
 		const hasEditAccess = Renderer.character._hasSourceAccess(character.source);
 
-		// Combat Stats - Compact inline format
-		const combatStats = [];
+		// Combat Stats - compact chip list
+		const combatChips = [];
 
 		// Always show AC - calculate it if missing from character sheet
 		const acData = Renderer.character._getCharacterAC(character);
 		if (acData) {
-			combatStats.push(`<strong>AC</strong>: ${acData.ac}${acData.source ? ` (${acData.source})` : ""}`);
+			combatChips.push({label: "AC", value: `${acData.ac}${acData.source ? ` <span class="ve-muted">(${acData.source})</span>` : ""}`});
 		}
 
 		if (character.hp) {
@@ -9709,10 +9709,10 @@ Renderer.character = class {
 				const hpDisplay = `<span class="character-stat-display" data-stat-path="hp.current" data-character-id="${characterId}" data-current-value="${currentHp}" data-max-value="${maxHp}" title="Click to edit" style="cursor: pointer; border-bottom: 1px dashed #666;">${currentHp}</span>/<span>${maxHp}</span>`;
 
 				const tempHpDisplay = (typeof hp.temp === "number") ? ` (+<span class="character-stat-display" data-stat-path="hp.temp" data-character-id="${characterId}" data-current-value="${hp.temp}" title="Click to edit Temporary HP" style="cursor: pointer; border-bottom: 1px dashed #666;">${hp.temp}</span> temp)` : "";
-				combatStats.push(`<strong>HP</strong>: ${hpDisplay}${tempHpDisplay}`);
+				combatChips.push({label: "HP", value: `${hpDisplay}${tempHpDisplay}`});
 			} else {
 				// Render static HP display
-				combatStats.push(`<strong>HP</strong>: ${currentHp}/${maxHp}${(typeof hp.temp === "number") ? ` (+${hp.temp} temp)` : ""}`);
+				combatChips.push({label: "HP", value: `${currentHp}/${maxHp}${(typeof hp.temp === "number") ? ` (+${hp.temp} temp)` : ""}`});
 			}
 		}
 
@@ -9721,7 +9721,7 @@ Renderer.character = class {
 			Object.entries(character.speed).forEach(([type, value]) => {
 				speeds.push(`${type === "walk" ? "" : `${type} `}${value} ft.`);
 			});
-			combatStats.push(`<strong>Speed</strong>: ${speeds.join(", ")}`);
+			combatChips.push({label: "Speed", value: speeds.join(", ")});
 		}
 
 		// Add Initiative with dice rolling
@@ -9730,10 +9730,8 @@ Renderer.character = class {
 		const dexModValue = typeof dexMod === "number" ? dexMod : parseInt(dexMod) || 0;
 		const initMod = character.initiative || dexModValue;
 		const initStr = initMod >= 0 ? `+${initMod}` : `${initMod}`;
-		combatStats.push(`<strong>Initiative</strong>: {@dice 1d20${initStr}|${initStr}|Initiative}`);
+		combatChips.push({label: "Init", value: `{@dice 1d20${initStr}|${initStr}|Initiative}`});
 
-		// Additional Combat Info - Passive Perception inline
-		const additionalCombat = [];
 		const wisScore = character.wis || 10;
 		const wisMod = Parser.getAbilityModifier(wisScore);
 		const wisModValue = typeof wisMod === "number" ? wisMod : parseInt(wisMod) || 0;
@@ -9748,7 +9746,7 @@ Renderer.character = class {
 		}
 
 		const passivePerception = 10 + perceptionMod;
-		combatStats.push(`<strong>Passive Perception</strong>: ${passivePerception}`);
+		combatChips.push({label: "PP", value: `${passivePerception}`});
 
 		// Calculate and display proficiency bonus
 		let profBonus = character.proficiencyBonus;
@@ -9757,37 +9755,37 @@ Renderer.character = class {
 			profBonus = `+${Math.ceil(characterLevel / 4) + 1}`;
 		}
 		if (profBonus) {
-			combatStats.push(`<strong>Prof. Bonus</strong>: ${profBonus}`);
+			combatChips.push({label: "Prof", value: `${profBonus}`});
 		}
 
 		if (character.size) {
 			const sizeFull = Parser.sizeAbvToFull(character.size) || character.size;
-			combatStats.push(`<strong>Size</strong>: ${sizeFull}`);
+			combatChips.push({label: "Size", value: sizeFull});
 		}
 
 		if (character.age) {
-			combatStats.push(`<strong>Age</strong>: ${character.age}`);
+			combatChips.push({label: "Age", value: `${character.age}`});
 		}
 
 		if (character.senses) {
 			const sensesFull = Object.entries(character.senses)
 				.map(([type, value]) => `${value}`).filter(Boolean)
 				.join(", ");
-			combatStats.push(`<strong>Senses</strong>: ${sensesFull}`);
+			combatChips.push({label: "Senses", value: sensesFull});
 		}
 
 		if (character.resist) {
 			const sensesFull = Object.entries(character.resist)
 				.map(([type, value]) => `${value}`).filter(Boolean)
 				.join(", ");
-			combatStats.push(`<strong>Resistant</strong>: ${sensesFull}`);
+			combatChips.push({label: "Resist", value: sensesFull});
 		}
 
 		if (character.immune) {
 			const sensesFull = Object.entries(character.immune)
 				.map(([type, value]) => `${value}`).filter(Boolean)
 				.join(", ");
-			combatStats.push(`<strong>Immune</strong>: ${sensesFull}`);
+			combatChips.push({label: "Immune", value: sensesFull});
 		}
 
 		// Hit Dice Section - derive from class levels and store usage in classes
@@ -9845,14 +9843,11 @@ Renderer.character = class {
 				}
 
 				if (hasEditAccess && !isStatic && characterId) {
-					// For hit dice, we edit the available dice directly
-					// Store class information for proper updating
 					const classesData = classes.map(c => `${c.index}:${c.level}:${c.currentAvailable}`).join(",");
 					const clickableCount = `<span class="character-stat-display" data-stat-path="class.currentHitDice.${dieType}" data-character-id="${characterId}" data-current-value="${current}" data-max-value="${max}" data-classes-data="${classesData}" title="Click to edit ${dieType} hit dice available" style="cursor: pointer; border-bottom: 1px dashed #666;">${current}</span>`;
-					combatStats.push(`Hit Dice: ${clickableCount}/${max} {@dice 1${dieType}||${dieType} Hit Die}`);
+					combatChips.push({label: `HD ${dieType}`, value: `${clickableCount}/${max} {@dice 1${dieType}||${dieType} Hit Die}`});
 				} else {
-					// Static display
-					combatStats.push(`Hit Dice: ${current}/${max} {@dice 1${dieType}||${dieType} Hit Die}`);
+					combatChips.push({label: `HD ${dieType}`, value: `${current}/${max} {@dice 1${dieType}||${dieType} Hit Die}`});
 				}
 			});
 		}
@@ -9871,63 +9866,25 @@ Renderer.character = class {
 				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
 			}
 
-			let deathSaveDisplay;
 			if (hasEditAccess && !isStatic && characterId) {
-				// Editable death saves with click handlers
 				const successDisplay = `<span class="character-stat-display" data-stat-path="deathSaves.successes" data-character-id="${characterId}" data-current-value="${successes}" data-max-value="3" title="Click to edit death save successes" style="cursor: pointer; border-bottom: 1px dashed #666;">${successes}</span>`;
 				const failureDisplay = `<span class="character-stat-display" data-stat-path="deathSaves.failures" data-character-id="${characterId}" data-current-value="${failures}" data-max-value="3" title="Click to edit death save failures" style="cursor: pointer; border-bottom: 1px dashed #666;">${failures}</span>`;
-				combatStats.push(`<strong>Successes:</strong>: ${successDisplay}/3, <strong>Failures</strong>: ${failureDisplay}/3`);
+				combatChips.push({label: "Death", value: `✓ ${successDisplay}/3 · ✗ ${failureDisplay}/3`});
 			} else {
-				// Static display
-				combatStats.push(`<strong>Successes</strong>: ${successes}/3, <strong>Failures</strong>: ${failures}/3`);
+				combatChips.push({label: "Death", value: `✓ ${successes}/3 · ✗ ${failures}/3`});
 			}
 		}
 
-		// Combat Statistics Section
-		if (combatStats.length > 0) {
-			// Convert combat stats array to a 2-column table format
-			const tableRows = [];
-			for (let i = 0; i < combatStats.length; i += 2) {
-				const leftCell = combatStats[i] || "";
-				const rightCell = combatStats[i + 1] || "";
-				tableRows.push([leftCell, rightCell]);
-			}
-
-			const combatInfo = {
-				type: "entries",
-				name: "Combat Statistics",
-				entries: [
-					{
-						type: "table",
-						colLabels: ["", ""],
-						rows: tableRows,
-					},
-				],
-			};
-			renderer.recursiveRender(combatInfo, renderStack, {depth: 1});
-		}
-
-		// Ability Scores Section
+		// Ability Scores
 		const abilities = ["str", "dex", "con", "int", "wis", "cha"];
-		const abilitySection = {
-			type: "entries",
-			name: "Ability Scores",
-			entries: [
-				{
-					type: "table",
-					colLabels: abilities.map(ab => ab.toUpperCase()),
-					rows: [
-						abilities.map(ab => {
-							const score = character[ab] || 10;
-							const modifier = Parser.getAbilityModifier(score);
-							// Create clickable dice roll for ability checks
-							return `{@ability ${ab} ${score}}`;
-						}),
-					],
-				},
-			],
-		};
-		renderer.recursiveRender(abilitySection, renderStack, {depth: 1});
+		const abilityCellsHtml = abilities.map(ab => {
+			const score = character[ab] || 10;
+			return `<div class="character-ability"><div class="character-ability__abbr">${ab.toUpperCase()}</div><div class="character-ability__score">{@ability ${ab} ${score}}</div></div>`;
+		}).join("");
+
+		const combatChipsHtml = combatChips.map(chip => {
+			return `<div class="character-combat__chip"><span class="character-combat__label">${chip.label}</span><span class="character-combat__value">${chip.value}</span></div>`;
+		}).join("");
 
 		// Skills + Saving Throws — compact side-by-side layout
 		const allSkills = [
@@ -9957,26 +9914,35 @@ Renderer.character = class {
 			const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
 
 			const skillData = Renderer.character._getSkillProficiency(character, skill);
-			const { isProficient, bonus, expertise, jackOfAllTrades } = skillData;
+			const { isProficient: isSkillProf, bonus: skillBonus, expertise, jackOfAllTrades } = skillData;
 
-			const finalModifier = typeof bonus === "string" ? parseInt(bonus) || baseModValue : bonus;
+			const finalModifier = typeof skillBonus === "string" ? parseInt(skillBonus) || baseModValue : skillBonus;
 			const finalStr = finalModifier >= 0 ? `+${finalModifier}` : `${finalModifier}`;
 
-			let proficiencyType = "none";
-			if (expertise) proficiencyType = "expertise";
-			else if (jackOfAllTrades) proficiencyType = "jack";
-			else if (isProficient) proficiencyType = "proficient";
+			const displayName = isSkillProf || expertise || jackOfAllTrades
+				? `<strong>${skill.name}</strong>`
+				: skill.name;
 
-			const displayName = Renderer.character._formatSkillName(skill.name, isProficient, proficiencyType);
+			let profMarker = "";
+			if (expertise) {
+				profMarker = `<span class="character-compact-stat__prof" style="color: #d4af37;" title="Expertise (Double Proficiency)">★</span>`;
+			} else if (jackOfAllTrades) {
+				profMarker = `<span class="character-compact-stat__prof" title="Jack of All Trades (Half Proficiency)">◐</span>`;
+			} else if (isSkillProf) {
+				profMarker = `<span class="character-compact-stat__prof" title="Proficient">◉</span>`;
+			} else {
+				profMarker = `<span class="character-compact-stat__prof character-compact-stat__prof--empty" aria-hidden="true"></span>`;
+			}
+
 			const rollableModifier = `{@skillCheck ${skill.key} ${finalStr}}`;
 			const rowClass = [
 				"character-compact-stat__row",
 				expertise ? "character-compact-stat__row--expertise" : "",
-				isProficient && !expertise ? "character-compact-stat__row--proficient" : "",
+				isSkillProf && !expertise ? "character-compact-stat__row--proficient" : "",
 				jackOfAllTrades ? "character-compact-stat__row--jack" : "",
 			].filter(Boolean).join(" ");
 
-			return `<div class="${rowClass}"><span class="character-compact-stat__name">${displayName}</span><span class="character-compact-stat__ability ve-muted">${skill.ability.toUpperCase()}</span><span class="character-compact-stat__mod">${rollableModifier}</span></div>`;
+			return `<div class="${rowClass}"><span class="character-compact-stat__name">${displayName}</span>${profMarker}<span class="character-compact-stat__ability ve-muted">${skill.ability.toUpperCase()}</span><span class="character-compact-stat__mod">${rollableModifier}</span></div>`;
 		}).join("");
 
 		const saveRowsHtml = abilities.map(ab => {
@@ -9985,18 +9951,18 @@ Renderer.character = class {
 			const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
 
 			let finalModifier = baseModValue;
-			let isProficient = false;
+			let isProficientSave = false;
 
 			// Prioritize new system (saveProficiencies array)
 			if (character.saveProficiencies && Array.isArray(character.saveProficiencies)) {
-				isProficient = character.saveProficiencies.includes(ab);
-				if (isProficient) {
-					let profBonus = 0;
+				isProficientSave = character.saveProficiencies.includes(ab);
+				if (isProficientSave) {
+					let saveProfBonus = 0;
 					if (character.proficiencyBonus) {
 						const profBonusStr = character.proficiencyBonus.toString().replace("+", "");
-						profBonus = parseInt(profBonusStr) || 0;
+						saveProfBonus = parseInt(profBonusStr) || 0;
 					}
-					finalModifier = baseModValue + profBonus;
+					finalModifier = baseModValue + saveProfBonus;
 				} else {
 					finalModifier = baseModValue;
 				}
@@ -10005,40 +9971,42 @@ Renderer.character = class {
 			else if (character.save?.[ab] !== undefined) {
 				const oldSaveBonus = character.save[ab];
 				finalModifier = typeof oldSaveBonus === "string" ? parseInt(oldSaveBonus) || baseModValue : oldSaveBonus;
-				isProficient = true;
+				isProficientSave = true;
 			} else {
 				finalModifier = baseModValue;
-				isProficient = false;
+				isProficientSave = false;
 			}
 
 			const finalStr = finalModifier >= 0 ? `+${finalModifier}` : `${finalModifier}`;
-			const displayName = isProficient
-				? `<strong>${ab.toUpperCase()}</strong> ◉`
+			const displayName = isProficientSave
+				? `<strong>${ab.toUpperCase()}</strong>`
 				: ab.toUpperCase();
+			const profMarker = isProficientSave
+				? `<span class="character-compact-stat__prof" title="Proficient">◉</span>`
+				: `<span class="character-compact-stat__prof character-compact-stat__prof--empty" aria-hidden="true"></span>`;
 			const rowClass = [
 				"character-compact-stat__row",
-				isProficient ? "character-compact-stat__row--proficient" : "",
+				isProficientSave ? "character-compact-stat__row--proficient" : "",
 			].filter(Boolean).join(" ");
 
-			return `<div class="${rowClass}"><span class="character-compact-stat__name">${displayName}</span><span class="character-compact-stat__mod">{@savingThrow ${ab} ${finalStr}}</span></div>`;
+			return `<div class="${rowClass}"><span class="character-compact-stat__name">${displayName}</span>${profMarker}<span class="character-compact-stat__mod">{@savingThrow ${ab} ${finalStr}}</span></div>`;
 		}).join("");
 
-		const skillsSavesSection = {
-			type: "entries",
-			entries: [
-				`<div class="character-skills-saves">
-					<div class="character-skills-saves__col character-skills-saves__col--skills">
-						<div class="character-skills-saves__title">Skills</div>
-						<div class="character-skills">${skillRowsHtml}</div>
-					</div>
-					<div class="character-skills-saves__col character-skills-saves__col--saves">
-						<div class="character-skills-saves__title">Saving Throws</div>
-						<div class="character-saves">${saveRowsHtml}</div>
-					</div>
-				</div>`,
-			],
-		};
-		renderer.recursiveRender(skillsSavesSection, renderStack, {depth: 1});
+		const coreStatsHtml = `<div class="character-sheet__core">
+			<div class="character-abilities-grid">${abilityCellsHtml}</div>
+			${combatChips.length ? `<div class="character-combat">${combatChipsHtml}</div>` : ""}
+			<div class="character-skills-saves">
+				<div class="character-skills-saves__col character-skills-saves__col--skills">
+					<div class="character-skills-saves__title">Skills</div>
+					<div class="character-skills">${skillRowsHtml}</div>
+				</div>
+				<div class="character-skills-saves__col character-skills-saves__col--saves">
+					<div class="character-skills-saves__title">Saves</div>
+					<div class="character-saves">${saveRowsHtml}</div>
+				</div>
+			</div>
+		</div>`;
+		renderer.recursiveRender({type: "entries", entries: [coreStatsHtml]}, renderStack, {depth: 1});
 
 		// Actions - collapsible section
 		if (character.action?.length) {

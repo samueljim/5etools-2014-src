@@ -1,360 +1,140 @@
-/* Character Sheet Styling - Theme-aware for dark/light mode */
-.character-abilities {
-    margin: 10px 0;
-    padding: 8px;
-    background-color: var(--color-bg-light);
-    border-radius: 4px;
-    border-left: 3px solid var(--color-link);
-}
+/* Character Sheet — compact, responsive layout */
 
-/* Interactive character tracking elements */
-.character-input {
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-    padding: 2px 4px;
-    font-size: 0.9em;
-    background-color: var(--color-bg);
-    color: var(--color-text);
-    transition: border-color 0.2s;
-}
-
-.character-input:focus {
-    border-color: var(--color-link);
-    outline: none;
-}
-
-.character-hp-tracker {
-    display: inline-block;
-    margin: 5px 0;
-}
-
-.character-death-saves {
-    display: block;
-    margin: 8px 0;
-    padding: 5px;
-    background-color: var(--color-bg-light);
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-}
-
-.character-death-save {
-    margin: 0 2px;
-    transform: scale(1.1);
-}
-
-.character-death-save-success:checked {
-    accent-color: var(--color-success, #28a745);
-}
-
-.character-death-save-failure:checked {
-    accent-color: var(--color-danger, #dc3545);
-}
-
-.character-hit-dice {
-    display: inline-block;
-    margin: 0 5px;
-}
-
-.character-condition-tracker {
-    background-color: var(--color-bg-light);
-    border: 1px solid var(--color-border);
-    border-radius: 5px;
-    padding: 10px;
-    margin: 10px 0;
-}
-
-.character-condition-select {
-    padding: 2px 5px;
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-    font-size: 0.9em;
-    background-color: var(--color-bg);
-    color: var(--color-text);
-}
-
-.character-conditions-list {
-    min-height: 20px;
-}
-
-.character-condition-item {
-    display: inline-block;
-    background-color: var(--color-link);
-    color: var(--color-bg);
-    padding: 2px 8px;
-    margin: 2px;
-    border-radius: 12px;
-    font-size: 0.85em;
-    cursor: pointer;
-}
-
-.character-condition-item:hover {
-    background-color: var(--color-link-hover);
-}
-
-.character-condition-remove {
-    margin-left: 5px;
-    font-weight: bold;
-    color: rgba(255, 255, 255, 0.7);
-}
-
-.character-condition-remove:hover {
-    color: var(--color-bg);
-}
-
-/* Basic layout improvements */
-.character-section {
-    margin: 8px 0;
-}
-
-.character-section-title {
-    font-weight: bold;
-    margin-bottom: 4px;
-    color: var(--color-text);
-}
-
-/* Let 5etools native dice system handle all the rollable styling */
-
-/* Enhanced skill styling */
-.skill-item {
-    display: inline-block;
-    margin: 2px 3px;
-    padding: 2px 5px;
-    background-color: var(--color-bg-light);
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-    font-size: 0.85em;
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.skill-item:hover {
-    background-color: var(--color-bg-hover);
-    border-color: var(--color-link);
-    color: var(--color-link-hover);
-}
-
-/* Rollable elements styling */
-.rollable {
-    cursor: pointer;
-    padding: 1px 2px;
-    border-radius: 2px;
-    transition: all 0.2s ease;
-    color: var(--color-link);
-    text-decoration: none;
-}
-
-.rollable:hover {
-    background-color: var(--color-bg-hover);
-    text-decoration: underline;
-    color: var(--color-link-hover);
-}
-
-/* Enhanced list styling for character content */
-.ve-list-hang-notitle > li {
-    margin-bottom: 0.25rem;
-}
-
-/* Better spacing for character entries */
-.stats td {
-    vertical-align: top;
-}
-
-.stats .pb-2 {
-    padding-bottom: 0.5rem !important;
-}
-
-.stats .pt-0 {
-    padding-top: 0 !important;
-}
-
-.stats .mt-2 {
-    margin-top: 0.5rem !important;
-}
-
-/* Improve readability of character sections */
-.ve-list-hang > li > span:first-child {
-    font-weight: 600;
-    color: var(--color-link);
-}
-
-/* Style for inline ability scores */
-.character-abilities .ability-score strong {
-    color: var(--color-text);
-    font-weight: 600;
-    font-size: 0.85em;
-}
-
-/* Skill category styling */
-.stats p strong {
-    color: var(--color-link);
-    font-weight: 600;
-}
-
-/* Saving throw styling */
-.rollable + .rollable::before {
-    content: " | ";
-    color: var(--color-text-muted);
-    font-weight: normal;
-}
-
-/* Better organization for stats */
-.character-abilities p,
-.stats .ve-list-hang-notitle + p {
-    margin: 0.5rem 0;
-    line-height: 1.6;
-}
-
-/* Better mobile responsiveness */
-@media (width <= 768px) {
-    .ability-score {
-        display: block;
-        margin: 2px 0;
-        text-align: center;
-    }
-
-    .character-abilities {
-        margin: 8px 0;
-        padding: 6px;
-    }
-
-    .skill-item {
-        display: block;
-        margin: 2px 0;
-        text-align: center;
-    }
-}
-
-/* Rest management buttons */
-.character-rest-management button {
-    margin-right: 8px;
-    margin-bottom: 5px;
-}
-
-.character-short-rest {
-    background-color: var(--color-link);
-    border-color: var(--color-link);
-    color: var(--color-bg);
-}
-
-.character-long-rest {
-    background-color: var(--color-success, #28a745);
-    border-color: var(--color-success, #28a745);
-    color: var(--color-bg);
-}
-
-/* Condition effects styling */
-.condition-disadvantage {
-    color: var(--color-danger, #dc3545) !important;
-    position: relative;
-}
-
-.condition-disadvantage::after {
-    content: " (Disadvantage)";
-    font-size: 0.8em;
-    color: var(--color-danger, #dc3545);
-    font-weight: normal;
-}
-
-.condition-speed-zero::after {
-    content: " (Speed 0)";
-    font-size: 0.8em;
-    color: var(--color-warning, #ffc107);
-    font-weight: normal;
-}
-
-.condition-no-actions {
-    opacity: 0.6;
-    position: relative;
-}
-
-.condition-no-actions::before {
-    content: "⚠️ Cannot take actions";
-    display: block;
-    background: var(--color-danger, #dc3545);
-    color: var(--color-bg);
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 0.8em;
-    margin-bottom: 8px;
-    text-align: center;
-}
-
-/* Condition tracker item styling */
-.character-condition-item {
-    display: inline-block;
-    background: var(--color-bg-light);
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-    padding: 2px 6px;
-    margin: 2px;
-    cursor: pointer;
-    font-size: 0.9em;
-}
-
-.character-condition-item:hover {
-    background: var(--color-danger, #dc3545);
-    color: var(--color-bg);
-}
-
-.character-condition-remove {
-    margin-left: 4px;
-    font-weight: bold;
-}
-
-/* Compact responsive skills + saves layout */
-.character-skills-saves {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(6.75rem, auto);
-	gap: 0.75rem 1.5rem;
-	align-items: start;
-	width: 100%;
+.character-sheet {
+	font-size: 0.95em;
+	line-height: 1.3;
 	container-type: inline-size;
 }
 
-@container (max-width: 26rem) {
-	.character-skills-saves {
-		grid-template-columns: 1fr;
-	}
+.character-sheet__summary {
+	margin: 0 0 0.4rem !important;
+	line-height: 1.35;
+}
+
+.character-sheet__core {
+	display: flex;
+	flex-direction: column;
+	gap: 0.55rem;
+	margin: 0 0 0.65rem;
+}
+
+/* Ability score strip */
+.character-abilities-grid {
+	display: grid;
+	grid-template-columns: repeat(6, minmax(0, 1fr));
+	gap: 0.3rem;
+}
+
+.character-ability {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 0.1rem;
+	padding: 0.3rem 0.2rem;
+	border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
+	border-radius: 4px;
+	text-align: center;
+	min-width: 0;
+}
+
+.character-ability__abbr {
+	font-size: 0.7em;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	opacity: 0.75;
+	line-height: 1;
+}
+
+.character-ability__score {
+	font-size: 0.95em;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.15;
+}
+
+/* Combat chips */
+.character-combat {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.3rem 0.35rem;
+}
+
+.character-combat__chip {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 0.3rem;
+	padding: 0.15rem 0.45rem;
+	border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+	border-radius: 3px;
+	font-size: 0.88em;
+	line-height: 1.25;
+	max-width: 100%;
+}
+
+.character-combat__label {
+	font-weight: 700;
+	font-size: 0.78em;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+	opacity: 0.7;
+	white-space: nowrap;
+}
+
+.character-combat__value {
+	font-variant-numeric: tabular-nums;
+	min-width: 0;
+}
+
+/* Skills + saves */
+.character-skills-saves {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(7rem, auto);
+	gap: 0.5rem 1rem;
+	align-items: start;
+	width: 100%;
 }
 
 .character-skills-saves__title {
 	font-weight: 700;
-	font-size: 1.05em;
-	margin: 0 0 0.35rem;
-	padding-bottom: 0.15rem;
+	font-size: 0.82em;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	margin: 0 0 0.2rem;
+	padding-bottom: 0.1rem;
 	border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+	opacity: 0.85;
 }
 
 .character-skills {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
-	column-gap: 1rem;
+	grid-template-columns: repeat(auto-fit, minmax(9.75rem, 1fr));
+	column-gap: 0.75rem;
 	row-gap: 0;
 	width: 100%;
-	font-size: 0.92em;
-	line-height: 1.25;
+	font-size: 0.88em;
+	line-height: 1.2;
 }
 
 .character-saves {
 	display: grid;
 	grid-template-columns: 1fr;
 	row-gap: 0;
-	font-size: 0.92em;
-	line-height: 1.25;
-	min-width: 6.5rem;
+	font-size: 0.88em;
+	line-height: 1.2;
+	min-width: 6.75rem;
 }
 
 .character-compact-stat__row {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto auto;
+	grid-template-columns: minmax(0, 1fr) 1em auto auto;
 	align-items: baseline;
-	column-gap: 0.4rem;
-	padding: 0.12rem 0;
-	border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+	column-gap: 0.3rem;
+	padding: 0.08rem 0;
+	border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
 }
 
 .character-saves .character-compact-stat__row {
-	grid-template-columns: minmax(0, 1fr) auto;
+	grid-template-columns: minmax(0, 1fr) 1em auto;
 }
 
 .character-compact-stat__name {
@@ -364,40 +144,213 @@
 	white-space: nowrap;
 }
 
+.character-compact-stat__prof {
+	flex: none;
+	width: 1em;
+	text-align: center;
+	line-height: 1;
+	user-select: none;
+}
+
+.character-compact-stat__prof--empty {
+	visibility: hidden;
+}
+
 .character-compact-stat__ability {
-	font-size: 0.85em;
+	font-size: 0.8em;
 	letter-spacing: 0.02em;
 }
 
 .character-compact-stat__mod {
 	font-variant-numeric: tabular-nums;
 	text-align: right;
-	min-width: 2.25em;
+	min-width: 2em;
 }
 
-/* Legacy skills table styling */
-.skills-table th {
-    background: var(--color-bg-light);
-    border-bottom: 1px solid var(--color-border);
-    padding: 8px 6px;
-    font-weight: 600;
-    color: var(--color-text);
-    font-size: 0.9em;
+/* Tighten native 5etools section chrome inside the sheet */
+.character-sheet .ve-rd__b--named {
+	margin-top: 0.55rem;
 }
 
-.skills-table td {
-    padding: 4px 6px;
-    border-bottom: 1px solid var(--color-border);
-    vertical-align: middle;
+.character-sheet .ve-rd__h--2 {
+	margin: 0.15rem 0 0.25rem !important;
+	padding-bottom: 0.1rem;
+	font-size: 1.05em;
 }
 
-.skills-table .skill-proficient {
-    color: var(--color-success, #28a745);
-    font-weight: bold;
+.character-sheet .ve-rd__b--2 > p,
+.character-sheet .ve-rd__b--3 > p {
+	margin: 0.2rem 0;
 }
 
-.skills-table .skill-not-proficient {
-    color: var(--color-text-muted);
+.character-sheet .ve-rd__table {
+	margin: 0.15rem 0 0.35rem;
+}
+
+.character-sheet .ve-rd__table th,
+.character-sheet .ve-rd__table td {
+	padding: 0.15rem 0.35rem !important;
+}
+
+.character-sheet .ve-list-hang-notitle > li,
+.character-sheet .ve-list-hang > li {
+	margin-bottom: 0.15rem;
+}
+
+/* Narrow panels: stack abilities 3x2, stack skills/saves */
+@container (max-width: 28rem) {
+	.character-abilities-grid {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.character-skills-saves {
+		grid-template-columns: 1fr;
+	}
+}
+
+@container (max-width: 20rem) {
+	.character-abilities-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.character-skills {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* Interactive character tracking elements */
+.character-input {
+	border: 1px solid var(--color-border);
+	border-radius: 3px;
+	padding: 2px 4px;
+	font-size: 0.9em;
+	background-color: var(--color-bg);
+	color: var(--color-text);
+	transition: border-color 0.2s;
+}
+
+.character-input:focus {
+	border-color: var(--color-link);
+	outline: none;
+}
+
+.character-stat-display {
+	font-variant-numeric: tabular-nums;
+}
+
+.character-hp-tracker {
+	display: inline-block;
+	margin: 0;
+}
+
+.character-death-saves {
+	display: inline;
+	margin: 0;
+	padding: 0;
+	background: none;
+	border: none;
+}
+
+.character-hit-dice {
+	display: inline-block;
+	margin: 0 0.2rem;
+}
+
+.character-condition-tracker {
+	background-color: var(--color-bg-light);
+	border: 1px solid var(--color-border);
+	border-radius: 4px;
+	padding: 0.4rem 0.55rem;
+	margin: 0.35rem 0;
+}
+
+.character-condition-select {
+	padding: 2px 5px;
+	border: 1px solid var(--color-border);
+	border-radius: 3px;
+	font-size: 0.9em;
+	background-color: var(--color-bg);
+	color: var(--color-text);
+}
+
+.character-conditions-list {
+	min-height: 1.25rem;
+}
+
+.character-condition-item {
+	display: inline-block;
+	background: var(--color-bg-light);
+	border: 1px solid var(--color-border);
+	border-radius: 3px;
+	padding: 1px 5px;
+	margin: 1px;
+	cursor: pointer;
+	font-size: 0.85em;
+}
+
+.character-condition-item:hover {
+	background: var(--color-danger, #dc3545);
+	color: var(--color-bg);
+}
+
+.character-condition-remove {
+	margin-left: 3px;
+	font-weight: bold;
+}
+
+/* Rest management buttons */
+.character-rest-management button {
+	margin-right: 0.4rem;
+	margin-bottom: 0.25rem;
+}
+
+.character-short-rest {
+	background-color: var(--color-link);
+	border-color: var(--color-link);
+	color: var(--color-bg);
+}
+
+.character-long-rest {
+	background-color: var(--color-success, #28a745);
+	border-color: var(--color-success, #28a745);
+	color: var(--color-bg);
+}
+
+/* Condition effects styling */
+.condition-disadvantage {
+	color: var(--color-danger, #dc3545) !important;
+	position: relative;
+}
+
+.condition-disadvantage::after {
+	content: " (Disadvantage)";
+	font-size: 0.8em;
+	color: var(--color-danger, #dc3545);
+	font-weight: normal;
+}
+
+.condition-speed-zero::after {
+	content: " (Speed 0)";
+	font-size: 0.8em;
+	color: var(--color-warning, #ffc107);
+	font-weight: normal;
+}
+
+.condition-no-actions {
+	opacity: 0.6;
+	position: relative;
+}
+
+.condition-no-actions::before {
+	content: "Cannot take actions";
+	display: block;
+	background: var(--color-danger, #dc3545);
+	color: var(--color-bg);
+	padding: 2px 8px;
+	border-radius: 3px;
+	font-size: 0.8em;
+	margin-bottom: 0.35rem;
+	text-align: center;
 }
 
 /* Class-specific resource styling */
@@ -409,34 +362,45 @@
 .character-input[class*="character-action-"],
 .character-input[class*="character-channel-"],
 .character-input[class*="character-wild-"] {
-    background: var(--color-bg);
-    border: 1px solid var(--color-border);
-    color: var(--color-text);
-    border-radius: 3px;
-    padding: 2px 4px;
-    margin: 0 2px;
+	background: var(--color-bg);
+	border: 1px solid var(--color-border);
+	color: var(--color-text);
+	border-radius: 3px;
+	padding: 2px 4px;
+	margin: 0 2px;
 }
 
-/* Class features section styling */
 .character-class-features {
-    background: var(--color-bg-light);
-    border: 1px solid var(--color-border);
-    border-radius: 3px;
-    padding: 8px 12px;
-    margin: 4px 0;
+	background: var(--color-bg-light);
+	border: 1px solid var(--color-border);
+	border-radius: 3px;
+	padding: 0.4rem 0.6rem;
+	margin: 0.25rem 0;
 }
 
-/* Proficiency icon styling */
-td[title*="Expertise"] {
-    color: var(--color-warning, #ffc107) !important;
-    font-weight: bold;
+/* Rollable elements */
+.rollable {
+	cursor: pointer;
+	padding: 0 1px;
+	border-radius: 2px;
+	transition: background-color 0.15s ease, color 0.15s ease;
+	color: var(--color-link);
+	text-decoration: none;
 }
 
-td[title*="Jack of All Trades"] {
-    color: var(--color-info, #17a2b8) !important;
+.rollable:hover {
+	background-color: var(--color-bg-hover);
+	text-decoration: underline;
+	color: var(--color-link-hover);
 }
 
-td[title*="Proficient"]:not([title*="Not"]) {
-    color: var(--color-success, #28a745) !important;
-    font-weight: bold;
+/* Fallback when container queries unavailable */
+@media (max-width: 480px) {
+	.character-abilities-grid {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.character-skills-saves {
+		grid-template-columns: 1fr;
+	}
 }
