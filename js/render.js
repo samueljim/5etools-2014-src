@@ -9720,6 +9720,110 @@ Renderer.character = class {
 			combatChipsHero.push({label: "AC", value: `<span>${acData.ac}</span>${acSource}`, emphasis: true});
 		}
 
+		// Hit Dice — next to AC
+		if (character.class?.length) {
+			// Map class names to their hit die types
+			const classHitDice = {
+				"barbarian": "d12",
+				"fighter": "d10",
+				"paladin": "d10",
+				"ranger": "d10",
+				"bard": "d8",
+				"cleric": "d8",
+				"druid": "d8",
+				"monk": "d8",
+				"rogue": "d8",
+				"warlock": "d8",
+				"sorcerer": "d6",
+				"wizard": "d6",
+			};
+
+			// Group classes by hit die type for display
+			const hitDiceByType = {};
+
+			character.class.forEach((cls, classIndex) => {
+				const className = cls.name.toLowerCase();
+				const level = cls.level || 1;
+				const hitDie = classHitDice[className] || "d8"; // Default to d8 if unknown class
+
+				// Initialize hit dice usage if not present - use simple currentHitDice property
+				if (cls.currentHitDice === undefined) {
+					cls.currentHitDice = level; // Default to max (all available)
+				}
+
+				if (!hitDiceByType[hitDie]) {
+					hitDiceByType[hitDie] = { max: 0, current: 0, classes: [] };
+				}
+
+				hitDiceByType[hitDie].max += level;
+				hitDiceByType[hitDie].current += cls.currentHitDice;
+				// Store actual current hit dice (available), not used
+				hitDiceByType[hitDie].classes.push({ index: classIndex, level: level, currentAvailable: cls.currentHitDice });
+			});
+
+			// Display hit dice by type
+			Object.entries(hitDiceByType).forEach(([dieType, data]) => {
+				const { max, current, classes } = data;
+
+				let characterId = null;
+				if (hasEditAccess && !isStatic) {
+					characterId = globalThis.CharacterManager
+						? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
+						: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
+					if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
+					globalThis._CHARACTER_EDIT_DATA[characterId] = character;
+				}
+
+				const dieRoll = `{@dice 1${dieType}||${dieType}}`;
+				if (hasEditAccess && !isStatic && characterId) {
+					const classesData = classes.map(c => `${c.index}:${c.level}:${c.currentAvailable}`).join(",");
+					const clickableCount = `<span class="character-stat-display" data-stat-path="class.currentHitDice.${dieType}" data-character-id="${characterId}" data-current-value="${current}" data-max-value="${max}" data-classes-data="${classesData}" title="Click to edit ${dieType} hit dice available">${current}</span>`;
+					combatChipsHero.push({
+						label: "Hit Dice",
+						value: `${clickableCount}<span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span><span class="character-combat__temp">${dieRoll}</span>`,
+						emphasis: true,
+					});
+				} else {
+					combatChipsHero.push({
+						label: "Hit Dice",
+						value: `<span>${current}</span><span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span><span class="character-combat__temp">${dieRoll}</span>`,
+						emphasis: true,
+					});
+				}
+			});
+		}
+
+		// Death Saves — next to AC / Hit Dice
+		if (character.deathSaves) {
+			const successes = character.deathSaves.successes || 0;
+			const failures = character.deathSaves.failures || 0;
+			let characterId = null;
+
+			if (hasEditAccess && !isStatic) {
+				characterId = globalThis.CharacterManager
+					? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
+					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
+				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
+				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
+			}
+
+			let successPt;
+			let failurePt;
+			if (hasEditAccess && !isStatic && characterId) {
+				successPt = `<span class="character-stat-display" data-stat-path="deathSaves.successes" data-character-id="${characterId}" data-current-value="${successes}" data-max-value="3" title="Click to edit death save successes">${successes}</span>`;
+				failurePt = `<span class="character-stat-display" data-stat-path="deathSaves.failures" data-character-id="${characterId}" data-current-value="${failures}" data-max-value="3" title="Click to edit death save failures">${failures}</span>`;
+			} else {
+				successPt = `<span>${successes}</span>`;
+				failurePt = `<span>${failures}</span>`;
+			}
+
+			combatChipsHero.push({
+				label: "Death",
+				value: `<span class="character-combat__death"><span class="character-combat__death-ok" title="Successes">✓ ${successPt}<span class="character-combat__sep">/</span><span class="character-combat__max">3</span></span><span class="character-combat__death-fail" title="Failures">✗ ${failurePt}<span class="character-combat__sep">/</span><span class="character-combat__max">3</span></span></span>`,
+				emphasis: true,
+			});
+		}
+
 		if (character.speed) {
 			const speedEntries = Object.entries(character.speed);
 			const walkEntry = speedEntries.find(([type]) => type === "walk");
@@ -9818,110 +9922,6 @@ Renderer.character = class {
 			combatChipsSecondary.push({label: "Immune", value: immuneFull, title: immuneFull, truncate: true});
 		}
 
-		// Hit Dice — hero boxes matching HP/AC
-		if (character.class?.length) {
-			// Map class names to their hit die types
-			const classHitDice = {
-				"barbarian": "d12",
-				"fighter": "d10",
-				"paladin": "d10",
-				"ranger": "d10",
-				"bard": "d8",
-				"cleric": "d8",
-				"druid": "d8",
-				"monk": "d8",
-				"rogue": "d8",
-				"warlock": "d8",
-				"sorcerer": "d6",
-				"wizard": "d6",
-			};
-
-			// Group classes by hit die type for display
-			const hitDiceByType = {};
-
-			character.class.forEach((cls, classIndex) => {
-				const className = cls.name.toLowerCase();
-				const level = cls.level || 1;
-				const hitDie = classHitDice[className] || "d8"; // Default to d8 if unknown class
-
-				// Initialize hit dice usage if not present - use simple currentHitDice property
-				if (cls.currentHitDice === undefined) {
-					cls.currentHitDice = level; // Default to max (all available)
-				}
-
-				if (!hitDiceByType[hitDie]) {
-					hitDiceByType[hitDie] = { max: 0, current: 0, classes: [] };
-				}
-
-				hitDiceByType[hitDie].max += level;
-				hitDiceByType[hitDie].current += cls.currentHitDice;
-				// Store actual current hit dice (available), not used
-				hitDiceByType[hitDie].classes.push({ index: classIndex, level: level, currentAvailable: cls.currentHitDice });
-			});
-
-			// Display hit dice by type
-			Object.entries(hitDiceByType).forEach(([dieType, data]) => {
-				const { max, current, classes } = data;
-
-				let characterId = null;
-				if (hasEditAccess && !isStatic) {
-					characterId = globalThis.CharacterManager
-						? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-						: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
-					if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-					globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-				}
-
-				const dieRoll = `{@dice 1${dieType}||${dieType}}`;
-				if (hasEditAccess && !isStatic && characterId) {
-					const classesData = classes.map(c => `${c.index}:${c.level}:${c.currentAvailable}`).join(",");
-					const clickableCount = `<span class="character-stat-display" data-stat-path="class.currentHitDice.${dieType}" data-character-id="${characterId}" data-current-value="${current}" data-max-value="${max}" data-classes-data="${classesData}" title="Click to edit ${dieType} hit dice available">${current}</span>`;
-					combatChipsHero.push({
-						label: "Hit Dice",
-						value: `${clickableCount}<span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span><span class="character-combat__temp">${dieRoll}</span>`,
-						emphasis: true,
-					});
-				} else {
-					combatChipsHero.push({
-						label: "Hit Dice",
-						value: `<span>${current}</span><span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span><span class="character-combat__temp">${dieRoll}</span>`,
-						emphasis: true,
-					});
-				}
-			});
-		}
-
-		// Death Saves — hero box matching HP/AC
-		if (character.deathSaves) {
-			const successes = character.deathSaves.successes || 0;
-			const failures = character.deathSaves.failures || 0;
-			let characterId = null;
-
-			if (hasEditAccess && !isStatic) {
-				characterId = globalThis.CharacterManager
-					? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
-				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-			}
-
-			let successPt;
-			let failurePt;
-			if (hasEditAccess && !isStatic && characterId) {
-				successPt = `<span class="character-stat-display" data-stat-path="deathSaves.successes" data-character-id="${characterId}" data-current-value="${successes}" data-max-value="3" title="Click to edit death save successes">${successes}</span>`;
-				failurePt = `<span class="character-stat-display" data-stat-path="deathSaves.failures" data-character-id="${characterId}" data-current-value="${failures}" data-max-value="3" title="Click to edit death save failures">${failures}</span>`;
-			} else {
-				successPt = `<span>${successes}</span>`;
-				failurePt = `<span>${failures}</span>`;
-			}
-
-			combatChipsHero.push({
-				label: "Death",
-				value: `<span class="character-combat__death"><span class="character-combat__death-ok" title="Successes">✓ ${successPt}<span class="character-combat__sep">/</span><span class="character-combat__max">3</span></span><span class="character-combat__death-fail" title="Failures">✗ ${failurePt}<span class="character-combat__sep">/</span><span class="character-combat__max">3</span></span></span>`,
-				emphasis: true,
-			});
-		}
-
 		// Ability Scores
 		const abilities = ["str", "dex", "con", "int", "wis", "cha"];
 		const abilityCellsHtml = abilities.map(ab => {
@@ -9973,7 +9973,7 @@ Renderer.character = class {
 			{key: "survival", name: "Survival", ability: "wis"},
 		];
 
-		const skillRowsHtml = allSkills.map(skill => {
+		const getSkillRowHtml = (skill) => {
 			const abilityScore = character[skill.ability] || 10;
 			const baseModifier = Parser.getAbilityModifier(abilityScore);
 			const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
@@ -9988,15 +9988,15 @@ Renderer.character = class {
 				? `<strong>${skill.name}</strong>`
 				: skill.name;
 
-			let profMarker = "";
+			let profCell = "";
 			if (expertise) {
-				profMarker = `<span class="character-compact-stat__prof character-compact-stat__prof--expertise" title="Expertise (Double Proficiency)">★</span>`;
+				profCell = `<td class="character-compact-stat__prof character-compact-stat__prof--expertise" title="Expertise (Double Proficiency)">★</td>`;
 			} else if (jackOfAllTrades) {
-				profMarker = `<span class="character-compact-stat__prof" title="Jack of All Trades (Half Proficiency)">◐</span>`;
+				profCell = `<td class="character-compact-stat__prof" title="Jack of All Trades (Half Proficiency)">◐</td>`;
 			} else if (isSkillProf) {
-				profMarker = `<span class="character-compact-stat__prof" title="Proficient">◉</span>`;
+				profCell = `<td class="character-compact-stat__prof" title="Proficient">◉</td>`;
 			} else {
-				profMarker = `<span class="character-compact-stat__prof character-compact-stat__prof--empty" aria-hidden="true"></span>`;
+				profCell = `<td class="character-compact-stat__prof character-compact-stat__prof--empty" aria-hidden="true"></td>`;
 			}
 
 			const rollableModifier = `{@skillCheck ${skill.key} ${finalStr}}`;
@@ -10007,8 +10007,14 @@ Renderer.character = class {
 				jackOfAllTrades ? "character-compact-stat__row--jack" : "",
 			].filter(Boolean).join(" ");
 
-			return `<div class="${rowClass}"><span class="character-compact-stat__name">${displayName}</span>${profMarker}<span class="character-compact-stat__ability ve-muted">${skill.ability.toUpperCase()}</span><span class="character-compact-stat__mod">${rollableModifier}</span></div>`;
-		}).join("");
+			return `<tr class="${rowClass}">${profCell}<td class="character-compact-stat__mod">${rollableModifier}</td><td class="character-compact-stat__ability ve-muted">${skill.ability.toUpperCase()}</td><td class="character-compact-stat__name">${displayName}</td></tr>`;
+		};
+
+		const skillMid = Math.ceil(allSkills.length / 2);
+		const skillTablesHtml = [
+			allSkills.slice(0, skillMid),
+			allSkills.slice(skillMid),
+		].map(colSkills => `<table class="character-compact-stat"><tbody>${colSkills.map(getSkillRowHtml).join("")}</tbody></table>`).join("");
 
 		const saveRowsHtml = abilities.map(ab => {
 			const score = character[ab] || 10;
@@ -10046,15 +10052,15 @@ Renderer.character = class {
 			const displayName = isProficientSave
 				? `<strong>${ab.toUpperCase()}</strong>`
 				: ab.toUpperCase();
-			const profMarker = isProficientSave
-				? `<span class="character-compact-stat__prof" title="Proficient">◉</span>`
-				: `<span class="character-compact-stat__prof character-compact-stat__prof--empty" aria-hidden="true"></span>`;
+			const profCell = isProficientSave
+				? `<td class="character-compact-stat__prof" title="Proficient">◉</td>`
+				: `<td class="character-compact-stat__prof character-compact-stat__prof--empty" aria-hidden="true"></td>`;
 			const rowClass = [
 				"character-compact-stat__row",
 				isProficientSave ? "character-compact-stat__row--proficient" : "",
 			].filter(Boolean).join(" ");
 
-			return `<div class="${rowClass}"><span class="character-compact-stat__name">${displayName}</span>${profMarker}<span class="character-compact-stat__mod">{@savingThrow ${ab} ${finalStr}}</span></div>`;
+			return `<tr class="${rowClass}">${profCell}<td class="character-compact-stat__mod">{@savingThrow ${ab} ${finalStr}}</td><td class="character-compact-stat__name">${displayName}</td></tr>`;
 		}).join("");
 
 		const coreStatsHtml = `<div class="character-sheet__core">
@@ -10063,11 +10069,11 @@ Renderer.character = class {
 			<div class="character-skills-saves">
 				<div class="character-skills-saves__col character-skills-saves__col--skills">
 					<div class="character-skills-saves__title">Skills</div>
-					<div class="character-skills">${skillRowsHtml}</div>
+					<div class="character-skills">${skillTablesHtml}</div>
 				</div>
 				<div class="character-skills-saves__col character-skills-saves__col--saves">
 					<div class="character-skills-saves__title">Saves</div>
-					<div class="character-saves">${saveRowsHtml}</div>
+					<table class="character-saves character-compact-stat"><tbody>${saveRowsHtml}</tbody></table>
 				</div>
 			</div>
 		</div>`;
@@ -10301,15 +10307,105 @@ Renderer.character = class {
 		// 	renderer.recursiveRender(fluffInfo, renderStack, {depth: 1});
 		// }
 
-		// Character entries
-		if (character.entries) {
-			renderer.recursiveRender({entries: character.entries}, renderStack, {depth: 1});
+		// Character entries — render Items sections as compact tables
+		if (character.entries?.length) {
+			const remainingEntries = [];
+			character.entries.forEach(entry => {
+				const isItemsSection = entry
+					&& typeof entry === "object"
+					&& entry.entries
+					&& /^(items|equipment)$/i.test(entry.name || "");
+
+				if (!isItemsSection) {
+					remainingEntries.push(entry);
+					return;
+				}
+
+				// Already rendered structured equipment — skip duplicate Items dump
+				if (character.equipment?.length) return;
+
+				const rows = Renderer.character._getItemRowsFromEntries(entry.entries);
+				if (!rows.length) {
+					remainingEntries.push(entry);
+					return;
+				}
+
+				const hasNotes = rows.some(r => r.notes);
+				const headCells = hasNotes
+					? `<th class="character-data-table__qty">Qty</th><th class="character-data-table__name">Item</th><th class="character-data-table__notes">Notes</th>`
+					: `<th class="character-data-table__qty">Qty</th><th class="character-data-table__name">Item</th>`;
+				const rowsHtml = rows.map(row => {
+					const notesCell = hasNotes
+						? `<td class="character-data-table__notes">${row.notes ? row.notes : "\u2014"}</td>`
+						: "";
+					return `<tr><td class="character-data-table__qty">${row.qty}</td><td class="character-data-table__name">${row.name}</td>${notesCell}</tr>`;
+				}).join("");
+
+				renderer.recursiveRender({
+					type: "entries",
+					name: entry.name || "Items",
+					entries: [`<table class="character-data-table character-equipment"><thead><tr>${headCells}</tr></thead><tbody>${rowsHtml}</tbody></table>`],
+				}, renderStack, {depth: 1});
+			});
+
+			if (remainingEntries.length) {
+				renderer.recursiveRender({entries: remainingEntries}, renderStack, {depth: 1});
+			}
 		}
 
 		renderStack.push(`</td></tr>`);
 		renderStack.push(Renderer.utils.getPageTr(character));
 
 		return renderStack.join("");
+	}
+
+	static _getItemRowsFromEntries (entries) {
+		const rows = [];
+
+		const attachNotes = (notes) => {
+			if (!rows.length || !notes) return;
+			const last = rows[rows.length - 1];
+			last.notes = last.notes ? `${last.notes} ${notes}` : notes;
+		};
+
+		(entries || []).forEach(entry => {
+			if (entry == null) return;
+
+			if (typeof entry !== "string") {
+				rows.push({qty: "\u2014", name: Renderer.get().render(entry), notes: ""});
+				return;
+			}
+
+			const text = entry.trim();
+			if (!text) return;
+
+			// Parenthetical lines attach to the previous item
+			if (/^\(.*\)$/.test(text)) {
+				attachNotes(text);
+				return;
+			}
+
+			// "2 {@item Dagger|PHB}" or "2 Daggers"
+			const qtyMatch = text.match(/^(\d+)\s+(.+)$/);
+			let qty = "\u2014";
+			let name = text;
+			if (qtyMatch && (qtyMatch[2].includes("{@") || /^[A-Z{@]/.test(qtyMatch[2]))) {
+				qty = qtyMatch[1];
+				name = qtyMatch[2];
+			}
+
+			// Trailing " - notes"
+			let notes = "";
+			const dashSplit = name.match(/^(.*?)(?:\s+-\s+)(.+)$/);
+			if (dashSplit && (dashSplit[1].includes("{@") || dashSplit[1].length < 80)) {
+				name = dashSplit[1].trim();
+				notes = dashSplit[2].trim();
+			}
+
+			rows.push({qty, name, notes});
+		});
+
+		return rows;
 	}
 
 	static _setupCharacterNotePersistence () {

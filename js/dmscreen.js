@@ -277,7 +277,7 @@ class Board {
 			}
 		});
 
-		// Also refresh any exiled character panels
+		// Also refresh any exiled character panels (skip saved error stubs)
 		this.exiledPanels.forEach(panel => {
 			if (panel.type === PANEL_TYP_STATS && panel.contentMeta && panel.contentMeta.p === UrlUtil.PG_CHARACTERS) {
 				const {p: page, s: source, u: hash} = panel.contentMeta;
@@ -824,6 +824,7 @@ class Board {
 		// re-exile
 		const toReExile = (saveSlotStateActive.ex || [])
 			.filter(Boolean)
+			.filter(saved => saved.t !== PANEL_TYP_ERROR) // drop stale load-error stubs
 			.reverse();
 		for (const saved of toReExile) {
 			const panel = await Panel.fromSavedState(this, saved);

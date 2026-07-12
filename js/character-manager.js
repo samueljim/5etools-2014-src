@@ -2854,8 +2854,8 @@ class CharacterManager {
 
 		// For now, just log the conflict
 		if (typeof JqueryUtil !== "undefined" && JqueryUtil.showCopiedEffect) {
-			// Show a temporary notification if the utility is available
-			JqueryUtil.showCopiedEffect($("body"), `Conflict detected for ${localCharacter.name}`, "warning");
+			// Show a temporary notification if the utility is available (no jQuery — DM screen is vanilla)
+			JqueryUtil.showCopiedEffect(document.body, {text: `Conflict detected for ${localCharacter.name}`});
 		}
 	}
 
