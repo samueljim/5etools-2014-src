@@ -9929,7 +9929,7 @@ Renderer.character = class {
 		};
 		renderer.recursiveRender(abilitySection, renderStack, {depth: 1});
 
-		// Skills Section (show all skills, highlight proficient ones)
+		// Skills Section — compact responsive grid (2 columns when space allows)
 		const allSkills = [
 			{key: "acrobatics", name: "Acrobatics", ability: "dex"},
 			{key: "animal_handling", name: "Animal Handling", ability: "wis"},
@@ -9951,54 +9951,39 @@ Renderer.character = class {
 			{key: "survival", name: "Survival", ability: "wis"},
 		];
 
+		const skillRowsHtml = allSkills.map(skill => {
+			const abilityScore = character[skill.ability] || 10;
+			const baseModifier = Parser.getAbilityModifier(abilityScore);
+			const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
+
+			const skillData = Renderer.character._getSkillProficiency(character, skill);
+			const { isProficient, bonus, expertise, jackOfAllTrades } = skillData;
+
+			const finalModifier = typeof bonus === "string" ? parseInt(bonus) || baseModValue : bonus;
+			const finalStr = finalModifier >= 0 ? `+${finalModifier}` : `${finalModifier}`;
+
+			let proficiencyType = "none";
+			if (expertise) proficiencyType = "expertise";
+			else if (jackOfAllTrades) proficiencyType = "jack";
+			else if (isProficient) proficiencyType = "proficient";
+
+			const displayName = Renderer.character._formatSkillName(skill.name, isProficient, proficiencyType);
+			const rollableModifier = `{@skillCheck ${skill.key} ${finalStr}}`;
+			const rowClass = [
+				"character-skills__row",
+				expertise ? "character-skills__row--expertise" : "",
+				isProficient && !expertise ? "character-skills__row--proficient" : "",
+				jackOfAllTrades ? "character-skills__row--jack" : "",
+			].filter(Boolean).join(" ");
+
+			return `<div class="${rowClass}"><span class="character-skills__name">${displayName}</span><span class="character-skills__ability ve-muted">${skill.ability.toUpperCase()}</span><span class="character-skills__mod">${rollableModifier}</span></div>`;
+		}).join("");
+
 		const skillsSection = {
 			type: "entries",
 			name: "Skills",
 			entries: [
-				{
-					type: "table",
-					colLabels: ["Skill", "Ability", "Modifier"],
-					rows: allSkills.map(skill => {
-						const abilityScore = character[skill.ability] || 10;
-						const baseModifier = Parser.getAbilityModifier(abilityScore);
-						const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
-
-						// Get enhanced skill proficiency information including class bonuses
-						const skillData = Renderer.character._getSkillProficiency(character, skill);
-						const { isProficient, bonus, expertise, jackOfAllTrades } = skillData;
-
-						// Parse the final modifier from the bonus string
-						const finalModifier = typeof bonus === "string" ? parseInt(bonus) || baseModValue : bonus;
-						const finalStr = finalModifier >= 0 ? `+${finalModifier}` : `${finalModifier}`;
-
-						// Create clickable dice roll with enhanced proficiency information in tooltip
-						let rollTooltip = skill.name;
-						if (expertise) {
-							rollTooltip = `${skill.name} (Expertise - Double Proficiency)`;
-						} else if (jackOfAllTrades) {
-							rollTooltip = `${skill.name} (Jack of All Trades - Half Proficiency)`;
-						} else if (isProficient) {
-							rollTooltip = `${skill.name} (Proficient)`;
-						}
-
-						const rollableModifier = `{@skillCheck ${skill.key} ${finalStr}}`;
-
-						// Format skill name with visual proficiency indicator
-						let proficiencyType = "none";
-						if (expertise) proficiencyType = "expertise";
-						else if (jackOfAllTrades) proficiencyType = "jack";
-						else if (isProficient) proficiencyType = "proficient";
-
-						const displayName = Renderer.character._formatSkillName(skill.name, isProficient, proficiencyType);
-
-						return [
-							displayName,
-							skill.ability.toUpperCase(),
-							rollableModifier,
-						];
-					}),
-					style: "table--skills-compact",
-				},
+				`<div class="character-skills">${skillRowsHtml}</div>`,
 			],
 		};
 		renderer.recursiveRender(skillsSection, renderStack, {depth: 1});
