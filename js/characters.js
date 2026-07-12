@@ -83,11 +83,6 @@ class CharactersPage extends ListPageMultiSource {
 			propLoader: "character", // Required by ListPageMultiSource, but we override loading
 
 			pFnGetFluff: Renderer.character.pGetFluff.bind(Renderer.character),
-
-			bookViewOptions: {
-				namePlural: "characters",
-				pageTitle: "Characters Book View",
-			},
 		});
 	}
 
