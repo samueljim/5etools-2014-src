@@ -42,18 +42,17 @@ class CharactersSublistManager extends SublistManager {
 			character._fLevel || 0,
 		];
 
-		const $ele = $(`<div class="lst__row lst__row--sublist ve-flex-col">
-				<a href="#${UrlUtil.autoEncodeHash(character)}" class="lst__row-border lst__row-inner">
-					${CharactersSublistManager._getRowCellsHtml({values: cellsText})}
-				</a>
-			</div>
-		`)
-			.contextmenu(evt => this._handleSublistItemContextMenu(evt, listItem))
-			.click(evt => this._listSub.doSelect(listItem, evt));
+		const ele = ee`<div class="ve-lst__row ve-lst__row--sublist ve-flex-col">
+			<a href="#${UrlUtil.autoEncodeHash(character)}" class="ve-lst__row-border ve-lst__row-inner">
+				${this.constructor._getRowCellsHtml({values: cellsText})}
+			</a>
+		</div>`
+			.onn("contextmenu", evt => this._handleSublistItemContextMenu(evt, listItem))
+			.onn("click", evt => this._listSub.doSelect(listItem, evt));
 
 		const listItem = new ListItem(
 			hash,
-			$ele,
+			ele,
 			character.name,
 			{
 				hash,
@@ -116,7 +115,7 @@ class CharactersPage extends ListPageMultiSource {
 		this._pageFilter.mutateAndAddToFilters(character, isExcluded);
 
 		const eleLi = document.createElement("div");
-		eleLi.className = `lst__row ve-flex-col ${isExcluded ? "lst__row--blocklisted" : ""}`;
+		eleLi.className = `ve-lst__row ve-flex-col ${isExcluded ? "ve-lst__row--blocklisted" : ""}`;
 
 		const hash = UrlUtil.autoEncodeHash(character);
 		const source = Parser.sourceJsonToAbv(character.source || "");
@@ -125,12 +124,12 @@ class CharactersPage extends ListPageMultiSource {
 		const classText = character._fClass || "Unknown";
 		const level = character._fLevel || 1;
 
-		eleLi.innerHTML = `<a href="#${hash}" class="lst__row-border lst__row-inner">
-			<span class="bold ve-col-4-2 pl-0">${character.name}</span>
+		eleLi.innerHTML = `<a href="#${hash}" class="ve-lst__row-border ve-lst__row-inner">
+			<span class="ve-bold ve-col-4-2 ve-pl-0">${character.name}</span>
 			<span class="ve-col-1-7">${raceText}</span>
 			<span class="ve-col-4-1">${classText}</span>
-			<span class="ve-col-1-7 ">${level}</span>
-			<span class="ve-col-1 ${Parser.sourceJsonToSourceClassname(character.source || "")} pr-0" title="${Parser.sourceJsonToFull(character.source || "")}">${source}</span>
+			<span class="ve-col-1-7">${level}</span>
+			<span class="ve-col-1 ${Parser.sourceJsonToSourceClassname(character.source || "")} ve-pr-0" title="${Parser.sourceJsonToFull(character.source || "")}">${source}</span>
 		</a>`;
 
 		const listItem = new ListItem(
@@ -493,42 +492,32 @@ class CharactersPage extends ListPageMultiSource {
 	}
 
 	_renderStats_doBuildJsonTab ({ent}) {
-		const $btnCopyJson = $(`<button class="ve-btn ve-btn-default ve-btn-xs" title="Copy JSON (SHIFT for Pretty)"><span class="glyphicon glyphicon-copy"></span></button>`)
-			.click(async evt => {
+		const btnCopyJson = ee`<button class="ve-btn ve-btn-default ve-btn-xs" title="Copy JSON (SHIFT for Pretty)"><span class="glyphicon glyphicon-copy"></span></button>`
+			.onn("click", async evt => {
 				const json = evt.shiftKey
 					? JSON.stringify(ent, null, "\t")
 					: JSON.stringify(ent);
 				await MiscUtil.pCopyTextToClipboard(json);
-				JqueryUtil.showCopiedEffect($btnCopyJson);
+				JqueryUtil.showCopiedEffect(btnCopyJson);
 			});
 
-		this._$pgContent.empty().append(`
-			<tr><th class="ve-tbl-border" colspan="6"></th></tr>
-			<tr>
-				<td colspan="6" class="py-0">
-					<div class="ve-flex-v-center no-shrink pt-2">
-						<div class="ve-btn-group">
-							${$btnCopyJson[0].outerHTML}
-						</div>
-					</div>
-				</td>
-			</tr>
-			<tr>
-				<td colspan="6" class="py-0 h-100 min-h-0">
-					<pre class="py-0 mb-0 h-100 w-100 resize-none"><code class="h-100">${JSON.stringify(ent, null, 2).escapeQuotes()}</code></pre>
-				</td>
-			</tr>
-			<tr><th class="ve-tbl-border" colspan="6"></th></tr>
-		`);
-
-		// Re-bind the button click handler since we replaced the HTML
-		this._$pgContent.find("button").click(async evt => {
-			const json = evt.shiftKey
-				? JSON.stringify(ent, null, "\t")
-				: JSON.stringify(ent);
-			await MiscUtil.pCopyTextToClipboard(json);
-			JqueryUtil.showCopiedEffect($(evt.target));
-		});
+		this._pgContent.empty();
+		this._pgContent.appends(Renderer.utils.getBorderTr());
+		ee`<tr>
+			<td colspan="6" class="ve-py-0">
+				<div class="ve-flex-v-center ve-no-shrink ve-pt-2">
+					<div class="ve-btn-group"></div>
+				</div>
+			</td>
+		</tr>`.appendTo(this._pgContent)
+			.find(".ve-btn-group")
+			.appends(btnCopyJson);
+		ee`<tr>
+			<td colspan="6" class="ve-py-0 ve-h-100 min-h-0">
+				<pre class="ve-py-0 ve-mb-0 ve-h-100 ve-w-100 resize-none"><code class="ve-h-100">${JSON.stringify(ent, null, 2).escapeQuotes()}</code></pre>
+			</td>
+		</tr>`.appendTo(this._pgContent);
+		this._pgContent.appends(Renderer.utils.getBorderTr());
 	}
 
 	async _renderStats_doBuildStatsTab ({ent}) {
@@ -537,10 +526,10 @@ class CharactersPage extends ListPageMultiSource {
 
 		if (isSummary) {
 			// Show loading state while we fetch the full character
-			this._$pgContent.empty().html(`
+			this._pgContent.empty().html(`
 				<tr><th class="ve-tbl-border" colspan="6"></th></tr>
-				<tr><td colspan="6" class="ve-text-center p-3">
-					<i class="fas fa-spinner fa-spin"></i> Loading character details...
+				<tr><td colspan="6" class="ve-text-center ve-p-3">
+					<i class="glyphicon glyphicon-refresh ve-spin"></i> Loading character details...
 				</td></tr>
 				<tr><th class="ve-tbl-border" colspan="6"></th></tr>
 			`);
@@ -549,10 +538,10 @@ class CharactersPage extends ListPageMultiSource {
 				// Lazy load the full character
 				const fullCharacter = await CharacterManager.ensureFullCharacter(ent.id);
 				if (!fullCharacter) {
-					this._$pgContent.empty().html(`
+					this._pgContent.empty().html(`
 						<tr><th class="ve-tbl-border" colspan="6"></th></tr>
-						<tr><td colspan="6" class="ve-text-center p-3 text-danger">
-							<i class="fas fa-exclamation-triangle"></i> Failed to load character details.
+						<tr><td colspan="6" class="ve-text-center ve-p-3 text-danger">
+							Failed to load character details.
 							${!navigator.onLine ? " (You are offline - this character is not available)" : ""}
 						</td></tr>
 						<tr><th class="ve-tbl-border" colspan="6"></th></tr>
@@ -565,10 +554,10 @@ class CharactersPage extends ListPageMultiSource {
 				return;
 			} catch (error) {
 				console.warn(`Failed to load full character ${ent.id}:`, error);
-				this._$pgContent.empty().html(`
+				this._pgContent.empty().html(`
 					<tr><th class="ve-tbl-border" colspan="6"></th></tr>
-					<tr><td colspan="6" class="ve-text-center p-3 text-danger">
-						<i class="fas fa-exclamation-triangle"></i> Error loading character: ${error.message || "Unknown error"}
+					<tr><td colspan="6" class="ve-text-center ve-p-3 text-danger">
+						Error loading character: ${error.message || "Unknown error"}
 					</td></tr>
 					<tr><th class="ve-tbl-border" colspan="6"></th></tr>
 				`);
@@ -576,20 +565,13 @@ class CharactersPage extends ListPageMultiSource {
 			}
 		}
 
-		// We have a full character - render it
+		// We have a full character - render it (compact renderer already returns full table rows)
 		const fn = Renderer.hover.getFnRenderCompact(UrlUtil.PG_CHARACTERS);
-		const renderedContent = fn(ent);
-
-		// Clear and populate the existing table directly
-		this._$pgContent.empty().html(`
-			<tr><th class="ve-tbl-border" colspan="6"></th></tr>
-			<tr><td colspan="6">${renderedContent}</td></tr>
-			<tr><th class="ve-tbl-border" colspan="6"></th></tr>
-		`);
+		this._pgContent.empty().html(fn(ent));
 
 		// Bind listeners for interactive elements
 		const fnBind = Renderer.hover.getFnBindListenersCompact(UrlUtil.PG_CHARACTERS);
-		if (fnBind) fnBind(ent, this._$pgContent[0]);
+		if (fnBind) fnBind(ent, this._pgContent);
 
 		// Show Edit button and store current character
 		this._currentCharacter = ent;
