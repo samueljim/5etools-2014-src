@@ -3572,6 +3572,15 @@ class CharacterManager {
 				// Re-add the canonical copy after purge
 				this.addOrUpdateCharacter(characterData, false);
 
+				// Purge/remove clears `_CHARACTER_EDIT_DATA`; restore so inline edits keep working
+				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
+				const compositeId = this._generateCompositeId(characterData.name, characterData.source);
+				globalThis._CHARACTER_EDIT_DATA[compositeId] = characterData;
+				if (resolvedId) globalThis._CHARACTER_EDIT_DATA[resolvedId] = characterData;
+				if (previousId && previousId !== resolvedId && previousId !== compositeId) {
+					delete globalThis._CHARACTER_EDIT_DATA[previousId];
+				}
+
 				// Update blob cache with the fresh blob info from save result
 				if (saveResult.blob) {
 					this._blobCache.set(resolvedId, {
@@ -3823,13 +3832,10 @@ class CharacterManager {
 			const parsedValue = this._parseStatValue(newValue);
 			this._setNestedProperty(character, statPath, parsedValue);
 
-			// Save to server first
+			// Save to server first (also restores `_CHARACTER_EDIT_DATA` after purge)
 			const success = await this.saveCharacter(character, true);
 
-			if (success) {
-				// Only update local caches if server save succeeded
-				this.updateCharacterQuickEdit(characterId, { [this._getTopLevelProperty(statPath)]: this._getNestedProperty(character, this._getTopLevelProperty(statPath)) });
-			} else {
+			if (!success) {
 				// Revert local changes if server update failed
 				console.warn("CharacterManager: Server update failed, reverting local changes");
 				await this.ensureFullCharacter(characterId, { forceNetwork: true });

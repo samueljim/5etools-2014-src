@@ -10350,6 +10350,26 @@ Renderer.character = class {
 	static _bindCharacterSheetListeners (ele) {
 		const root = e_({ele});
 
+		const resolveEditableCharacter = (characterId) => {
+			let character = globalThis._CHARACTER_EDIT_DATA?.[characterId];
+			if (character) return character;
+
+			if (!globalThis.CharacterManager) return null;
+
+			character = globalThis.CharacterManager.getCharacterById(characterId)
+				|| [...(globalThis.CharacterManager._characters?.values?.() || [])]
+					.find(c => c && globalThis.CharacterManager._generateCompositeId(c.name, c.source) === characterId)
+				|| null;
+
+			if (character) {
+				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
+				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
+				if (character.id) globalThis._CHARACTER_EDIT_DATA[character.id] = character;
+			}
+
+			return character;
+		};
+
 		// Click-to-edit functionality for character stats
 		root.onn("click", (e) => {
 			const display = e.target.closest?.(".character-stat-display");
@@ -10361,12 +10381,8 @@ Renderer.character = class {
 			const currentValue = eleDisplay.attr("data-current-value");
 			const classesData = eleDisplay.attr("data-classes-data"); // For hit dice
 
-			// Get character data from global registry
-			if (!globalThis._CHARACTER_EDIT_DATA || !globalThis._CHARACTER_EDIT_DATA[characterId]) {
-				return; // Skip if character data not found
-			}
-
-			const character = globalThis._CHARACTER_EDIT_DATA[characterId];
+			const character = resolveEditableCharacter(characterId);
+			if (!character) return;
 
 			if (!Renderer.character._hasSourceAccess(character.source)) {
 				return; // Skip if no edit access
@@ -10387,13 +10403,16 @@ Renderer.character = class {
 
 			// Replace display with input
 			display.replaceWith(ipt);
-			ipt.focus();
-			ipt.select();
+			ipt.focuse();
+			ipt.selecte();
 
+			let isFinishing = false;
 			const doFinish = async (evt) => {
+				if (isFinishing) return;
 				if (evt.type === "keydown" && evt.key !== "Enter" && evt.key !== "Escape") {
 					return;
 				}
+				isFinishing = true;
 
 				const newValue = evt.key === "Escape" ? currentValue : ipt.val();
 
@@ -10401,10 +10420,10 @@ Renderer.character = class {
 				const eleNewDisplay = ee`<span class="character-stat-display" data-stat-path="${statPath}" data-character-id="${characterId}" data-current-value="${newValue}" ${maxValue ? `data-max-value="${maxValue}"` : ""} ${classesData ? `data-classes-data="${classesData.qq()}"` : ""} title="Click to edit" style="cursor: pointer; border-bottom: 1px dashed #666;">${newValue}</span>`;
 
 				// Replace input with display
-				ipt.replaceWith(eleNewDisplay);
+				if (ipt.isConnected) ipt.replaceWith(eleNewDisplay);
 
 				// Update server if value changed and not escaped
-				if (evt.key !== "Escape" && newValue !== currentValue) {
+				if (evt.key !== "Escape" && String(newValue) !== String(currentValue)) {
 					try {
 						// Handle hit dice updates specially
 						if (statPath.startsWith("class.currentHitDice.") && classesData) {

@@ -246,6 +246,29 @@ class CharactersPage extends ListPageMultiSource {
 			// Defensive: remove falsy entries
 			characters = (characters || []).filter(c => c);
 
+			// Always refresh the currently displayed character when it changes,
+			// even if the listener payload contains the full character list.
+			if (this._currentCharacter) {
+				const currentId = this._currentCharacter.id
+					|| CharacterManager._generateCompositeId(this._currentCharacter.name, this._currentCharacter.source);
+				const updatedChar = characters.find(c => {
+					const id = c.id || CharacterManager._generateCompositeId(c.name, c.source);
+					return id === currentId
+						|| (c.name === this._currentCharacter.name && (c.source || "") === (this._currentCharacter.source || ""));
+				});
+
+				if (updatedChar && updatedChar !== this._currentCharacter) {
+					this._currentCharacter = updatedChar;
+
+					if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
+					const editId = CharacterManager._generateCompositeId(updatedChar.name, updatedChar.source);
+					globalThis._CHARACTER_EDIT_DATA[editId] = updatedChar;
+					if (updatedChar.id) globalThis._CHARACTER_EDIT_DATA[updatedChar.id] = updatedChar;
+
+					this._renderStats_doBuildStatsTab({ent: updatedChar});
+				}
+			}
+
 			// Be intelligent about when to update the list
 			// Only update if:
 			// 1. List is empty (initial load)
@@ -257,22 +280,6 @@ class CharactersPage extends ListPageMultiSource {
 				|| characters.length > 1;
 
 			if (!shouldUpdateList) {
-				// Still handle individual character display updates
-				if (this._currentCharacter && characters.length === 1) {
-					const updatedChar = characters[0];
-					const currentId = CharacterManager._generateCompositeId(this._currentCharacter.name, this._currentCharacter.source);
-					const updatedId = CharacterManager._generateCompositeId(updatedChar.name, updatedChar.source);
-
-					if (currentId === updatedId) {
-						this._currentCharacter = updatedChar;
-
-						if (globalThis._CHARACTER_EDIT_DATA) {
-							globalThis._CHARACTER_EDIT_DATA[currentId] = updatedChar;
-						}
-
-						this._renderStats_doBuildStatsTab({ent: updatedChar});
-					}
-				}
 				return;
 			}
 
