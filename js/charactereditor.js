@@ -3083,10 +3083,11 @@ class CharacterEditorPage {
 			return {};
 		}
 
+		// Keys must match character.spells.levels ("1"…"9"), not "level1" etc.
 		const spellSlots = {};
 		for (let i = 0; i < slots.length; i++) {
 			if (slots[i] > 0) {
-				spellSlots[`level${i + 1}`] = slots[i];
+				spellSlots[String(i + 1)] = slots[i];
 			}
 		}
 
@@ -16352,26 +16353,40 @@ class CharacterEditorPage {
 		if (!character.spells.levels) return;
 
 		// Calculate expected spell slots based on class levels
-		let expectedSlots = {};
+		const expectedSlots = {};
 		for (const classEntry of spellcastingClasses) {
+			// Skip non-spellcasting Fighter/Rogue (third-caster only with subclass)
+			if ((classEntry.name === "Fighter" || classEntry.name === "Rogue") && !this.isThirdCasterClass(classEntry)) {
+				continue;
+			}
+
 			const progression = this.getSpellcastingProgression(classEntry.name);
 			const slots = this.calculateSpellSlots(classEntry.level, progression);
 
 			for (const [level, count] of Object.entries(slots)) {
-				expectedSlots[level] = (expectedSlots[level] || 0) + count;
+				const levelKey = String(level).replace(/^level/i, "");
+				expectedSlots[levelKey] = (expectedSlots[levelKey] || 0) + count;
 			}
 		}
 
-		// Check actual vs expected
+		// Check actual vs expected for levels present on the character
 		for (const [level, spellLevel] of Object.entries(character.spells.levels)) {
+			if (level === "0") continue;
 			const actualSlots = spellLevel.maxSlots || 0;
 			const expected = expectedSlots[level] || 0;
 
 			if (actualSlots > expected) {
 				results.warnings.push(`Too many level ${level} spell slots: ${actualSlots} (expected: ${expected})`);
-			} else if (actualSlots < expected && level !== "0") {
+			} else if (actualSlots < expected) {
 				results.warnings.push(`Too few level ${level} spell slots: ${actualSlots} (expected: ${expected})`);
 			}
+		}
+
+		// Also flag missing expected slot levels
+		for (const [level, expected] of Object.entries(expectedSlots)) {
+			if (!expected) continue;
+			if (character.spells.levels[level]) continue;
+			results.warnings.push(`Too few level ${level} spell slots: 0 (expected: ${expected})`);
 		}
 	}
 
