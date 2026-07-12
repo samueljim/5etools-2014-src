@@ -9929,7 +9929,7 @@ Renderer.character = class {
 		};
 		renderer.recursiveRender(abilitySection, renderStack, {depth: 1});
 
-		// Skills Section — compact responsive grid (2 columns when space allows)
+		// Skills + Saving Throws — compact side-by-side layout
 		const allSkills = [
 			{key: "acrobatics", name: "Acrobatics", ability: "dex"},
 			{key: "animal_handling", name: "Animal Handling", ability: "wis"},
@@ -9970,79 +9970,75 @@ Renderer.character = class {
 			const displayName = Renderer.character._formatSkillName(skill.name, isProficient, proficiencyType);
 			const rollableModifier = `{@skillCheck ${skill.key} ${finalStr}}`;
 			const rowClass = [
-				"character-skills__row",
-				expertise ? "character-skills__row--expertise" : "",
-				isProficient && !expertise ? "character-skills__row--proficient" : "",
-				jackOfAllTrades ? "character-skills__row--jack" : "",
+				"character-compact-stat__row",
+				expertise ? "character-compact-stat__row--expertise" : "",
+				isProficient && !expertise ? "character-compact-stat__row--proficient" : "",
+				jackOfAllTrades ? "character-compact-stat__row--jack" : "",
 			].filter(Boolean).join(" ");
 
-			return `<div class="${rowClass}"><span class="character-skills__name">${displayName}</span><span class="character-skills__ability ve-muted">${skill.ability.toUpperCase()}</span><span class="character-skills__mod">${rollableModifier}</span></div>`;
+			return `<div class="${rowClass}"><span class="character-compact-stat__name">${displayName}</span><span class="character-compact-stat__ability ve-muted">${skill.ability.toUpperCase()}</span><span class="character-compact-stat__mod">${rollableModifier}</span></div>`;
 		}).join("");
 
-		const skillsSection = {
+		const saveRowsHtml = abilities.map(ab => {
+			const score = character[ab] || 10;
+			const baseModifier = Parser.getAbilityModifier(score);
+			const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
+
+			let finalModifier = baseModValue;
+			let isProficient = false;
+
+			// Prioritize new system (saveProficiencies array)
+			if (character.saveProficiencies && Array.isArray(character.saveProficiencies)) {
+				isProficient = character.saveProficiencies.includes(ab);
+				if (isProficient) {
+					let profBonus = 0;
+					if (character.proficiencyBonus) {
+						const profBonusStr = character.proficiencyBonus.toString().replace("+", "");
+						profBonus = parseInt(profBonusStr) || 0;
+					}
+					finalModifier = baseModValue + profBonus;
+				} else {
+					finalModifier = baseModValue;
+				}
+			}
+			// Fallback to old system (pre-calculated bonuses in character.save)
+			else if (character.save?.[ab] !== undefined) {
+				const oldSaveBonus = character.save[ab];
+				finalModifier = typeof oldSaveBonus === "string" ? parseInt(oldSaveBonus) || baseModValue : oldSaveBonus;
+				isProficient = true;
+			} else {
+				finalModifier = baseModValue;
+				isProficient = false;
+			}
+
+			const finalStr = finalModifier >= 0 ? `+${finalModifier}` : `${finalModifier}`;
+			const displayName = isProficient
+				? `<strong>${ab.toUpperCase()}</strong> ◉`
+				: ab.toUpperCase();
+			const rowClass = [
+				"character-compact-stat__row",
+				isProficient ? "character-compact-stat__row--proficient" : "",
+			].filter(Boolean).join(" ");
+
+			return `<div class="${rowClass}"><span class="character-compact-stat__name">${displayName}</span><span class="character-compact-stat__mod">{@savingThrow ${ab} ${finalStr}}</span></div>`;
+		}).join("");
+
+		const skillsSavesSection = {
 			type: "entries",
-			name: "Skills",
 			entries: [
-				`<div class="character-skills">${skillRowsHtml}</div>`,
+				`<div class="character-skills-saves">
+					<div class="character-skills-saves__col character-skills-saves__col--skills">
+						<div class="character-skills-saves__title">Skills</div>
+						<div class="character-skills">${skillRowsHtml}</div>
+					</div>
+					<div class="character-skills-saves__col character-skills-saves__col--saves">
+						<div class="character-skills-saves__title">Saving Throws</div>
+						<div class="character-saves">${saveRowsHtml}</div>
+					</div>
+				</div>`,
 			],
 		};
-		renderer.recursiveRender(skillsSection, renderStack, {depth: 1});
-
-		// Saving Throws Section
-		const savingThrowsSection = {
-			type: "entries",
-			name: "Saving Throws",
-			entries: [
-				{
-					type: "table",
-					colLabels: abilities.map(ab => ab.toUpperCase()),
-					rows: [
-						abilities.map(ab => {
-							const score = character[ab] || 10;
-							const baseModifier = Parser.getAbilityModifier(score);
-							const baseModValue = typeof baseModifier === "number" ? baseModifier : parseInt(baseModifier) || 0;
-
-							let finalModifier = baseModValue;
-							let isProficient = false;
-
-							// Prioritize new system (saveProficiencies array)
-							if (character.saveProficiencies && Array.isArray(character.saveProficiencies)) {
-								isProficient = character.saveProficiencies.includes(ab);
-								if (isProficient) {
-									// Get proficiency bonus from character
-									let profBonus = 0;
-									if (character.proficiencyBonus) {
-										const profBonusStr = character.proficiencyBonus.toString().replace("+", "");
-										profBonus = parseInt(profBonusStr) || 0;
-									}
-									finalModifier = baseModValue + profBonus;
-								} else {
-									// Not proficient - just use ability modifier
-									finalModifier = baseModValue;
-								}
-							}
-							// Fallback to old system (pre-calculated bonuses in character.save)
-							else if (character.save?.[ab] !== undefined) {
-								const oldSaveBonus = character.save[ab];
-								finalModifier = typeof oldSaveBonus === "string" ? parseInt(oldSaveBonus) || baseModValue : oldSaveBonus;
-								isProficient = true;
-							}
-							// No save system - just use ability modifier
-							else {
-								finalModifier = baseModValue;
-								isProficient = false;
-							}
-
-							const finalStr = finalModifier >= 0 ? `+${finalModifier}` : `${finalModifier}`;
-							const proficiencyIndicator = isProficient ? " ◉" : "";
-							// Create clickable dice roll for saving throws
-							return `{@savingThrow ${ab} ${finalStr}}${proficiencyIndicator}`;
-						}),
-					],
-				},
-			],
-		};
-		renderer.recursiveRender(savingThrowsSection, renderStack, {depth: 1});
+		renderer.recursiveRender(skillsSavesSection, renderStack, {depth: 1});
 
 		// Actions - collapsible section
 		if (character.action?.length) {
