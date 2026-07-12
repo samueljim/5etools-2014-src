@@ -16,6 +16,8 @@
 	flex-direction: column;
 	gap: 0.55rem;
 	margin: 0 0 0.65rem;
+	padding-bottom: 0.55rem;
+	border-bottom: 1px solid color-mix(in srgb, currentColor 16%, transparent);
 }
 
 /* Ability score strip */
@@ -52,8 +54,15 @@
 	line-height: 1.15;
 }
 
-/* Combat chips */
+/* Combat chips — primary (glance) + secondary (detail) */
 .character-combat {
+	display: flex;
+	flex-direction: column;
+	gap: 0.3rem;
+}
+
+.character-combat__primary,
+.character-combat__secondary {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0.3rem 0.35rem;
@@ -69,6 +78,14 @@
 	font-size: 0.88em;
 	line-height: 1.25;
 	max-width: 100%;
+	min-width: 0;
+}
+
+.character-combat__secondary .character-combat__chip {
+	font-size: 0.8em;
+	padding: 0.1rem 0.4rem;
+	border-color: color-mix(in srgb, currentColor 10%, transparent);
+	opacity: 0.92;
 }
 
 .character-combat__label {
@@ -78,11 +95,19 @@
 	text-transform: uppercase;
 	opacity: 0.7;
 	white-space: nowrap;
+	flex: none;
 }
 
 .character-combat__value {
 	font-variant-numeric: tabular-nums;
 	min-width: 0;
+}
+
+.character-combat__value--truncate {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 12rem;
 }
 
 /* Skills + saves */
@@ -107,7 +132,7 @@
 
 .character-skills {
 	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(9.75rem, 1fr));
+	grid-template-columns: repeat(2, minmax(0, 1fr));
 	column-gap: 0.75rem;
 	row-gap: 0;
 	width: 100%;
@@ -129,19 +154,41 @@
 	grid-template-columns: minmax(0, 1fr) 1em auto auto;
 	align-items: baseline;
 	column-gap: 0.3rem;
-	padding: 0.08rem 0;
+	padding: 0.08rem 0 0.08rem 0.25rem;
 	border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+	border-left: 2px solid transparent;
 }
 
 .character-saves .character-compact-stat__row {
 	grid-template-columns: minmax(0, 1fr) 1em auto;
 }
 
+.character-compact-stat__row--proficient {
+	border-left-color: color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.character-compact-stat__row--expertise {
+	border-left-color: color-mix(in srgb, #d4af37 75%, currentColor);
+}
+
+.character-compact-stat__row--jack {
+	border-left-color: color-mix(in srgb, currentColor 22%, transparent);
+	opacity: 0.9;
+}
+
+.character-compact-stat__row--jack .character-compact-stat__name {
+	font-style: italic;
+}
+
 .character-compact-stat__name {
 	min-width: 0;
 	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	display: -webkit-box;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	white-space: normal;
+	word-break: break-word;
 }
 
 .character-compact-stat__prof {
@@ -154,6 +201,10 @@
 
 .character-compact-stat__prof--empty {
 	visibility: hidden;
+}
+
+.character-compact-stat__prof--expertise {
+	color: color-mix(in srgb, #d4af37 85%, currentColor);
 }
 
 .character-compact-stat__ability {
@@ -216,6 +267,10 @@
 	.character-skills {
 		grid-template-columns: 1fr;
 	}
+
+	.character-combat__value--truncate {
+		max-width: 8rem;
+	}
 }
 
 /* Interactive character tracking elements */
@@ -236,6 +291,13 @@
 
 .character-stat-display {
 	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+	border-bottom: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.character-stat-display:hover {
+	border-bottom-color: var(--color-link, currentColor);
+	color: var(--color-link);
 }
 
 .character-hp-tracker {
@@ -401,6 +463,10 @@
 	}
 
 	.character-skills-saves {
+		grid-template-columns: 1fr;
+	}
+
+	.character-skills {
 		grid-template-columns: 1fr;
 	}
 }
