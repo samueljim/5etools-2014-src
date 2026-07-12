@@ -1257,6 +1257,7 @@ class ListPage {
 
 	_pOnLoad_initVisibleItemsDisplay () {
 		const outVisibleResults = es(`.ve-lst__wrp-search-visible`);
+		if (!outVisibleResults) return;
 		this._list.on("updated", () => outVisibleResults.html(`${this._list.visibleItems.length}/${this._list.items.length}`));
 	}
 

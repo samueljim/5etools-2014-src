@@ -10010,11 +10010,9 @@ Renderer.character = class {
 			return `<tr class="${rowClass}">${profCell}<td class="character-compact-stat__mod">${rollableModifier}</td><td class="character-compact-stat__ability ve-muted">${skill.ability.toUpperCase()}</td><td class="character-compact-stat__name">${displayName}</td></tr>`;
 		};
 
-		const skillMid = Math.ceil(allSkills.length / 2);
-		const skillTablesHtml = [
-			allSkills.slice(0, skillMid),
-			allSkills.slice(skillMid),
-		].map(colSkills => `<table class="character-compact-stat"><tbody>${colSkills.map(getSkillRowHtml).join("")}</tbody></table>`).join("");
+		const skillTablesHtml = allSkills
+			.map(skill => `<table class="character-compact-stat"><tbody>${getSkillRowHtml(skill)}</tbody></table>`)
+			.join("");
 
 		const saveRowsHtml = abilities.map(ab => {
 			const score = character[ab] || 10;

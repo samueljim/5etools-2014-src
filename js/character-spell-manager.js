@@ -155,16 +155,16 @@ function createCharacterSpellManager () {
 			<div class="view-col-group h-100 mh-0">
 				<div class="view-col-wrapper">
 					<div class="view-col ve-flex-7" id="listcontainer">
-						<div class="lst__form-top" id="filter-search-group">
-							<div class="w-100 relative">
-								<input type="search" id="lst__search" autocomplete="off" autocapitalize="off" spellcheck="false" class="search form-control lst__search lst__search--no-border-h">
-								<div id="lst__search-glass" class="lst__wrp-search-glass no-events ve-flex-vh-center"><span class="glyphicon glyphicon-search"></span></div>
-								<div class="lst__wrp-search-visible no-events ve-flex-vh-center"></div>
+						<div class="ve-lst__form-top" id="filter-search-group">
+							<div class="ve-w-100 ve-relative">
+								<input type="search" id="lst__search" autocomplete="off" autocapitalize="off" spellcheck="false" class="search ve-form-control ve-lst__search ve-lst__search--no-border-h">
+								<div id="lst__search-glass" class="ve-lst__wrp-search-glass ve-no-events ve-flex-vh-center"><span class="glyphicon glyphicon-search"></span></div>
+								<div class="ve-lst__wrp-search-visible ve-no-events ve-flex-vh-center"></div>
 							</div>
 							<button type="button" class="ve-btn ve-btn-default" id="reset">Reset</button>
 						</div>
 
-						<div id="filtertools" class="input-group input-group--bottom ve-flex no-shrink">
+						<div id="filtertools" class="ve-input-group ve-input-group--bottom ve-flex ve-no-shrink">
 							<button type="button" class="ve-col-2-9 sort ve-btn ve-btn-default ve-btn-xs" data-sort="name">Name</button>
 							<button type="button" class="ve-col-1-5 sort ve-btn ve-btn-default ve-btn-xs" data-sort="level">Level</button>
 							<button type="button" class="ve-col-1-7 sort ve-btn ve-btn-default ve-btn-xs" data-sort="time">Time</button>
@@ -556,18 +556,20 @@ function createCharacterSpellManager () {
 			}
 
 			// Consolidated handler for list updates: update counts, run fallback if needed, and optional debug logging
-			const $outVisibleResults = $modal.find(`.lst__wrp-search-visible`);
+			const $outVisibleResults = $modal.find(`.ve-lst__wrp-search-visible`);
 			this._list.on("updated", () => {
 				try {
 					this._updateSelectedCount();
 					const $lc = $listContainer;
 					const vis = this._list.visibleItems.length;
-					const domCount = $lc.find(".lst__Row, .lst__row").length; // allow slightly flexible class naming
+					const domCount = $lc.find(".ve-lst__row, .lst__row").length; // allow slightly flexible class naming
 					if (vis > 0 && domCount === 0) {
 						console.warn(`⚠️ List updated but DOM empty (visible ${vis}). Running fallback.`);
 						this._fallbackToDirectDOM($listContainer);
 					}
-					$outVisibleResults.html(`${this._list.visibleItems.length}/${this._list.items.length}`);
+					if ($outVisibleResults?.length) {
+						$outVisibleResults.html(`${this._list.visibleItems.length}/${this._list.items.length}`);
+					}
 					if (this._isDebug) {
 						try {
 							const names = (this._list.visibleItems || []).slice(0, 10).map(it => it.name);
@@ -623,6 +625,15 @@ function createCharacterSpellManager () {
 			}, 100);
 
 			console.log("✅ CharacterSpellManager loaded with full filtering system");
+		}
+
+		// Override visible-items counter so it scopes to the modal (and no-ops if missing)
+		_pOnLoad_initVisibleItemsDisplay () {
+			if (!this._$modalInner?.length || !this._list) return;
+			const outVisibleResults = this._$modalInner[0].querySelector(`.ve-lst__wrp-search-visible`);
+			if (!outVisibleResults) return;
+			const $out = $(outVisibleResults);
+			this._list.on("updated", () => $out.html(`${this._list.visibleItems.length}/${this._list.items.length}`));
 		}
 
 		// Override state loading to avoid null reference errors in modal context
@@ -715,8 +726,8 @@ function createCharacterSpellManager () {
 			}
 
 			// Check if List.js is actually putting items in the DOM
-			const actualDomItems = $listContainer.find(".lst__row").length;
-			console.log(`📝 Actual DOM items with .lst__row: ${actualDomItems}`);
+			const actualDomItems = $listContainer.find(".ve-lst__row, .lst__row").length;
+			console.log(`📝 Actual DOM items with .ve-lst__row: ${actualDomItems}`);
 
 			// If List.js isn't working, fall back to direct DOM manipulation
 			if (this._list.items.length > 0 && actualDomItems === 0) {
@@ -748,8 +759,8 @@ function createCharacterSpellManager () {
 				} else console.warn(`⚠️ Visible item ${ix} missing DOM element`, item);
 			});
 			console.log(`✅ Direct DOM manipulation complete: ${appendedCount} visible items added`);
-			$listContainer.find(".lst__row").show();
-			console.log(`📝 Fallback: Showed ${$listContainer.find(".lst__row").length} DOM items directly`);
+			$listContainer.find(".ve-lst__row, .lst__row").show();
+			console.log(`📝 Fallback: Showed ${$listContainer.find(".ve-lst__row, .lst__row").length} DOM items directly`);
 		}
 
 		// Create list items matching spells.js pattern with selection functionality
@@ -791,27 +802,27 @@ function createCharacterSpellManager () {
 
 			// Create the DOM element structure using raw DOM (not jQuery) for List.js compatibility
 			const eleLi = document.createElement("div");
-			eleLi.className = `lst__row ve-flex-col ${isExcluded ? "lst__row--blocklisted" : ""}`;
+			eleLi.className = `ve-lst__row ve-flex-col ${isExcluded ? "ve-lst__row--blocklisted" : ""}`;
 
 			const eleInner = document.createElement("a");
 			eleInner.href = `#${hash}`;
-			eleInner.className = "lst__row-border lst__row-inner";
+			eleInner.className = "ve-lst__row-border ve-lst__row-inner";
 
 			// Add checkbox to the inner element
 			eleInner.appendChild($checkbox[0]);
 
 			// Create and append other elements
 			const elements = [
-				{class: "bold ve-col-2-9 pl-0 pr-1", text: spell.name},
-				{class: "ve-col-1-5 px-1 ve-text-center", text: PageFilterSpells.getTblLevelStr(spell)},
-				{class: "ve-col-1-7 px-1 ve-text-center", text: time},
-				{class: `ve-col-1-2 px-1 sp__school-${spell.school} ve-text-center`,
+				{class: "ve-bold ve-col-2-9 ve-pl-0 ve-pr-1", text: spell.name},
+				{class: "ve-col-1-5 ve-px-1 ve-text-center", text: PageFilterSpells.getTblLevelStr(spell)},
+				{class: "ve-col-1-7 ve-px-1 ve-text-center", text: time},
+				{class: `ve-col-1-2 ve-px-1 sp__school-${spell.school} ve-text-center`,
 					text: school,
 			 title: Parser.spSchoolAbvToFull(spell.school),
 			 style: Parser.spSchoolAbvToStylePart(spell.school)},
-				{class: "ve-col-0-6 px-1 ve-text-center", text: concentration, title: "Concentration"},
-				{class: "ve-col-2-4 px-1 ve-text-right", text: range},
-				{class: `ve-col-1-7 ve-text-center ${Parser.sourceJsonToSourceClassname(spell.source)} pl-1 pr-0`,
+				{class: "ve-col-0-6 ve-px-1 ve-text-center", text: concentration, title: "Concentration"},
+				{class: "ve-col-2-4 ve-px-1 ve-text-right", text: range},
+				{class: `ve-col-1-7 ve-text-center ${Parser.sourceJsonToSourceClassname(spell.source)} ve-pl-1 ve-pr-0`,
 			 text: source,
 					title: `${Parser.sourceJsonToFull(spell.source)}${Renderer.utils.getSourceSubText(spell)}`},
 			];
