@@ -16,7 +16,7 @@ import {UnitConverter} from "./dmscreen-unitconverter.js";
 import {MoneyConverter} from "./dmscreen-moneyconverter.js";
 import {TimeTracker} from "./dmscreen-timetracker.js";
 import {DmMapper} from "./dmscreen-mapper.js";
-import {RenderCharacters} from "../render-characters.js";
+import {DmScreenPanelAppBase} from "./dmscreen-panelapp-base.js";
 // CharacterManager is available globally via character-manager.js script tag
 
 export class PanelContentManagerFactory {
@@ -245,6 +245,130 @@ export class PanelContentManager_DynamicMap extends _PanelContentManager {
 	}
 }
 
+class CharactersPanelApp extends DmScreenPanelAppBase {
+	constructor (...args) {
+		super(...args);
+		this._selCharacter = null;
+		this._eleContent = null;
+		this._currentCharacterId = null;
+		this._characterUpdateListener = null;
+	}
+
+	_getPanelElement (board, state) {
+		const wrpPanel = ee`<div class="ve-flex-col ve-h-100 min-h-0"></div>`;
+
+		const selCharacter = ee`<select class="ve-form-control ve-input-xs" title="Select Character">
+			<option value="">Select a character...</option>
+		</select>`;
+		const btnRefresh = ee`<button type="button" class="ve-btn ve-btn-xs ve-btn-default ve-ml-2" title="Refresh Characters">
+			<span class="glyphicon glyphicon-refresh"></span>
+		</button>`;
+		const eleContent = ee`<div class="ve-flex-col min-h-0 ve-h-100 ve-overflow-y-auto"></div>`;
+
+		ee`<div class="ve-p-2 ve-flex-v-center">
+			<label class="ve-mr-2">Character:</label>
+			${selCharacter}
+			${btnRefresh}
+		</div>`.appendTo(wrpPanel);
+		eleContent.appendTo(wrpPanel);
+
+		this._selCharacter = selCharacter;
+		this._eleContent = eleContent;
+
+		const loadCharacters = async () => {
+			try {
+				const summaries = await CharacterManager.loadCharacterSummaries();
+				selCharacter.empty().appends(`<option value="">Select a character...</option>`);
+				summaries.forEach(summary => {
+					selCharacter.appends(
+						ee`<option></option>`
+							.val(summary.id)
+							.attr("data-name", summary.name)
+							.txt(summary.name),
+					);
+				});
+			} catch (error) {
+				console.warn("Failed to load character summaries for DM screen:", error);
+			}
+		};
+
+		this._characterUpdateListener = (characters) => {
+			if (!this._currentCharacterId) return;
+
+			const updatedCharacter = characters.find(c => {
+				const id = CharacterManager._generateCompositeId(c.name, c.source);
+				return id === this._currentCharacterId;
+			});
+			if (!updatedCharacter) return;
+
+			if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
+			globalThis._CHARACTER_EDIT_DATA[this._currentCharacterId] = updatedCharacter;
+
+			this._renderCharacter(updatedCharacter);
+		};
+
+		CharacterManager.addListener(this._characterUpdateListener);
+
+		selCharacter.onn("change", async () => {
+			const characterId = selCharacter.val();
+			if (!characterId) {
+				eleContent.empty();
+				this._currentCharacterId = null;
+				board.doSaveStateDebounced();
+				return;
+			}
+
+			eleContent.html(`<div class="ve-p-2 ve-text-center">Loading character...</div>`);
+			this._currentCharacterId = characterId;
+			board.doSaveStateDebounced();
+
+			try {
+				const character = await CharacterManager.ensureFullCharacter(characterId);
+				if (character) {
+					if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
+					globalThis._CHARACTER_EDIT_DATA[characterId] = character;
+					this._renderCharacter(character);
+				} else {
+					eleContent.html(`<div class="ve-p-2 text-danger">
+						Character not found or failed to load
+						${!navigator.onLine ? " (you are offline)" : ""}
+					</div>`);
+				}
+			} catch (error) {
+				console.warn("Failed to load character:", error);
+				eleContent.html(`<div class="ve-p-2 text-danger">
+					Error: ${(error.message || "Failed to load character").qq()}
+				</div>`);
+				this._currentCharacterId = null;
+			}
+		});
+
+		btnRefresh.onn("click", () => loadCharacters());
+
+		loadCharacters().then(() => {
+			if (state?.selectedCharacter) {
+				selCharacter.val(state.selectedCharacter);
+				selCharacter.trigger("change");
+			}
+		});
+
+		return wrpPanel;
+	}
+
+	_renderCharacter (character) {
+		const renderedHtml = Renderer.character.getCompactRenderedString(character, {isStatic: false});
+		const eleStats = ee`<table class="ve-w-100 ve-stats"></table>`.html(renderedHtml);
+		this._eleContent.empty().appends(eleStats);
+		Renderer.character.bindListenersCompact(character, eleStats);
+	}
+
+	getState () {
+		return {
+			selectedCharacter: this._selCharacter?.val() || "",
+		};
+	}
+}
+
 export class PanelContentManager_Characters extends _PanelContentManager {
 	static _PANEL_TYPE = PANEL_TYP_CHARACTERS;
 	static _TITLE = "Characters";
@@ -252,156 +376,7 @@ export class PanelContentManager_Characters extends _PanelContentManager {
 
 	static _ = this._register();
 
-	_$getPanelElement ({state}) {
-		const $container = $(`<div class="ve-flex-col h-100 min-h-0"></div>`);
-
-		// Add character selection controls
-		const $controls = $(`
-			<div class="p-2 ve-flex-v-center">
-				<label class="mr-2">Character:</label>
-				<select class="form-control input-xs" title="Select Character">
-					<option value="">Select a character...</option>
-				</select>
-				<button class="btn btn-xs btn-default ml-2" title="Refresh Characters">
-					<span class="glyphicon glyphicon-refresh"></span>
-				</button>
-			</div>
-		`);
-
-		const $content = $(`<div class="ve-flex-col min-h-0 h-100 overflow-y-auto"></div>`);
-
-		$container.append($controls).append($content);
-
-		const $selCharacter = $controls.find("select");
-		const $btnRefresh = $controls.find("button");
-
-		// Load available characters using summaries (faster for dropdown)
-		const loadCharacters = async () => {
-			try {
-				const summaries = await CharacterManager.loadCharacterSummaries();
-				$selCharacter.empty().append(`<option value="">Select a character...</option>`);
-				summaries.forEach(summary => {
-					$selCharacter.append(`<option value="${summary.id}" data-name="${summary.name}">${summary.name}</option>`);
-				});
-			} catch (error) {
-				console.warn("Failed to load character summaries for DM screen:", error);
-			}
-		};
-
-		// Add CharacterManager listener to re-render character when updated
-		let currentCharacterId = null;
-		const characterUpdateListener = (characters) => {
-			console.log(`DM Screen Character Panel: Received character update, currentCharacterId: ${currentCharacterId}`);
-			console.log(`DM Screen Character Panel: Received ${characters.length} characters:`, characters.map(c => ({name: c.name, source: c.source, id: CharacterManager._generateCompositeId(c.name, c.source)})));
-
-			if (currentCharacterId) {
-				const updatedCharacter = characters.find(c => {
-					const id = CharacterManager._generateCompositeId(c.name, c.source);
-					console.log(`DM Screen Character Panel: Checking character ${c.name} with ID ${id} against current ${currentCharacterId}`);
-					return id === currentCharacterId;
-				});
-
-				if (updatedCharacter) {
-					console.log(`DM Screen Character Panel: Re-rendering character ${updatedCharacter.name}`);
-					// Re-register the updated character
-					globalThis._CHARACTER_EDIT_DATA[currentCharacterId] = updatedCharacter;
-
-					// Re-render the character
-					const renderedHtml = Renderer.character.getCompactRenderedString(updatedCharacter, {isStatic: false});
-					const $rendered = $(renderedHtml);
-					$content.empty().append($rendered);
-					Renderer.character._bindCharacterSheetListeners($content[0]);
-				} else {
-					console.log(`DM Screen Character Panel: No matching character found for ID ${currentCharacterId}`);
-					console.log(`DM Screen Character Panel: Available character IDs:`, characters.map(c => CharacterManager._generateCompositeId(c.name, c.source)));
-				}
-			} else {
-				console.log(`DM Screen Character Panel: No current character ID set, skipping update`);
-			}
-		};
-
-		CharacterManager.addListener(characterUpdateListener);
-
-		// Handle character selection with lazy loading
-		$selCharacter.on("change", async () => {
-			const characterId = $selCharacter.val();
-			if (!characterId) {
-				$content.empty();
-				currentCharacterId = null;
-				return;
-			}
-
-			// Show loading state
-			$content.html(`<div class="p-2 ve-text-center">
-				<i class="fas fa-spinner fa-spin"></i> Loading character...
-			</div>`);
-
-			currentCharacterId = characterId;
-
-			try {
-				// Use lazy loading to get the full character
-				const character = await CharacterManager.ensureFullCharacter(characterId);
-				if (character) {
-					console.log(`DM Screen Character Panel: Loaded full character ${character.name}, ID: ${characterId}`);
-
-					// Register character for editing in global registry
-					if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-					globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-
-					// Use RenderCharacters to render the character in non-static mode
-					const renderedHtml = Renderer.character.getCompactRenderedString(character, {isStatic: false});
-					const $rendered = $(renderedHtml);
-					$content.empty().append($rendered);
-
-					// Bind character sheet listeners for quick edit functionality
-					Renderer.character._bindCharacterSheetListeners($content[0]);
-				} else {
-					$content.html(`<div class="p-2 text-danger">
-						<i class="fas fa-exclamation-triangle"></i> Character not found or failed to load
-						${!navigator.onLine ? " (you are offline)" : ""}
-					</div>`);
-				}
-			} catch (error) {
-				console.warn("Failed to load character:", error);
-				$content.html(`<div class="p-2 text-danger">
-					<i class="fas fa-exclamation-triangle"></i> Error: ${error.message || "Failed to load character"}
-				</div>`);
-				currentCharacterId = null;
-			}
-		});
-
-		$btnRefresh.on("click", loadCharacters);
-
-		// Clean up listener when panel is destroyed (if possible)
-		if ($container.data) {
-			const originalData = $container.data.bind($container);
-			$container.data = function (key, value) {
-				if (key === "cleanup" && typeof value === "function") {
-					const originalCleanup = value;
-					return originalData(key, () => {
-						CharacterManager.removeListener(characterUpdateListener);
-						originalCleanup();
-					});
-				}
-				return originalData(key, value);
-			};
-		}
-
-		// Initial load
-		loadCharacters();
-
-		// State management
-		$container.data("getState", () => ({
-			selectedCharacter: $selCharacter.val(),
-		}));
-
-		// Restore state if provided
-		if (state.selectedCharacter) {
-			setTimeout(() => {
-				$selCharacter.val(state.selectedCharacter).trigger("change");
-			}, 100);
-		}
-
-		return $container;
+	_getPanelApp ({state}) {
+		return CharactersPanelApp.getPanelApp({board: this._board, savedState: state});
 	}
 }

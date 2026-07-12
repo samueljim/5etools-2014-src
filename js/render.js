@@ -10348,17 +10348,18 @@ Renderer.character = class {
 	}
 
 	static _bindCharacterSheetListeners (ele) {
-		const $ele = $(ele);
-
-		const statDisplays = $ele.find(".character-stat-display");
+		const root = e_({ele});
 
 		// Click-to-edit functionality for character stats
-		$ele.on("click", ".character-stat-display", function (e) {
-			const $display = $(this);
-			const statPath = $display.attr("data-stat-path");
-			const characterId = $display.attr("data-character-id");
-			const currentValue = $display.attr("data-current-value");
-			const classesData = $display.attr("data-classes-data"); // For hit dice
+		root.onn("click", (e) => {
+			const display = e.target.closest?.(".character-stat-display");
+			if (!display || !root.contains(display)) return;
+
+			const eleDisplay = e_({ele: display});
+			const statPath = eleDisplay.attr("data-stat-path");
+			const characterId = eleDisplay.attr("data-character-id");
+			const currentValue = eleDisplay.attr("data-current-value");
+			const classesData = eleDisplay.attr("data-classes-data"); // For hit dice
 
 			// Get character data from global registry
 			if (!globalThis._CHARACTER_EDIT_DATA || !globalThis._CHARACTER_EDIT_DATA[characterId]) {
@@ -10372,38 +10373,38 @@ Renderer.character = class {
 			}
 
 			// Create input element
-			let inputType = "number";
-			let minValue = 0;
+			const inputType = "number";
+			const minValue = 0;
 			let maxValue = null;
 
 			if (statPath === "hp.current") {
-				maxValue = $display.attr("data-max-value");
+				maxValue = eleDisplay.attr("data-max-value");
 			} else if (statPath.startsWith("class.currentHitDice.")) {
-				maxValue = $display.attr("data-max-value");
+				maxValue = eleDisplay.attr("data-max-value");
 			}
 
-			const $input = $(`<input type="${inputType}" class="character-stat-input-edit" value="${currentValue}" min="${minValue}" ${maxValue ? `max="${maxValue}"` : ""} style="width: ${Math.max(40, currentValue.toString().length * 8 + 10)}px;" data-stat-path="${statPath}" data-character-id="${characterId}" ${classesData ? `data-classes-data="${classesData}"` : ""} />`);
+			const ipt = ee`<input type="${inputType}" class="character-stat-input-edit" value="${currentValue}" min="${minValue}" ${maxValue ? `max="${maxValue}"` : ""} style="width: ${Math.max(40, String(currentValue).length * 8 + 10)}px;" data-stat-path="${statPath}" data-character-id="${characterId}" ${classesData ? `data-classes-data="${classesData.qq()}"` : ""} />`;
 
 			// Replace display with input
-			$display.replaceWith($input);
-			$input.focus().select();
+			display.replaceWith(ipt);
+			ipt.focus();
+			ipt.select();
 
-			// Handle save/cancel
-			$input.on("blur keydown", async function (e) {
-				if (e.type === "keydown" && e.key !== "Enter" && e.key !== "Escape") {
+			const doFinish = async (evt) => {
+				if (evt.type === "keydown" && evt.key !== "Enter" && evt.key !== "Escape") {
 					return;
 				}
 
-				const newValue = e.key === "Escape" ? currentValue : $input.val();
+				const newValue = evt.key === "Escape" ? currentValue : ipt.val();
 
 				// Create new display span
-				const $newDisplay = $(`<span class="character-stat-display" data-stat-path="${statPath}" data-character-id="${characterId}" data-current-value="${newValue}" ${maxValue ? `data-max-value="${maxValue}"` : ""} ${classesData ? `data-classes-data="${classesData}"` : ""} title="Click to edit" style="cursor: pointer; border-bottom: 1px dashed #666;">${newValue}</span>`);
+				const eleNewDisplay = ee`<span class="character-stat-display" data-stat-path="${statPath}" data-character-id="${characterId}" data-current-value="${newValue}" ${maxValue ? `data-max-value="${maxValue}"` : ""} ${classesData ? `data-classes-data="${classesData.qq()}"` : ""} title="Click to edit" style="cursor: pointer; border-bottom: 1px dashed #666;">${newValue}</span>`;
 
 				// Replace input with display
-				$input.replaceWith($newDisplay);
+				ipt.replaceWith(eleNewDisplay);
 
 				// Update server if value changed and not escaped
-				if (e.key !== "Escape" && newValue !== currentValue) {
+				if (evt.key !== "Escape" && newValue !== currentValue) {
 					try {
 						// Handle hit dice updates specially
 						if (statPath.startsWith("class.currentHitDice.") && classesData) {
@@ -10421,11 +10422,14 @@ Renderer.character = class {
 						console.error("Error updating character stat:", error);
 					}
 				}
-			});
+			};
+
+			ipt.onn("blur", doFinish);
+			ipt.onn("keydown", doFinish);
 		});
 
 		// Load saved conditions
-		Renderer.character._loadConditionsFromStorage($ele);
+		Renderer.character._loadConditionsFromStorage(root);
 
 		// Setup notes persistence
 		Renderer.character._setupCharacterNotePersistence();
@@ -10753,9 +10757,10 @@ Renderer.character = class {
 	}
 
 	// Helper function to apply/remove condition effects (visual indicators)
-	static _applyConditionEffects ($ele, condition, apply) {
+	static _applyConditionEffects (ele, condition, apply) {
 		// Add/remove visual indicators for condition effects
-		const $characterSheet = $ele.closest("[data-character-name]");
+		const characterSheet = ele.closest?.("[data-character-name]") || null;
+		if (!characterSheet) return;
 
 		if (apply) {
 			// Add condition effect indicators
@@ -10763,12 +10768,12 @@ Renderer.character = class {
 				case "Blinded":
 				case "Poisoned":
 					// Add disadvantage indicator to attack rolls and ability checks
-					$characterSheet.find(".rollable").addClass("condition-disadvantage");
+					characterSheet.querySelectorAll(".rollable").forEach(el => el.classList.add("condition-disadvantage"));
 					break;
 				case "Grappled":
 				case "Restrained":
 					// Add speed reduction indicator
-					$characterSheet.find(".speed-indicator").addClass("condition-speed-zero");
+					characterSheet.querySelectorAll(".speed-indicator").forEach(el => el.classList.add("condition-speed-zero"));
 					break;
 				case "Incapacitated":
 				case "Paralyzed":
@@ -10776,44 +10781,40 @@ Renderer.character = class {
 				case "Stunned":
 				case "Unconscious":
 					// Add action restriction indicator
-					$characterSheet.addClass("condition-no-actions");
+					characterSheet.classList.add("condition-no-actions");
 					break;
 			}
 		} else {
 			// Remove condition effect indicators (simplified - removes all)
-			$characterSheet.find(".rollable").removeClass("condition-disadvantage");
-			$characterSheet.find(".speed-indicator").removeClass("condition-speed-zero");
-			$characterSheet.removeClass("condition-no-actions");
+			characterSheet.querySelectorAll(".rollable").forEach(el => el.classList.remove("condition-disadvantage"));
+			characterSheet.querySelectorAll(".speed-indicator").forEach(el => el.classList.remove("condition-speed-zero"));
+			characterSheet.classList.remove("condition-no-actions");
 		}
 	}
 
 	// Handle class-specific short rest recovery
-	static _handleShortRestRecovery ($ele) {
+	static _handleShortRestRecovery (ele) {
 		// Reset short rest resources to 0 (unused)
-		$ele.find(".character-ki-points").val(0);
-		$ele.find(".character-bardic-inspiration").val(0);
-		$ele.find(".character-action-surge").val(0);
-		$ele.find(".character-second-wind").prop("checked", false);
-		$ele.find(".character-channel-divinity").val(0);
-		$ele.find(".character-wild-shape").val(0);
+		ele.querySelectorAll(".character-ki-points, .character-bardic-inspiration, .character-action-surge, .character-channel-divinity, .character-wild-shape, .character-spell-slots-used")
+			.forEach(ipt => { ipt.value = 0; });
+		ele.querySelectorAll(".character-second-wind").forEach(cb => { cb.checked = false; });
 
 		// Warlock spell slots recharge on short rest
-		// Check if character has warlock levels by looking for warlock-specific features
-		const hasWarlockFeatures = $ele.find(".character-class-features:contains(\"Pact Magic\")").length > 0;
+		const hasWarlockFeatures = [...ele.querySelectorAll(".character-class-features")]
+			.some(el => (el.textContent || "").includes("Pact Magic"));
 		if (hasWarlockFeatures) {
-			$ele.find(".character-spell-slots-used").val(0);
+			ele.querySelectorAll(".character-spell-slots-used").forEach(ipt => { ipt.value = 0; });
 		}
 	}
 
 	// Handle class-specific long rest recovery
-	static _handleLongRestRecovery ($ele) {
+	static _handleLongRestRecovery (ele) {
 		// Reset long rest resources to 0 (unused)
-		$ele.find(".character-rage-uses").val(0);
-		$ele.find(".character-sorcery-points").val(0);
-		$ele.find(".character-lay-on-hands").val(0);
+		ele.querySelectorAll(".character-rage-uses, .character-sorcery-points, .character-lay-on-hands")
+			.forEach(ipt => { ipt.value = 0; });
 
 		// Also reset short rest resources since long rest includes short rest benefits
-		Renderer.character._handleShortRestRecovery($ele);
+		Renderer.character._handleShortRestRecovery(ele);
 	}
 
 	// Get skill definitions with ability mappings
@@ -10934,44 +10935,40 @@ Renderer.character = class {
 	}
 
 	// Save conditions to localStorage
-	static _saveConditionsToStorage ($ele) {
-		const characterName = $ele.closest("[data-character-name]").attr("data-character-name") || "default";
-		const conditions = [];
-
-		$ele.find(".character-condition-item").each(function () {
-			const condition = $(this).attr("data-condition");
-			if (condition) {
-				conditions.push(condition);
-			}
-		});
+	static _saveConditionsToStorage (ele) {
+		const characterName = ele.closest?.("[data-character-name]")?.getAttribute("data-character-name") || "default";
+		const conditions = [...ele.querySelectorAll(".character-condition-item")]
+			.map(el => el.getAttribute("data-condition"))
+			.filter(Boolean);
 
 		const key = `character-${characterName}-conditions`;
 		localStorage.setItem(key, JSON.stringify(conditions));
 	}
 
 	// Load conditions from localStorage
-	static _loadConditionsFromStorage ($ele) {
-		const characterName = $ele.closest("[data-character-name]").attr("data-character-name") || "default";
+	static _loadConditionsFromStorage (ele) {
+		const characterName = ele.closest?.("[data-character-name]")?.getAttribute("data-character-name") || "default";
 		const key = `character-${characterName}-conditions`;
 		const savedConditions = localStorage.getItem(key);
 
 		if (savedConditions) {
 			try {
 				const conditions = JSON.parse(savedConditions);
-				const $conditionsList = $ele.find(".character-conditions-list");
+				const conditionsList = ele.querySelector(".character-conditions-list");
+				if (!conditionsList) return;
 
 				conditions.forEach(condition => {
 					// Get condition effects
 					const effects = Renderer.character._getConditionEffects(condition);
 					const effectsText = effects.length ? ` (${effects.join(", ")})` : "";
 
-					const conditionHtml = `<span class="character-condition-item" title="Click to remove. Effects: ${effects.join(", ")}" data-condition="${condition}">
+					const conditionHtml = `<span class="character-condition-item" title="Click to remove. Effects: ${effects.join(", ").qq()}" data-condition="${condition.qq()}">
 						${condition}${effectsText} <span class="character-condition-remove">×</span>
 					</span>`;
-					$conditionsList.append(conditionHtml);
+					conditionsList.insertAdjacentHTML("beforeend", conditionHtml);
 
 					// Apply condition effects
-					Renderer.character._applyConditionEffects($ele, condition, true);
+					Renderer.character._applyConditionEffects(ele, condition, true);
 				});
 			} catch (e) {
 				console.warn("Failed to load saved conditions:", e);
@@ -17540,7 +17537,7 @@ Renderer.hover = class {
 		// Find all hover windows that display character data and refresh them
 		Object.entries(Renderer.hover._WINDOW_METAS).forEach(([hoverId, windowMeta]) => {
 			// Check if this window contains character data
-			if (windowMeta.sourceData && windowMeta.$content && windowMeta.page === UrlUtil.PG_CHARACTERS) {
+			if (windowMeta.sourceData && windowMeta.eleContent && windowMeta.page === UrlUtil.PG_CHARACTERS) {
 				const character = windowMeta.sourceData;
 				const characterId = character.id || globalThis.CharacterManager?._generateCompositeId(character.name, character.source);
 
@@ -17551,11 +17548,13 @@ Renderer.hover = class {
 				// Re-render the content with updated data
 				const fnRender = Renderer.hover.getFnRenderCompact(UrlUtil.PG_CHARACTERS);
 				if (fnRender) {
-					windowMeta.$content.empty().append(fnRender(updatedCharacter));
+					const eleContentNxt = ee`<table class="ve-w-100 ve-stats"></table>`.html(fnRender(updatedCharacter));
+					windowMeta.setContent?.(eleContentNxt);
+					windowMeta.eleContent = eleContentNxt;
 
 					// Re-bind event listeners
 					const fnBind = Renderer.hover.getFnBindListenersCompact(UrlUtil.PG_CHARACTERS);
-					if (fnBind) fnBind(updatedCharacter, windowMeta.$content[0]);
+					if (fnBind) fnBind(updatedCharacter, eleContentNxt);
 
 					// Update the stored source data
 					windowMeta.sourceData = updatedCharacter;
@@ -18602,7 +18601,7 @@ Renderer.hover = class {
 		// Store metadata for character refresh functionality
 		if (opts.sourceData) {
 			hoverWindow.sourceData = opts.sourceData;
-			hoverWindow.$content = $content;
+			hoverWindow.eleContent = eleContent;
 			hoverWindow.page = opts.page; // Store the page information
 		}
 

@@ -1345,24 +1345,24 @@ class Panel {
 
 					const fn = Renderer.hover.getFnRenderCompact(page);
 
-					const $contentInner = $(`<div class="panel-content-wrapper-inner"></div>`);
-					const $contentStats = $(`<table class="w-100 stats"></table>`).appendTo($contentInner);
-					$contentStats.append(fn(character));
+					const eleContentInner = ee`<div class="panel-content-wrapper-inner"></div>`;
+					const eleContentStats = ee`<table class="ve-w-100 ve-stats"></table>`.appendTo(eleContentInner);
+					eleContentStats.appends(fn(character));
 
 					const fnBind = Renderer.hover.getFnBindListenersCompact(page);
-					if (fnBind) fnBind(character, $contentStats[0]);
+					if (fnBind) fnBind(character, eleContentStats);
 
-					this.set$Tab(
+					this.setTab({
 						ix,
-						PANEL_TYP_STATS,
-						meta,
-						$contentInner,
-						title || character.name,
-						true,
-						!!title,
-					);
+						type: PANEL_TYP_STATS,
+						contentMeta: meta,
+						eleContent: eleContentInner,
+						title: title || character.name,
+						tabCanRename: true,
+						tabRenamed: !!title,
+					});
 
-					return $contentInner;
+					return eleContentInner;
 				})
 				.catch(error => {
 					console.error("Error loading character for DM screen:", error);
