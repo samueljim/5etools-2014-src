@@ -258,11 +258,12 @@ function createCharacterSpellManager () {
 			// Get the highest level spellcasting class
 			const spellcastingClass = this._characterData.class.find(cls => {
 				const className = cls.name;
-				const fullCasters = ["Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard"];
+				const fullCasters = ["Artificer", "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard"];
 				const halfCasters = ["Paladin", "Ranger"];
+				const sc = cls.subclass?.name || cls.subclass?.shortName || "";
 				return fullCasters.includes(className) || halfCasters.includes(className)
-				   || (className === "Fighter" && cls.subclass?.name === "Eldritch Knight")
-				   || (className === "Rogue" && cls.subclass?.name === "Arcane Trickster");
+				   || (className === "Fighter" && /eldritch\s*knight/i.test(sc))
+				   || (className === "Rogue" && /arcane\s*trickster/i.test(sc));
 			});
 
 			if (!spellcastingClass) return [];
@@ -874,175 +875,36 @@ function createCharacterSpellManager () {
 			if (!this._pageFilter || !this._characterData || !this._filterBox) return;
 
 			try {
-				console.log("🎯 Setting character-appropriate default filters...");
+				const values = (globalThis.CharacterBuilderSpellFilterContext?.buildSpellFilterContext
+					|| (() => ({})))(this._characterData);
 
-				// Set up character-appropriate class filters
-				const characterClasses = this._characterData.class || [];
-				let classesFilterValues = {};
-				if (characterClasses.length > 0) {
-					const classNames = characterClasses.map(cls => cls.name).filter(Boolean);
-					console.log(`🏛️ Character classes: ${classNames.join(", ")}`);
-					// Build filter values for the "Classes" filter (select all of the character's classes)
-					classesFilterValues = {};
-					characterClasses.forEach(cls => {
-						try {
-							const classSource = cls.source || Parser.SRC_PHB;
-							// Use PageFilterSpells helper to construct the display string used in the filter items
-							const fi = PageFilterSpells._getClassFilterItem({
-								className: cls.name,
-								classSource: classSource,
-								isVariantClass: false,
-								definedInSource: classSource,
-							});
-							if (fi && fi.item) classesFilterValues[fi.item] = 1;
-						} catch (e) {
-							console.warn(`Could not map class for filter: ${cls.name}`, e);
-						}
-					});
+				if (!Object.keys(values).length) return;
 
-				// Apply the classes selection to the filter box along with level below
-				}
-
-				// Determine allowed spell levels from the character's spell data (preferred)
-				const levelsAllowed = new Set();
-				if (this._characterData.spells && this._characterData.spells.levels && Object.keys(this._characterData.spells.levels).length) {
-				// Use explicit spell-level entries (these include known spells and maxSlots info)
-					Object.keys(this._characterData.spells.levels).forEach(k => {
-						const lvl = Number.parseInt(k);
-						if (!Number.isNaN(lvl)) levelsAllowed.add(lvl);
-					});
-					// Always include cantrips (level 0) by default
-					levelsAllowed.add(0);
-					console.log(`🎚️ Using character.spells.levels keys for allowed spell levels (including cantrips): ${[...levelsAllowed].sort((a, b) => a - b).join(",")}`);
-				} else {
-				// Fallback: approximate allowed levels from class progression (legacy behaviour)
-					const characterLevel = characterClasses.length ? Math.max(...characterClasses.map(cls => cls.level || 1)) : 1;
-					// Helper: caster progression
-					const fullCasters = new Set(["Bard", "Cleric", "Druid", "Sorcerer", "Wizard", "Warlock"]);
-					const halfCasters = new Set(["Paladin", "Ranger"]);
-					// Eldritch Knight and Arcane Trickster act as one-third casters
-					characterClasses.forEach(cls => {
-						const name = cls.name;
-						const lvl = cls.level || 1;
-						let maxForClass = 0;
-						if (fullCasters.has(name)) maxForClass = Math.min(9, Math.floor(lvl));
-						else if (halfCasters.has(name)) maxForClass = Math.min(9, Math.floor(lvl / 2));
-						else if (name === "Fighter" && cls.subclass?.name === "Eldritch Knight") maxForClass = Math.min(9, Math.floor(lvl / 3));
-						else if (name === "Rogue" && cls.subclass?.name === "Arcane Trickster") maxForClass = Math.min(9, Math.floor(lvl / 3));
-						else maxForClass = Math.min(9, Math.floor(lvl / 2)); // Conservative default: treat as half-caster
-						if (maxForClass < 1) maxForClass = 1; // show at least 1st-level spells for low-level casters
-						for (let L = 0; L <= maxForClass; ++L) levelsAllowed.add(L);
-					});
-					console.log(`🎚️ Fallback character level approximation, per-class allowed max levels: ${[...levelsAllowed].sort((a, b) => a - b).join(",")}`);
-				}
-
-				// Build the values object for FilterBox.setFromValues
-				const values = {};
-				// Level filter: include all allowed levels
-				values.Level = {};
-				[...levelsAllowed].forEach(l => values.Level[l] = 1);
-				// Classes filter: pick the character's classes (if computed above)
-				if (typeof classesFilterValues !== "undefined" && Object.keys(classesFilterValues).length) {
-				// Apply to both the MultiFilter header and the child Class filter to ensure both recognise the selection
-					values.Classes = classesFilterValues;
-					values.Class = classesFilterValues;
-				}
-
-				// Subclass filter: if the character has subclasses, include those as well
-				const subclassFilterValues = {};
-				characterClasses.forEach(cls => {
-					try {
-						const classSource = cls.source || Parser.SRC_PHB;
-						// Always include the base class pill for this class
-						const baseClassFi = PageFilterSpells._getClassFilterItem({
-							className: cls.name,
-							classSource: classSource,
-							isVariantClass: false,
-							definedInSource: classSource,
-						});
-						if (baseClassFi && baseClassFi.item) subclassFilterValues[baseClassFi.item] = 1;
-
-						const sc = cls.subclass;
-						if (sc && (sc.name || sc.shortName)) {
-							const subclassSource = sc.source || classSource;
-							const subclassShort = sc.shortName || sc.name;
-							const subclassName = sc.name || sc.shortName;
-							// Base subclass pill (e.g. "Warlock: Genie") — covers shared expanded spells
-							const baseSubclassFi = PageFilterSpells._getSubclassFilterItem({
-								className: cls.name,
-								classSource: classSource,
-								subclassShortName: subclassShort,
-								subclassName: subclassName,
-								subclassSource: subclassSource,
-								isVariantClass: false,
-								definedInSource: subclassSource,
-							});
-							if (baseSubclassFi?.item) subclassFilterValues[baseSubclassFi.item] = 1;
-
-							// Also include kind-specific pills (e.g. "Warlock: Genie, Marid")
-							if (sc.subSubclass) {
-								const kindFi = PageFilterSpells._getSubclassFilterItem({
-									className: cls.name,
-									classSource: classSource,
-									subclassShortName: subclassShort,
-									subclassName: subclassName,
-									subclassSource: subclassSource,
-									subSubclassName: sc.subSubclass,
-									isVariantClass: false,
-									definedInSource: subclassSource,
-								});
-								if (kindFi?.item) subclassFilterValues[kindFi.item] = 1;
-							}
-						}
-					} catch (e) {
-						console.warn(`Could not map subclass for filter: ${cls.name}`, e);
-					}
-				});
-				if (Object.keys(subclassFilterValues).length) values.Subclass = subclassFilterValues;
-
-				// Debug: log the exact pill keys we will apply for classes and subclass
+				this._characterFilterValues = values;
 				try {
-					console.log(`🔎 Class pill keys applied:`, Object.keys(values.Classes || {}));
-					console.log(`🔎 Subclass pill keys applied:`, Object.keys(values.Subclass || {}));
-				} catch (e) { /* ignore logging errors */ }
-
-				if (Object.keys(values).length) {
-					console.log(`🔧 Applying filter defaults:`, values);
-					// Store the character defaults so we can restore them on Reset
-					this._characterFilterValues = values;
-					// Apply immediately using a "fast path" directly against the page filter values so the
-					// list updates instantly for the user (avoids waiting for FilterBox UI population).
-					try {
-						const fastValues = this._characterFilterValues;
-						this._list.filter(item => {
-							if (!item) return false;
-							const ent = item.data && item.data.entity ? item.data.entity : (this._dataList && this._dataList[item.ix]);
-							if (!ent) return false;
-							return this._pageFilter.toDisplay(fastValues, ent);
-						});
-						console.log("⚡ Fast-path applied character defaults directly to the list");
-						this._updateSelectedCount();
-					} catch (e) {
-						console.warn("Fast-path filter apply failed; will fallback to waiting for FilterBox sync", e);
-					}
-					// Still render/bind reset and attempt to sync the FilterBox UI when it finishes loading
-					try { this._filterBox.render(); } catch (e) { /* ignore if not present */ }
-					this._bindResetButtonToCharacterDefaults();
-					const applyWhenReady = async () => {
-						try { if (this._filterBox && this._filterBox.pDoLoadState) await this._filterBox.pDoLoadState(); } catch (e) { /* ignore */ }
-						try {
-							this._filterBox.setFromValues(this._characterFilterValues);
-							console.log(`🔎 Post-render FilterBox values:`, this._filterBox.getValues());
-						} catch (e) {
-							console.warn("Failed to set filter values after waiting:", e);
-						}
-						// Re-run the canonical handler to ensure full internal state sync
-						this.handleFilterChange();
-					};
-					applyWhenReady();
+					const fastValues = this._characterFilterValues;
+					this._list.filter(item => {
+						if (!item) return false;
+						const ent = item.data?.entity || (this._dataList && this._dataList[item.ix]);
+						if (!ent) return false;
+						return this._pageFilter.toDisplay(fastValues, ent);
+					});
+					this._updateSelectedCount();
+				} catch (e) {
+					console.warn("Fast-path filter apply failed; will fallback to waiting for FilterBox sync", e);
 				}
-
-				console.log("✅ Filters configured for character spell selection");
+				try { this._filterBox.render(); } catch (e) { /* ignore */ }
+				this._bindResetButtonToCharacterDefaults();
+				const applyWhenReady = async () => {
+					try { if (this._filterBox?.pDoLoadState) await this._filterBox.pDoLoadState(); } catch (e) { /* ignore */ }
+					try {
+						this._filterBox.setFromValues(this._characterFilterValues);
+					} catch (e) {
+						console.warn("Failed to set filter values after waiting:", e);
+					}
+					this.handleFilterChange();
+				};
+				applyWhenReady();
 			} catch (error) {
 				console.warn("Error setting character filters:", error);
 			}

@@ -1767,8 +1767,15 @@ class CharacterEditorPage {
 
 		// Determine the type of choice based on feature name and content
 		const featureName = featureData.feature.name.toLowerCase();
+		const SubOpt = globalThis.CharacterBuilderSubclassOptions;
+		const optionDef = SubOpt?.findSubclassOptionDef?.({
+			featureName: featureData.feature.name,
+			subclass: this.levelUpState?.characterData?.class?.find(c => c.subclass)?.subclass,
+		});
 
-		if (featureName.includes("fighting style")) {
+		if (optionDef) {
+			await this.showSubclassOptionChoiceModal(feature, featureData, optionDef);
+		} else if (featureName.includes("fighting style")) {
 			await this.showFightingStyleChoiceModal(feature, featureData);
 		} else if (featureName.includes("metamagic")) {
 			await this.showMetamagicChoiceModal(feature, featureData);
@@ -1786,6 +1793,55 @@ class CharacterEditorPage {
 			// Generic choice modal for other features
 			await this.showGenericFeatureChoiceModal(feature, featureData);
 		}
+	}
+
+	async showSubclassOptionChoiceModal (feature, featureData, optionDef) {
+		const optionsHtml = (optionDef.options || []).map(opt => `
+			<div class="form-check mb-2">
+				<input class="form-check-input" type="radio" name="subclass-option" id="subopt-${opt.value}" value="${opt.value}">
+				<label class="form-check-label" for="subopt-${opt.value}">${opt.label}</label>
+			</div>
+		`).join("");
+
+		const modalContent = `
+			<p class="mb-3">${optionDef.prompt || "Choose an option for this subclass feature."}</p>
+			<h6>${optionDef.title || featureData.feature.name}</h6>
+			<div class="mb-3">${optionsHtml}</div>
+		`;
+
+		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+			title: optionDef.title || featureData.feature.name,
+			hasFooter: true,
+			isPermanent: true,
+		});
+		this.levelUpModalClose = doClose;
+		$modalInner.html(modalContent);
+
+		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`).click(() => doClose(false));
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary">Confirm</button>`);
+		$modalFooter.append($btnCancel, $btnConfirm);
+
+		$btnConfirm.click(() => {
+			const selected = $modalInner.find("input[name=\"subclass-option\"]:checked").val();
+			if (!selected) {
+				alert("Please select an option.");
+				return;
+			}
+			const character = this.levelUpState.characterData;
+			globalThis.CharacterBuilderSubclassOptions.applySubSubclass(character, {
+				className: optionDef.className,
+				subSubclass: selected,
+			});
+			this.levelUpState.choices.push({
+				type: "subclassOption",
+				feature: featureData.feature,
+				optionId: optionDef.id,
+				subSubclass: selected,
+			});
+			this.levelUpState.currentFeatureIndex++;
+			doClose(true);
+			setTimeout(() => this.showNextFeatureChoice(), 100);
+		});
 	}
 
 	// Enhanced racial choice system
@@ -2298,11 +2354,10 @@ class CharacterEditorPage {
 					}
 				}
 
-				// Apply starting equipment for level 1 characters
-				// if (classLevel === 1 && classInfo.startingEquipment) {
-				// 	if (!characterTemplate.items) characterTemplate.items = [];
-				// 	this.applyClassStartingEquipment(classInfo.startingEquipment, characterTemplate);
-				// }
+				// Apply starting equipment for level 1 characters via shared resolver / class JSON
+				if (classLevel === 1 && classInfo.startingEquipment) {
+					this.applyClassStartingEquipment(classInfo.startingEquipment, characterTemplate);
+				}
 
 				// Class features are already handled by the existing feature generation system
 			}
@@ -2319,6 +2374,23 @@ class CharacterEditorPage {
 
 	applyClassStartingEquipment (startingEquipment, characterTemplate) {
 		if (!startingEquipment) return;
+		// Prefer shared resolver when available
+		if (globalThis.CharacterBuilderStartingEquipment?.resolveStartingEquipment) {
+			const resolved = globalThis.CharacterBuilderStartingEquipment.resolveStartingEquipment({
+				classStartingEquipment: startingEquipment,
+				random: true,
+				abilityScores: {
+					str: characterTemplate.str,
+					dex: characterTemplate.dex,
+					con: characterTemplate.con,
+					int: characterTemplate.int,
+					wis: characterTemplate.wis,
+					cha: characterTemplate.cha,
+				},
+			});
+			globalThis.CharacterBuilderStartingEquipment.applyEquipmentToCharacter(characterTemplate, resolved);
+			return;
+		}
 
 		// Process default equipment from defaultData if available
 		if (startingEquipment.defaultData) {
@@ -2342,6 +2414,57 @@ class CharacterEditorPage {
 			// For now, we'll add basic items that every class gets
 			this.addBasicStartingItems(characterTemplate);
 		}
+	}
+
+	async applyResolvedStartingEquipment (character, {random = true, choices = null} = {}) {
+		const Eq = globalThis.CharacterBuilderStartingEquipment;
+		if (!Eq) return character;
+
+		let classStartingEquipment = null;
+		if (character.class?.[0]?.name) {
+			const classData = await this.loadClassData(character.class[0].name);
+			classStartingEquipment = classData?.class?.[0]?.startingEquipment || null;
+		}
+
+		let backgroundStartingEquipment = null;
+		const bgName = typeof character.background === "string"
+			? character.background
+			: character.background?.name;
+		if (bgName) {
+			try {
+				const res = await fetch("data/backgrounds.json");
+				const data = await res.json();
+				const bg = (data.background || []).find(b => b.name === bgName);
+				backgroundStartingEquipment = bg?.startingEquipment || null;
+			} catch (e) {
+				console.warn("Could not load backgrounds for equipment:", e);
+			}
+		}
+
+		let itemsDb = [];
+		try {
+			const itemRes = await fetch("data/items.json");
+			const itemData = await itemRes.json();
+			itemsDb = itemData.item || [];
+		} catch (e) { /* optional */ }
+
+		const resolved = Eq.resolveStartingEquipment({
+			classStartingEquipment,
+			backgroundStartingEquipment,
+			random,
+			choices: choices || {},
+			itemsDb,
+			abilityScores: {
+				str: character.str,
+				dex: character.dex,
+				con: character.con,
+				int: character.int,
+				wis: character.wis,
+				cha: character.cha,
+			},
+		});
+		Eq.applyEquipmentToCharacter(character, resolved);
+		return character;
 	}
 
 	addItemToCharacter (itemString, characterTemplate) {
@@ -7322,7 +7445,8 @@ class CharacterEditorPage {
 	generateRandomEquipment (classes, level, abilityScores, race) {
 		const equipment = new Set();
 
-		// Core adventuring gear for all characters - using valid item names
+		// Prefer data-driven kits when resolver is available (async path uses applyResolvedStartingEquipment)
+		// Sync fallback still adds core adventuring gear
 		equipment.add("{@item Backpack|PHB}");
 		equipment.add("{@item Bedroll|PHB}");
 		equipment.add("{@item Mess Kit|PHB}");
@@ -7332,16 +7456,14 @@ class CharacterEditorPage {
 		equipment.add("{@item Waterskin|PHB}");
 		equipment.add("{@item Hempen Rope (50 feet)|PHB}");
 
-		// Add class-specific starting equipment only from primary class
-		if (classes.length > 0) {
+		// Add class-specific starting equipment only from primary class (legacy hardcoded fallback)
+		if (classes.length > 0 && !globalThis.CharacterBuilderStartingEquipment) {
 			const primaryClass = classes[0];
 			const classEquipment = this.getClassEquipment(primaryClass.name, primaryClass.level, abilityScores);
 			classEquipment.forEach(item => equipment.add(item));
 		}
 
-		// Add racial equipment bonuses
-		const racialEquipment = this.getRacialEquipment(race);
-		racialEquipment.forEach(item => equipment.add(item));
+		// Do not invent racial starting kits (not PHB rules)
 
 		// Add level-appropriate magical items (only for higher levels)
 		if (level >= 5) {
@@ -7822,6 +7944,13 @@ class CharacterEditorPage {
 
 			// Apply background data to set skills, equipment, and features
 			template = await this.applyBackgroundDataToCharacter(randomBackground, template);
+
+			// Resolve full starting kit from class/background JSON (replaces invented racial gear)
+			try {
+				await this.applyResolvedStartingEquipment(template, {random: true});
+			} catch (e) {
+				console.warn("Random character equipment resolver failed:", e);
+			}
 
 			// Ensure source is set to the detected/selected source (avoid keeping placeholder values)
 			if (!template.source || template.source === "RANDOM_GENERATED" || template.source === "MyCharacters" || template.source === "ADD_YOUR_NAME_HERE") {
@@ -8991,8 +9120,8 @@ class CharacterEditorPage {
 				},
 			};
 
-			// Show simple level up options
-			await this.showSimpleLevelUpModal();
+			// Show unified class selection / level-up wizard path
+			await this.showClassSelectionModal();
 		} catch (e) {
 			console.error("❌ Error initiating level up:", e);
 			console.error("Error stack:", e.stack);
@@ -9001,160 +9130,25 @@ class CharacterEditorPage {
 		}
 	}
 
+	/** @deprecated Use showClassSelectionModal / processClassLevelUp — kept as thin wrapper */
 	async showSimpleLevelUpModal () {
-		const character = this.levelUpState.characterData;
-		const currentClasses = character.class || [];
-
-		let modalContent = `
-			<p><strong>Current Level:</strong> ${this.levelUpState.currentLevel} → <strong>New Level:</strong> ${this.levelUpState.newLevel}</p>
-
-			<div class="mb-4">
-				<h6>Choose class to level up:</h6>
-
-				${currentClasses.length > 0 ? `
-					${currentClasses.map((cls, index) => `
-						<div class="mb-2">
-							<button type="button" class="ve-btn ve-btn-success btn-block level-existing-class" data-class-index="${index}">
-								Level up ${cls.name} (Level ${cls.level} → ${cls.level + 1})
-								${cls.subclass ? ` (${cls.subclass.name})` : ""}
-							</button>
-						</div>
-					`).join("")}
-
-					<hr class="my-3">
-					<h6 class="text-secondary mb-2">Or Multiclass:</h6>
-				` : `<h6 class="text-secondary mb-2">Add First Class:</h6>`}
-
-				<div class="mb-2">
-					<button type="button" class="ve-btn ve-btn-default btn-block" id="add-multiclass">
-						Add Level 1 of a New Class
-					</button>
-				</div>
-			</div>
-		`;
-
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Level Up Character",
-			hasFooter: true,
-			isPermanent: true,
-		});
-
-		$modalInner.html(modalContent);
-
-		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2 pb-2">Cancel</button>`)
-			.click(() => doClose(false));
-
-		$modalFooter.append($btnCancel);
-
-		// Handle existing class level up
-		$modalInner.find(".level-existing-class").click((e) => {
-			const classIndex = parseInt(e.target.getAttribute("data-class-index"));
-			doClose(true);
-			this.levelUpExistingClass(classIndex);
-		});
-
-		// Handle multiclass
-		$modalInner.find("#add-multiclass").click(() => {
-			doClose(true);
-			this.showMulticlassSelection();
-		});
-
-		this.levelUpModalClose = doClose;
+		return this.showClassSelectionModal();
 	}
 
+	/** @deprecated Routes to processClassLevelUp so ASI levels still grant features */
 	async levelUpExistingClass (classIndex) {
-		console.log(`Leveling up existing class at index ${classIndex}`);
-
 		const character = this.levelUpState.characterData;
 		const classEntry = character.class[classIndex];
-
-		if (!classEntry) {
-			document.getElementById("message").textContent = "Error: Invalid class selection";
-			document.getElementById("message").style.color = "red";
-			return;
-		}
-
-		// Increase class level
-		const oldLevel = classEntry.level;
-		const newLevel = oldLevel + 1;
-		classEntry.level = newLevel;
-
-		// Increase current hit dice (gain 1 unused hit die)
-		if (classEntry.currentHitDice !== undefined) {
-			classEntry.currentHitDice += 1;
-		} else {
-			// If currentHitDice wasn't set, set it to the new level (all available)
-			classEntry.currentHitDice = newLevel;
-		}
-
-		console.log(`${classEntry.name}: Level ${oldLevel} → ${newLevel}`);
-
-		// Record the change
-		this.levelUpState.changes.classLevels.push({
-			className: classEntry.name,
-			oldLevel,
-			newLevel,
-			isNew: false,
-		});
-
-		// Add hit points (simple: average + CON mod)
-		const hitDie = this.getClassHitDie(classEntry.name);
-		const conMod = this.getAbilityModifier(character, "con");
-		const hpGain = Math.floor(hitDie / 2) + 1 + conMod;
-
-		this.addHitPoints(hpGain);
-
-		// Check for spell selection using data-driven detection
-		console.log(`🔍 LEVEL UP FLOW - Checking spell capability for ${classEntry.name} at level ${newLevel}`);
-
-		// Check if this is a spellcasting class that should be offered spell selection
-		const spellcastingClasses = ["Wizard", "Sorcerer", "Cleric", "Druid", "Bard", "Warlock", "Paladin", "Ranger"];
-		const isSpellcaster = spellcastingClasses.includes(classEntry.name);
-		console.log(`🎯 LEVEL UP FLOW - ${classEntry.name} ${isSpellcaster ? "is" : "is not"} a spellcasting class`);
-
-		if (isSpellcaster) {
-			// For spellcasters, initialize spell structure but don't show spell selection UI
-			console.log(`✅ Initializing spell structure for ${classEntry.name} level ${newLevel} (no UI shown)`);
-
-			// Initialize spells structure if it doesn't exist (for first-time spellcasters/multiclass)
-			if (!character.spells) {
-				console.log(`🔧 Initializing spells structure for new spellcaster`);
-				character.spells = {
-					levels: {},
-					spellcastingAbility: null,
-					dc: 8,
-					attackBonus: "+0",
-				};
-				// Calculate correct spell DC immediately for new spellcasters
-				const totalLevel = CharacterEditorPage.getCharacterLevel(character);
-				const profBonus = this.getProficiencyBonus(totalLevel);
-				await this.updateSpellcastingStats(character, profBonus);
-
-				// Update the editor with the new spell structure
-				this.ace.setValue(JSON.stringify(character, null, 2));
-			}
-
-			// Note: Spell selection UI and Features & Traits entries removed as requested
-			// Spells are managed through dedicated spell management system
-			console.log("Skipping spell selection UI for level up as requested");
-		}
-
-		// Check for class-specific ASI levels (Fighter gets bonus at 6,14; Rogue at 10)
-		if (this.isASILevel(newLevel, [classEntry])) {
-			this.showASIChoice();
-			return;
-		}
-
-		// Add any class features for this level
-		await this.addClassFeatures(classEntry, newLevel);
-
-		// Show completion
-		this.showLevelUpComplete();
+		if (!classEntry) return;
+		await this.processClassLevelUp(classEntry, classIndex);
 	}
 
 	async showMulticlassSelection () {
 		const character = this.levelUpState.characterData;
-		const allClasses = ["Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk", "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard"];
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		const allClasses = LevelUp?.PRIMARY_CLASS_FILES
+			? LevelUp.PRIMARY_CLASS_FILES.map(n => n.charAt(0).toUpperCase() + n.slice(1))
+			: ["Artificer", "Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk", "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard"];
 		const currentClasses = character.class.map(c => c.name);
 		const notCurrentlyTaken = allClasses.filter(c => !currentClasses.includes(c));
 
@@ -9418,6 +9412,7 @@ class CharacterEditorPage {
 	// D&D 5e Multiclassing Requirements
 	getMulticlassRequirements () {
 		return {
+			"Artificer": { int: 13 },
 			"Barbarian": { str: 13 },
 			"Bard": { cha: 13 },
 			"Cleric": { wis: 13 },
@@ -9434,6 +9429,25 @@ class CharacterEditorPage {
 	}
 
 	canMulticlassInto (character, className) {
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		if (LevelUp?.checkMulticlassRequirements) {
+			// Check current classes + target
+			const getScore = (ability) => character.abilities?.[ability] || character[ability] || 10;
+			if (character.class?.length) {
+				for (const classEntry of character.class) {
+					const currentCheck = LevelUp.checkMulticlassRequirements(
+						{str: getScore("str"), dex: getScore("dex"), con: getScore("con"), int: getScore("int"), wis: getScore("wis"), cha: getScore("cha")},
+						classEntry.name,
+					);
+					if (!currentCheck.eligible) {
+						return {canMulticlass: false, reason: `Cannot multiclass: current class ${classEntry.name} — ${currentCheck.reason}`};
+					}
+				}
+			}
+			const targetCheck = LevelUp.checkMulticlassRequirements(character, className);
+			return {canMulticlass: targetCheck.eligible, reason: targetCheck.reason || ""};
+		}
+
 		// In D&D 5e, you need minimum ability scores for BOTH current classes AND new class
 		const allRequirements = this.getMulticlassRequirements();
 		const targetRequirements = allRequirements[className];
@@ -9958,11 +9972,17 @@ class CharacterEditorPage {
 
 		const $btnFinish = $(`<button class="ve-btn ve-btn-success mb-2">Apply Changes</button>`)
 			.click(async () => {
-				console.log("=== APPLY CHANGES BUTTON CLICKED ===");
-				console.log("About to call doClose and finalizeLevelUp");
+				if (validationResults.errors?.length) {
+					const proceed = confirm(`This character has ${validationResults.errors.length} rule error(s):\n\n${validationResults.errors.slice(0, 5).join("\n")}\n\nApply anyway?`);
+					if (!proceed) return;
+				}
 				doClose(true);
 				await this.finalizeLevelUp();
 			});
+
+		if (validationResults.errors?.length) {
+			$btnFinish.text("Apply Despite Errors").removeClass("ve-btn-success").addClass("ve-btn-warning");
+		}
 
 		$modalFooter.append($btnFinish);
 	}
@@ -10008,7 +10028,7 @@ class CharacterEditorPage {
 
 				<h6 class="text-info">${this.levelUpState.currentLevel === 0 ? "Choose Your First Class:" : "Available Classes for Multiclassing:"}</h6>
 				<div class="form-group">
-					<label for="multiclass-dropdown"><strong>Select Class & Subclass:</strong></label>
+					<label for="multiclass-dropdown"><strong>Select Class${this.levelUpState.currentLevel === 0 ? " (subclass when required by level)" : ""}:</strong></label>
 					<select class="form-control" id="multiclass-dropdown">
 						<option value="">-- Select a Class --</option>
 						${allClasses.map(classData => {
@@ -10026,23 +10046,37 @@ class CharacterEditorPage {
 
 		// For level 0 characters (first class), bypass multiclassing requirements
 		const isFirstClass = this.levelUpState.currentLevel === 0;
-		const eligibility = isFirstClass ? { eligible: true, reason: "" } : this.checkMulticlassingEligibility(classData.name, abilities);
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		const eligibility = isFirstClass
+			? { eligible: true, reason: "" }
+			: (LevelUp?.checkMulticlassRequirements
+				? (() => {
+					const r = LevelUp.checkMulticlassRequirements(character, classData.name);
+					return {eligible: r.eligible, reason: r.reason};
+				})()
+				: this.checkMulticlassingEligibility(classData.name, abilities));
 
-		// Create options for each subclass (or just the base class if no subclasses)
-		if (classData.availableSubclasses && classData.availableSubclasses.length > 0) {
+		const SubOpt = globalThis.CharacterBuilderSubclassOptions;
+		const subclassAt = SubOpt?.getSubclassLevel?.(classData.name) || SubOpt?.SUBCLASS_LEVELS?.[classData.name] || 3;
+		const requireSubclassNow = subclassAt <= 1;
+
+		// At L1, only force subclass for classes that gain it at 1 (Cleric/Sorcerer/Warlock)
+		if (requireSubclassNow && classData.availableSubclasses?.length) {
 			return classData.availableSubclasses.map(subclass => {
 				const optionValue = `${classData.name}|${subclass.name}`;
 				const requirementText = eligibility.eligible ? "" : ` (${eligibility.reason})`;
 				return `<option value="${optionValue}" ${!eligibility.eligible ? "disabled" : ""}>${classData.name}: ${subclass.name}${requirementText}</option>`;
 			}).join("");
-		} else {
-			const optionValue = `${classData.name}|`;
-			const requirementText = eligibility.eligible ? "" : ` (${eligibility.reason})`;
-			return `<option value="${optionValue}" ${!eligibility.eligible ? "disabled" : ""}>${classData.name}${requirementText}</option>`;
 		}
+		const optionValue = `${classData.name}|`;
+		const requirementText = eligibility.eligible ? "" : ` (${eligibility.reason})`;
+		const note = !requireSubclassNow && classData.availableSubclasses?.length
+			? ` (subclass at ${subclassAt})`
+			: "";
+		return `<option value="${optionValue}" ${!eligibility.eligible ? "disabled" : ""}>${classData.name}${note}${requirementText}</option>`;
 	}).join("")}
 					</select>
-					<small class="form-text text-muted">${this.levelUpState.currentLevel === 0 ? "Choose your first class - all options are available!" : "Disabled options don't meet multiclassing ability score requirements."}</small>
+					<small class="form-text text-muted">${this.levelUpState.currentLevel === 0 ? "Subclass is chosen when your class gains it (often level 2–3)." : "Disabled options don't meet multiclassing ability score requirements."}</small>
 				</div>
 				<div class="form-group">
 					<button type="button" class="ve-btn ve-btn-primary" id="add-multiclass-btn" disabled>
@@ -10108,8 +10142,10 @@ class CharacterEditorPage {
 	}
 
 	async loadAllClasses () {
-		// Load class data from JSON files
-		const classNames = ["artificer", "barbarian", "bard", "cleric", "druid", "fighter", "monk", "paladin", "ranger", "rogue", "sorcerer", "warlock", "wizard"];
+		// Load class data from JSON files (primary PHB+Artificer set; optional classes excluded by default)
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		const classNames = LevelUp?.PRIMARY_CLASS_FILES
+			|| ["artificer", "barbarian", "bard", "cleric", "druid", "fighter", "monk", "paladin", "ranger", "rogue", "sorcerer", "warlock", "wizard"];
 		const allClasses = [];
 
 		for (const className of classNames) {
@@ -11152,6 +11188,26 @@ class CharacterEditorPage {
 			}
 		}
 
+		// Subclass options that must be persisted (e.g. Genie kind → subSubclass)
+		const optionDef = globalThis.CharacterBuilderSubclassOptions?.findSubclassOptionDef?.({
+			featureName: subclass?.name,
+			subclass: newClassEntry.subclass,
+		});
+		if (optionDef && newClassEntry.subclass && !newClassEntry.subclass.subSubclass) {
+			allFeatures.push({
+				type: "class",
+				feature: {
+					name: optionDef.title || subclass.name,
+					requiresChoice: true,
+					choiceType: "subclassOption",
+					_optionDef: optionDef,
+					entries: [optionDef.prompt || "Choose a subclass option."],
+				},
+				className,
+				isMulticlass: isMulticlassing,
+			});
+		}
+
 		// Add the class features
 		if (level1Features.length > 0) {
 			// Add class name to features for better tracking
@@ -11374,20 +11430,163 @@ class CharacterEditorPage {
 			this.levelUpState.characterData.class[classIndex].level = newClassLevel;
 			this.levelUpState.selectedClassIndex = classIndex;
 
+			// Prompt for subclass when crossing the required level without one
+			const SubOpt = globalThis.CharacterBuilderSubclassOptions;
+			const needsSubclass = SubOpt?.needsSubclassSelection?.(
+				this.levelUpState.characterData.class[classIndex],
+				classData,
+			);
+			if (needsSubclass && classData.subclass?.length) {
+				await this.showSubclassSelectionForLevelUp(classIndex, classData);
+				return;
+			}
+
 			// Get new features for this level
-			const newFeatures = await this.getNewFeaturesForLevel(classInfo, classData, classEntry, newClassLevel);
+			const newFeatures = await this.getNewFeaturesForLevel(classInfo, classData, this.levelUpState.characterData.class[classIndex], newClassLevel);
 
 			if (newFeatures.length > 0) {
 				await this.processLevelUpFeatures(newFeatures);
 			} else {
-				// No choices needed, just apply automatic benefits
-				await this.finalizeLevelUp();
+				// Still offer spell update for casters
+				await this.maybeOfferSpellSelectionThenFinalize();
 			}
 		} catch (e) {
 			console.error("Error processing class level up:", e);
 			document.getElementById("message").textContent = "Error processing level up";
 			document.getElementById("message").style.color = "red";
 		}
+	}
+
+	async showSubclassSelectionForLevelUp (classIndex, classData) {
+		const classEntry = this.levelUpState.characterData.class[classIndex];
+		const subclasses = classData.subclass || [];
+		const optionsHtml = subclasses.map((sc, i) => `
+			<div class="form-check mb-2">
+				<input class="form-check-input" type="radio" name="subclass-pick" id="sc-${i}" value="${i}">
+				<label class="form-check-label" for="sc-${i}">${sc.name} <span class="ve-muted">(${sc.source || classData.class?.[0]?.source || "PHB"})</span></label>
+			</div>
+		`).join("");
+
+		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+			title: `Choose ${classEntry.name} Subclass`,
+			hasFooter: true,
+			isPermanent: true,
+		});
+		this.levelUpModalClose = doClose;
+		$modalInner.html(`
+			<p class="mb-3">${classEntry.name} level ${classEntry.level} requires a subclass.</p>
+			${optionsHtml}
+		`);
+		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`).click(() => doClose(false));
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary">Confirm</button>`);
+		$modalFooter.append($btnCancel, $btnConfirm);
+
+		$btnConfirm.click(async () => {
+			const idx = Number($modalInner.find("input[name=\"subclass-pick\"]:checked").val());
+			if (Number.isNaN(idx)) {
+				alert("Please select a subclass.");
+				return;
+			}
+			const sc = subclasses[idx];
+			classEntry.subclass = {
+				name: sc.name,
+				shortName: sc.shortName || sc.name,
+				source: sc.source || classData.class?.[0]?.source || "PHB",
+			};
+			this.levelUpState.choices.push({type: "subclass", subclass: classEntry.subclass});
+			doClose(true);
+
+			// If Genie (or similar) needs a kind, prompt via option defs after features load
+			const classInfo = classData.class[0];
+			const newFeatures = await this.getNewFeaturesForLevel(classInfo, classData, classEntry, classEntry.level);
+			const optionDef = globalThis.CharacterBuilderSubclassOptions?.findSubclassOptionDef?.({
+				featureName: sc.name,
+				subclass: classEntry.subclass,
+			});
+			if (optionDef && !classEntry.subclass.subSubclass) {
+				await this.showSubclassOptionChoiceModal({name: sc.name}, {feature: {name: sc.name}}, optionDef);
+				// After option modal, continue features — option modal advances feature index; seed pending first
+				this.levelUpState.pendingFeatures = newFeatures;
+				this.levelUpState.currentFeatureIndex = 0;
+				return;
+			}
+			if (newFeatures.length) await this.processLevelUpFeatures(newFeatures);
+			else await this.maybeOfferSpellSelectionThenFinalize();
+		});
+	}
+
+	async maybeOfferSpellSelectionThenFinalize () {
+		const character = this.levelUpState.characterData;
+		const isCaster = (character.class || []).some(cls => {
+			const sc = cls.subclass?.name || cls.subclass?.shortName || "";
+			return ["Artificer", "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard", "Paladin", "Ranger"].includes(cls.name)
+				|| (cls.name === "Fighter" && /eldritch/i.test(sc))
+				|| (cls.name === "Rogue" && /arcane/i.test(sc));
+		});
+		if (!isCaster || !this.spellManager) {
+			await this.finalizeLevelUp();
+			return;
+		}
+
+		// Apply pact/slot math before opening spell UI
+		const slotInfo = globalThis.CharacterBuilderLevelUp?.computeSpellSlots?.(character);
+		if (slotInfo) {
+			character.spells = character.spells || {levels: {}};
+			character.spells.levels = character.spells.levels || {};
+			Object.entries(slotInfo.slots || {}).forEach(([lvl, n]) => {
+				character.spells.levels[lvl] = character.spells.levels[lvl] || {spells: [], maxSlots: n};
+				character.spells.levels[lvl].maxSlots = n;
+			});
+			if (slotInfo.pactMagic) {
+				character.spells.pactMagic = slotInfo.pactMagic;
+			}
+		}
+
+		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+			title: "Update Spells?",
+			hasFooter: true,
+			isPermanent: true,
+		});
+		$modalInner.html(`<p class="mb-3">Your spell slots/list may have changed. Open the spell editor now?</p>`);
+		const $btnSkip = $(`<button class="ve-btn ve-btn-default mr-2">Skip</button>`).click(async () => {
+			doClose(true);
+			await this.finalizeLevelUp();
+		});
+		const $btnOpen = $(`<button class="ve-btn ve-btn-primary">Edit Spells</button>`).click(async () => {
+			doClose(true);
+			this.levelUpState.continueAfterSpells = true;
+			await this.ensureSpellManager();
+			await this.spellManager.openSpellManager(character, async (selectedSpells) => {
+				this.applySelectedSpellsToCharacter(character, selectedSpells);
+				await this.finalizeLevelUp();
+			});
+		});
+		$modalFooter.append($btnSkip, $btnOpen);
+	}
+
+	async ensureSpellManager () {
+		if (this.spellManager) return;
+		const Cls = globalThis.getCharacterSpellManager?.();
+		if (Cls) this.spellManager = new Cls();
+	}
+
+	applySelectedSpellsToCharacter (character, selectedSpells) {
+		if (!character || !selectedSpells) return;
+		character.spells = character.spells || {levels: {}};
+		character.spells.levels = character.spells.levels || {};
+		const list = Array.isArray(selectedSpells) ? selectedSpells : [...(selectedSpells.values?.() || [])];
+		// Clear known spell arrays but keep slot metadata
+		Object.keys(character.spells.levels).forEach(k => {
+			character.spells.levels[k].spells = [];
+		});
+		list.forEach(sp => {
+			const lvl = String(sp.level ?? 0);
+			if (!character.spells.levels[lvl]) character.spells.levels[lvl] = {spells: [], maxSlots: 0};
+			const tag = `${sp.name}|${sp.source || "PHB"}`;
+			if (!character.spells.levels[lvl].spells.includes(tag)) {
+				character.spells.levels[lvl].spells.push(tag);
+			}
+		});
 	}
 
 	async getNewFeaturesForLevel (classInfo, classData, classEntry, newLevel) {
@@ -11972,9 +12171,9 @@ class CharacterEditorPage {
 		console.log("Pending features:", pendingFeatures);
 
 		if (currentFeatureIndex >= pendingFeatures.length) {
-			// All features processed, apply changes directly
-			console.log("All features processed, applying level up changes");
-			await this.finalizeLevelUp();
+			// All features processed — offer spell update then finalize
+			console.log("All features processed, offering spell selection then finalize");
+			await this.maybeOfferSpellSelectionThenFinalize();
 			return;
 		}
 
@@ -12010,6 +12209,12 @@ class CharacterEditorPage {
 		// Check if this is an ASI level that can take feats instead
 		if (feature.choiceType === "abilityScoreImprovement") {
 			this.showFeatOrAsiChoiceModal(feature);
+		} else if (feature.choiceType === "subclassOption" || feature._optionDef) {
+			const def = feature._optionDef || globalThis.CharacterBuilderSubclassOptions?.findSubclassOptionDef?.({
+				featureName: feature.name,
+				subclass: this.levelUpState?.characterData?.class?.find(c => c.subclass)?.subclass,
+			});
+			await this.showSubclassOptionChoiceModal(feature, featureData, def);
 		} else if (feature.choiceType === "fightingStyle" || featureName.includes("fighting style")) {
 			await this.showFightingStyleChoiceModal(feature, featureData);
 		} else if (feature.choiceType === "metamagic" || featureName.includes("metamagic")) {
@@ -13914,30 +14119,9 @@ class CharacterEditorPage {
 
 		// Check if we just completed spell selection and need to continue with other level up features
 		if (this.levelUpState?.continueAfterSpells) {
-			console.log("🔄 Spell selection complete, continuing with other level up features...");
+			console.log("🔄 Spell selection complete, finalizing level up...");
 			this.levelUpState.continueAfterSpells = false;
-
-			// Continue with the rest of the level up process
-			const character = this.levelUpState.characterData;
-			const classEntry = character.class[0]; // Assuming single class for now
-			const newLevel = classEntry.level;
-
-			console.log("🎯 CONTINUING LEVEL UP after spells - classEntry:", classEntry);
-
-			// Check for class-specific ASI levels (Fighter gets bonus at 6,14; Rogue at 10)
-			if (this.isASILevel(newLevel, [classEntry])) {
-				console.log("🎯 ASI Level detected, showing ASI choice");
-				this.showASIChoice();
-				return;
-			}
-
-			// Add any class features for this level
-			console.log("🎯 Adding class features for level", newLevel);
-			await this.addClassFeatures(classEntry, newLevel);
-
-			// Show completion
-			this.showLevelUpComplete();
-			return;
+			// Fall through to normal finalize (do not re-run ASI/feature simple path)
 		}
 
 		// Apply all level up changes to character
@@ -14072,28 +14256,20 @@ class CharacterEditorPage {
 				completeCharacter.skillProficiencies = [...new Set(allSkills)]; // Remove duplicates
 			}
 
-			// Add starting equipment
+			// Add starting equipment (data-driven from class + background JSON)
 			if (completeCharacter.class?.[0]) {
 				console.log("Class before equipment application:", completeCharacter.class[0]);
 
-				const equipment = this.getClassEquipment(completeCharacter.class[0].name, 1, {
-					str: completeCharacter.str,
-					dex: completeCharacter.dex,
-					con: completeCharacter.con,
-					int: completeCharacter.int,
-					wis: completeCharacter.wis,
-					cha: completeCharacter.cha,
-				});
-
-				// Apply class starting equipment to character
 				await this.applyClassDataToCharacter(completeCharacter.class, completeCharacter, 1);
-
-				console.log("Class after applyClassDataToCharacter:", completeCharacter.class[0]);
-
-				// Apply background equipment
 				await this.applyBackgroundDataToCharacter(completeCharacter.background, completeCharacter);
 
-				console.log("Class after applyBackgroundDataToCharacter:", completeCharacter.class[0]);
+				try {
+					await this.applyResolvedStartingEquipment(completeCharacter, {random: true});
+				} catch (e) {
+					console.warn("Starting equipment resolver failed:", e);
+				}
+
+				console.log("Class after equipment application:", completeCharacter.class[0]);
 			}
 
 			// Add basic actions
@@ -14130,10 +14306,13 @@ class CharacterEditorPage {
 				completeCharacter.languages = languages;
 			}
 
-			// Generate Features & Traits section
+			// Generate Features & Traits section (preserve existing Items/equipment)
 			console.log("Class before generateAllFeatureEntries:", completeCharacter.class[0]);
 			const featureEntries = await this.generateAllFeatureEntries(completeCharacter.class, completeCharacter.race);
 			console.log("Class after generateAllFeatureEntries:", completeCharacter.class[0]);
+
+			const preservedItems = (completeCharacter.entries || []).find(e => e.type === "section" && e.name === "Items");
+			const preservedEquipment = completeCharacter.equipment ? [...completeCharacter.equipment] : null;
 
 			// Build entries array
 			completeCharacter.entries = [
@@ -14143,7 +14322,8 @@ class CharacterEditorPage {
 					entries: featureEntries,
 				},
 			];
-
+			if (preservedItems) completeCharacter.entries.push(preservedItems);
+			if (preservedEquipment) completeCharacter.equipment = preservedEquipment;
 			// Add user choices to the complete character
 			this.addUserChoicesToCompleteCharacter(completeCharacter, userChoices);
 
@@ -16099,10 +16279,21 @@ class CharacterEditorPage {
 
 	async validateMulticlassRequirements (character, classEntry, results) {
 		const className = classEntry.name;
-		const abilities = character.abilities || {};
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		if (LevelUp?.checkMulticlassRequirements) {
+			const check = LevelUp.checkMulticlassRequirements(character, className);
+			if (!check.eligible) results.errors.push(`Multiclass ${check.reason}`);
+			return;
+		}
+
+		const abilities = character.abilities || {
+			str: character.str, dex: character.dex, con: character.con,
+			int: character.int, wis: character.wis, cha: character.cha,
+		};
 
 		// D&D 5e multiclass ability score requirements
 		const multiclassRequirements = {
+			"Artificer": {int: 13},
 			"Barbarian": {str: 13},
 			"Bard": {cha: 13},
 			"Cleric": {wis: 13},
@@ -16141,8 +16332,9 @@ class CharacterEditorPage {
 		const classLevel = classEntry.level;
 		const hasSubclass = classEntry.subclass && classEntry.subclass.name;
 
-		// Subclass selection levels by class
-		const subclassLevels = {
+		const SubOpt = globalThis.CharacterBuilderSubclassOptions;
+		const subclassLevels = SubOpt?.SUBCLASS_LEVELS || {
+			"Artificer": 3,
 			"Barbarian": 3,
 			"Bard": 3,
 			"Cleric": 1,
@@ -17966,18 +18158,28 @@ class CharacterEditorPage {
 	}
 
 	updateSpellSlotsForLevelUp (character) {
-		// Update spell slots based on class progression for multiclass spellcasters
 		const classes = character.class || [];
 		if (!Array.isArray(classes)) {
 			console.warn("character.class is not an array, skipping spell slot updates");
 			return;
 		}
 
-		console.log("Updating spell slots for classes:", classes.map(c => `${c.name} ${c.level}`));
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		if (LevelUp?.computeSpellSlots) {
+			const info = LevelUp.computeSpellSlots(character);
+			character.spells = character.spells || {levels: {}};
+			character.spells.levels = character.spells.levels || {};
+			Object.entries(info.slots || {}).forEach(([lvl, n]) => {
+				character.spells.levels[lvl] = character.spells.levels[lvl] || {spells: [], maxSlots: n};
+				character.spells.levels[lvl].maxSlots = n;
+			});
+			if (info.pactMagic) character.spells.pactMagic = info.pactMagic;
+			else delete character.spells.pactMagic;
+			console.log("Updated spell slots via CharacterBuilderLevelUp.computeSpellSlots", info);
+			return;
+		}
 
-		// Initialize spellcasting structure if needed
-		// Keep spellcasting information in `character.spells.levels`. Do not create
-		// a separate `character.spellcasting` object to avoid duplication.
+		console.log("Updating spell slots for classes:", classes.map(c => `${c.name} ${c.level}`));
 
 		// Calculate total caster level for multiclass spellcasters
 		let totalCasterLevel = 0;
@@ -17990,19 +18192,20 @@ class CharacterEditorPage {
 			const classLevel = cls.level;
 
 			// Full casters: add full level
-			const fullCasters = ["Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard"];
+			const fullCasters = ["Artificer", "Bard", "Cleric", "Druid", "Sorcerer", "Wizard"];
 			// Half casters: add half level (rounded down)
 			const halfCasters = ["Paladin", "Ranger"];
 
-			if (fullCasters.includes(className)) {
-				totalCasterLevel += classLevel;
+			if (className === "Warlock") {
 				hasSpellcasters = true;
-				console.log(`${className} ${classLevel} (full caster): +${classLevel} caster levels`);
+				// Pact magic handled separately below
+			} else if (fullCasters.includes(className)) {
+				totalCasterLevel += className === "Artificer" ? Math.ceil(classLevel / 2) : classLevel;
+				hasSpellcasters = true;
 			} else if (halfCasters.includes(className)) {
 				const halfLevels = Math.floor(classLevel / 2);
 				totalCasterLevel += halfLevels;
 				hasSpellcasters = true;
-				console.log(`${className} ${classLevel} (half caster): +${halfLevels} caster levels`);
 			}
 
 			// Special case for third casters (Eldritch Knight, Arcane Trickster)
@@ -18536,6 +18739,7 @@ class CharacterEditorPage {
 
 		// Fallback to standard D&D hit dice if no data available
 		const standardHitDice = {
+			"Artificer": 8,
 			"Barbarian": 12,
 			"Fighter": 10,
 			"Paladin": 10,
