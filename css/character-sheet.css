@@ -870,3 +870,72 @@
 		width: 100%;
 	}
 }
+
+/* Level-up modal: existing-class button (works in night/OLED) */
+.character-levelup__class-btn {
+	background: color-mix(in srgb, currentColor 8%, transparent) !important;
+	color: inherit !important;
+	border: 1px solid color-mix(in srgb, #28a745 55%, currentColor) !important;
+	border-left: 3px solid #28a745 !important;
+	text-align: left;
+}
+
+.character-levelup__class-btn:hover,
+.character-levelup__class-btn:focus {
+	background: color-mix(in srgb, #28a745 18%, transparent) !important;
+	color: inherit !important;
+}
+
+.ve-night-mode .character-levelup__class-btn,
+.ve-night-mode--oled .character-levelup__class-btn {
+	background: color-mix(in srgb, #28a745 12%, #111) !important;
+	color: #eee !important;
+	border-color: color-mix(in srgb, #28a745 50%, #444) !important;
+}
+
+.ve-night-mode .character-levelup__class-btn:hover,
+.ve-night-mode--oled .character-levelup__class-btn:hover {
+	background: color-mix(in srgb, #28a745 28%, #111) !important;
+	color: #fff !important;
+}
+
+/* DM screen / hover: character sheets must not inherit monster ve-stats parchment */
+.character-sheet-stats {
+	width: 100%;
+	border-collapse: collapse;
+	table-layout: auto;
+	background: transparent;
+	font-family: inherit;
+	font-size: inherit;
+	color: inherit;
+}
+
+.character-sheet-stats > tbody > tr > td,
+.character-sheet-stats > tr > td {
+	background: transparent;
+	color: inherit;
+	padding: 0.15rem 0.25rem;
+	border: none;
+	vertical-align: top;
+}
+
+.ve-night-mode .character-sheet-stats,
+.ve-night-mode--oled .character-sheet-stats {
+	background: transparent;
+	color: inherit;
+}
+
+/* If a character sheet is still nested under ve-stats, neutralize parchment */
+.ve-stats:has(.character-sheet) {
+	background: transparent !important;
+	table-layout: auto !important;
+	font-family: inherit !important;
+	font-size: inherit !important;
+	color: inherit !important;
+}
+
+.ve-night-mode .ve-stats:has(.character-sheet),
+.ve-night-mode--oled .ve-stats:has(.character-sheet) {
+	background: transparent !important;
+	color: inherit !important;
+}

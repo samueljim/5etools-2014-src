@@ -357,7 +357,8 @@ class CharactersPanelApp extends DmScreenPanelAppBase {
 
 	_renderCharacter (character) {
 		const renderedHtml = Renderer.character.getCompactRenderedString(character, {isStatic: false});
-		const eleStats = ee`<table class="ve-w-100 ve-stats"></table>`.html(renderedHtml);
+		// Avoid ve-stats (monster parchment / fixed layout) — use character sheet wrapper
+		const eleStats = ee`<table class="ve-w-100 character-sheet-stats"></table>`.html(renderedHtml);
 		this._eleContent.empty().appends(eleStats);
 		Renderer.character.bindListenersCompact(character, eleStats);
 	}

@@ -9105,12 +9105,15 @@ class CharacterEditorPage {
 
 			console.log(`Starting level up: ${currentLevel} -> ${newLevel}`);
 
-			// Initialize simple level uitemsp state
+			// Initialize simple level up state
 			this.levelUpState = {
 				originalCharacter: JSON.parse(JSON.stringify(characterData)), // Original backup
 				characterData: JSON.parse(JSON.stringify(characterData)), // Working copy
 				currentLevel,
 				newLevel,
+				choices: [],
+				pendingFeatures: [],
+				currentFeatureIndex: 0,
 				changes: {
 					classLevels: [],
 					features: [],
@@ -10010,14 +10013,14 @@ class CharacterEditorPage {
 		if (!classData) return "";
 
 		return `
-							<button type="button" class="list-group-item list-group-item-action list-group-item-success" data-action="level-existing" data-class-index="${index}">
+							<button type="button" class="list-group-item list-group-item-action character-levelup__class-btn" data-action="level-existing" data-class-index="${index}">
 								<div class="d-flex justify-content-between align-items-start">
 									<div>
 										<strong>${cls.name}</strong>
-										${cls.subclass ? `<span class="text-muted">(${cls.subclass.name})</span>` : ""}
+										${cls.subclass ? `<span class="ve-muted">(${cls.subclass.name})</span>` : ""}
 										<span class="badge badge-success ml-2">Level ${cls.level || 1} → ${(cls.level || 1) + 1}</span>
 										<br>
-										<small class="text-muted">Hit Die: d${classData.hd.faces} | ${this.getNextLevelFeaturePreview(cls)}</small>
+										<small class="ve-muted">Hit Die: d${classData.hd.faces} | ${this.getNextLevelFeaturePreview(cls)}</small>
 									</div>
 								</div>
 							</button>
@@ -12192,7 +12195,7 @@ class CharacterEditorPage {
 			await this.showFeatureChoiceModal(feature);
 		} else {
 			// Automatic feature - just add it and continue
-			this.levelUpState.choices.push({
+			(this.levelUpState.choices ||= []).push({
 				type: feature.type,
 				feature: feature.feature,
 				automatic: true,

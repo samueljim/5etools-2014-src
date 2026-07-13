@@ -19256,7 +19256,11 @@ Renderer.hover = class {
 
 		const name = toRender._displayName || toRender.name;
 		const fnRender = opts.fnRender || Renderer.hover.getFnRenderCompact(page, {isStatic: opts.isStatic});
-		const out = ee`<table class="ve-w-100 ve-stats ${opts.isBookContent ? `ve-stats--book` : ""}" ${name ? `data-roll-name-ancestor-roller="${Renderer.stripTags(name).qq()}"` : ""}>${fnRender(toRender, renderFnOpts)}</table>`;
+		const isCharacter = page === UrlUtil.PG_CHARACTERS || page === "characters.html";
+		const statsClass = isCharacter
+			? "character-sheet-stats"
+			: `ve-stats ${opts.isBookContent ? `ve-stats--book` : ""}`;
+		const out = ee`<table class="ve-w-100 ${statsClass}" ${name ? `data-roll-name-ancestor-roller="${Renderer.stripTags(name).qq()}"` : ""}>${fnRender(toRender, renderFnOpts)}</table>`;
 
 		if (!opts.isStatic) {
 			const fnBind = Renderer.hover.getFnBindListenersCompact(page);

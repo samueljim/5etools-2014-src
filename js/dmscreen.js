@@ -1347,7 +1347,8 @@ class Panel {
 					const fn = Renderer.hover.getFnRenderCompact(page);
 
 					const eleContentInner = ee`<div class="panel-content-wrapper-inner"></div>`;
-					const eleContentStats = ee`<table class="ve-w-100 ve-stats"></table>`.appendTo(eleContentInner);
+					// Do not use ve-stats here — that applies monster parchment styling and breaks character sheets
+					const eleContentStats = ee`<table class="ve-w-100 character-sheet-stats"></table>`.appendTo(eleContentInner);
 					eleContentStats.appends(fn(character));
 
 					const fnBind = Renderer.hover.getFnBindListenersCompact(page);
