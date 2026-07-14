@@ -2286,7 +2286,7 @@ class CharacterEditorPage {
 	async applyClassDataToCharacter (classes, characterTemplate, totalLevel) {
 		try {
 			// Apply data for each class
-			for (const classEntry of classes) {
+			for (const [classIx, classEntry] of classes.entries()) {
 				const classData = await this.loadClassData(classEntry.name);
 				if (!classData || !classData.class || !classData.class[0]) {
 					console.warn(`Could not load class data for ${classEntry.name}`);
@@ -2296,6 +2296,21 @@ class CharacterEditorPage {
 				const classInfo = classData.class[0];
 				const subclasses = classData.subclass || [];
 				const classLevel = classEntry.level || 1;
+
+				// Apply proficiencies from real class data. Saving throws come only from the
+				// first (primary) class; additional classes grant the multiclass subset (handled
+				// in the prose entry). This guarantees saves are set on every creation/level-up
+				// path that runs applyClassDataToCharacter, not just the random generator.
+				if (classIx === 0 && Array.isArray(classInfo.proficiency) && classInfo.proficiency.length) {
+					const saves = [...new Set(classInfo.proficiency.filter(Boolean))];
+					if (saves.length) characterTemplate.saveProficiencies = saves;
+				}
+
+				// Apply the primary class's fixed armor/weapon/tool proficiencies as structured
+				// data so they show under "Other Proficiencies" on the sheet (not just in prose).
+				if (classIx === 0) {
+					await this.applyBaseClassProficiencies(characterTemplate, classInfo);
+				}
 
 				// Hit dice are already stored in the class object, no need to duplicate
 
@@ -2309,6 +2324,9 @@ class CharacterEditorPage {
 					// Enhance the spells object with spellcasting information
 					characterTemplate.spells.spellcastingAbility = classInfo.spellcastingAbility;
 					characterTemplate.spells.casterProgression = classInfo.casterProgression;
+
+					// Cache authoritative spell progressions so the sync count helpers stay accurate.
+					this._cacheClassProgression(classInfo);
 
 					// Calculate spell slots and populate them into the levels structure
 					if (classInfo.casterProgression === "full") {
@@ -4882,6 +4900,7 @@ class CharacterEditorPage {
 			"Druid": { ability: "Wisdom", abilityKey: "wis", type: "prepared", ritual: true },
 			"Paladin": { ability: "Charisma", abilityKey: "cha", type: "prepared", divine: true },
 			"Ranger": { ability: "Wisdom", abilityKey: "wis", type: "known", natural: true },
+			"Artificer": { ability: "Intelligence", abilityKey: "int", type: "prepared", ritual: true },
 		};
 
 		return spellcastingMap[className] || null;
@@ -4896,6 +4915,8 @@ class CharacterEditorPage {
 			const casterType = this.getCasterType(cls.name);
 			if (casterType === "full") {
 				spellSlotLevel += cls.level;
+			} else if (casterType === "halfRoundUp") {
+				spellSlotLevel += Math.ceil(cls.level / 2);
 			} else if (casterType === "half") {
 				spellSlotLevel += Math.floor(cls.level / 2);
 			} else if (casterType === "third") {
@@ -4933,6 +4954,7 @@ class CharacterEditorPage {
 		const pactCasters = ["Warlock"];
 
 		if (fullCasters.includes(className)) return "full";
+		if (className === "Artificer") return "halfRoundUp"; // half-caster that rounds UP and gains slots at level 1
 		if (halfCasters.includes(className)) return "half";
 		if (thirdCasters.includes(className)) return "third";
 		if (pactCasters.includes(className)) return "pact";
@@ -4982,6 +5004,20 @@ class CharacterEditorPage {
 
 			// Warlocks only have slots at their highest available level
 			return spellLevel === slotLevel ? numSlots : 0;
+		}
+
+		// Artificer: half-caster that ROUNDS UP and gains slots from level 1. Its slot
+		// progression matches the full-caster table read at an effective level of ceil(level/2).
+		if (casterClass.name === "Artificer") {
+			const effLevel = Math.min(Math.ceil(casterClass.level / 2), 20);
+			if (effLevel === 0 || spellLevel > 5) return 0; // Artificers cap at 5th-level spells
+			const artificerFull = [
+				[2, 0, 0, 0, 0, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0, 0, 0, 0], [4, 2, 0, 0, 0, 0, 0, 0, 0],
+				[4, 3, 0, 0, 0, 0, 0, 0, 0], [4, 3, 2, 0, 0, 0, 0, 0, 0], [4, 3, 3, 0, 0, 0, 0, 0, 0],
+				[4, 3, 3, 1, 0, 0, 0, 0, 0], [4, 3, 3, 2, 0, 0, 0, 0, 0], [4, 3, 3, 3, 1, 0, 0, 0, 0],
+				[4, 3, 3, 3, 2, 0, 0, 0, 0],
+			];
+			return artificerFull[effLevel - 1]?.[spellLevel - 1] || 0;
 		}
 
 		// Half-caster progression for Paladin and Ranger
@@ -5053,6 +5089,7 @@ class CharacterEditorPage {
 			"Bard": [2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
 			"Cleric": [3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
 			"Druid": [2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+			"Artificer": [2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4],
 			"Paladin": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 			"Ranger": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 		};
@@ -5076,9 +5113,38 @@ class CharacterEditorPage {
 			bonusCantrips = atProgression[Math.min(classLevel - 1, 19)];
 		}
 
-		const progression = cantripProgression[className];
-		const baseCantrips = progression ? progression[Math.min(classLevel - 1, 19)] : 0;
+		const progression = this._getAuthoritativeCantripProgression(className) || cantripProgression[className];
+		const baseCantrips = progression ? progression[Math.min(classLevel - 1, progression.length - 1)] : 0;
 		return baseCantrips + bonusCantrips;
+	}
+
+	/**
+	 * Cache a class's spell-progression arrays from its authoritative JSON so the sync count
+	 * helpers (getCantripCount/calculateSpellsKnown) never drift from the data. Safe to call
+	 * repeatedly; only overwrites with data that is actually present on the class object.
+	 * @param classInfo A loaded class object (from data/class/class-*.json).
+	 */
+	_cacheClassProgression (classInfo) {
+		if (!classInfo || !classInfo.name) return;
+		if (!this._classProgressionCache) this._classProgressionCache = {};
+		this._classProgressionCache[classInfo.name] = {
+			cantrip: Array.isArray(classInfo.cantripProgression) ? classInfo.cantripProgression : null,
+			known: Array.isArray(classInfo.spellsKnownProgression) ? classInfo.spellsKnownProgression : null,
+			knownFixed: Array.isArray(classInfo.spellsKnownProgressionFixed) ? classInfo.spellsKnownProgressionFixed : null,
+			casterProgression: classInfo.casterProgression || null,
+		};
+	}
+
+	/** Authoritative (cached-from-JSON) cantrips-known progression for a class, or null. */
+	_getAuthoritativeCantripProgression (className) {
+		const cached = this._classProgressionCache && this._classProgressionCache[className];
+		return cached && Array.isArray(cached.cantrip) ? cached.cantrip : null;
+	}
+
+	/** Authoritative (cached-from-JSON) spells-known progression for a class, or null. */
+	_getAuthoritativeSpellsKnownProgression (className) {
+		const cached = this._classProgressionCache && this._classProgressionCache[className];
+		return cached && Array.isArray(cached.known) ? cached.known : null;
 	}
 
 	getRandomCantrips (casterClass, cantripCount) {
@@ -5222,8 +5288,8 @@ class CharacterEditorPage {
 			"Warlock": [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15],
 		};
 
-		const progression = spellsKnownProgression[casterClass.name];
-		return progression ? progression[Math.min(casterClass.level - 1, 19)] : null;
+		const progression = this._getAuthoritativeSpellsKnownProgression(casterClass.name) || spellsKnownProgression[casterClass.name];
+		return progression ? progression[Math.min(casterClass.level - 1, progression.length - 1)] : null;
 	}
 
 	getRandomSpells (casterClass, level) {
@@ -10197,6 +10263,7 @@ class CharacterEditorPage {
 						// Include subclass data from the same file
 						const classInfo = classData.class[0];
 						classInfo.availableSubclasses = classData.subclass || [];
+						this._cacheClassProgression(classInfo);
 						allClasses.push(classInfo);
 					}
 				}
@@ -15586,35 +15653,53 @@ class CharacterEditorPage {
 	}
 
 	async getStartingProficienciesForClass (className) {
-		const classProficiencies = {
-			"Fighter": [
-				"Armor: All armor, shields",
-				"Weapons: Simple weapons, martial weapons",
-				"Saving Throws: Strength, Constitution",
-			],
-			"Wizard": [
-				"Armor: None",
-				"Weapons: Daggers, darts, slings, quarterstaffs, light crossbows",
-				"Saving Throws: Intelligence, Wisdom",
-			],
-			"Rogue": [
-				"Armor: Light armor",
-				"Weapons: Simple weapons, hand crossbows, longswords, rapiers, shortswords",
-				"Tools: Thieves' tools",
-				"Saving Throws: Dexterity, Intelligence",
-			],
-			"Cleric": [
-				"Armor: Light armor, medium armor, shields",
-				"Weapons: Simple weapons",
-				"Saving Throws: Wisdom, Charisma",
-			],
-		};
+		try {
+			const classData = await this.loadClassData(className);
+			const classInfo = classData?.class?.[0];
+			if (!classInfo) throw new Error(`No class data for ${className}`);
 
-		return classProficiencies[className] || [
-			`Proficiencies for ${className}`,
-			"Class-specific armor and weapons",
-			"Two saving throws",
-		];
+			// Strip 5etools tags, e.g. "{@item longsword|phb}" -> "longsword".
+			const clean = (str) => typeof str === "string"
+				? str.replace(/\{@\w+\s+([^|}]+)(?:\|[^}]*)?\}/g, "$1").trim()
+				: "";
+			const cleanList = (arr) => (Array.isArray(arr) ? arr : [])
+				.map(it => (typeof it === "string" ? clean(it) : (it?.proficiency ? clean(it.proficiency) : null)))
+				.filter(Boolean);
+
+			const sp = classInfo.startingProficiencies || {};
+			const lines = [];
+
+			const armor = cleanList(sp.armor);
+			lines.push(`Armor: ${armor.length ? armor.join(", ") : "None"}`);
+
+			const weapons = cleanList(sp.weapons);
+			lines.push(`Weapons: ${weapons.length ? weapons.join(", ") : "None"}`);
+
+			const tools = cleanList(sp.tools);
+			if (tools.length) lines.push(`Tools: ${tools.join(", ")}`);
+
+			if (Array.isArray(classInfo.proficiency) && classInfo.proficiency.length) {
+				const saves = classInfo.proficiency.map(p => Parser.attAbvToFull(p));
+				lines.push(`Saving Throws: ${saves.join(", ")}`);
+			}
+
+			const skillDef = (sp.skills || [])[0];
+			if (skillDef?.choose?.from) {
+				const from = skillDef.choose.from.map(s => clean(s));
+				lines.push(`Skills: Choose ${skillDef.choose.count || 1} from ${from.join(", ")}`);
+			} else if (skillDef?.any) {
+				lines.push(`Skills: Choose any ${skillDef.any}`);
+			}
+
+			return lines;
+		} catch (e) {
+			console.warn(`Falling back to generic proficiencies for ${className}:`, e);
+			return [
+				`Proficiencies for ${className}`,
+				"Class-specific armor and weapons",
+				"Two saving throws",
+			];
+		}
 	}
 
 	async loadBackgroundData (backgroundName) {
@@ -17566,9 +17651,758 @@ class CharacterEditorPage {
 				}
 			});
 		}
+}
+
+// Pretty-print an underscored skill key, e.g. "animal_handling" -> "Animal Handling".
+_grantsPrettyName (key) {
+	return String(key || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// Dedupe-push a list of proficiency strings into character.bonusProficiencies (case-insensitive).
+// Stored lowercase; the sheet renderer title-cases them for display.
+_addBonusProficiencies (character, profs) {
+	const list = (profs || []).filter(Boolean);
+	if (!list.length) return;
+	if (!Array.isArray(character.bonusProficiencies)) character.bonusProficiencies = [];
+	for (const p of list) {
+		if (!character.bonusProficiencies.some(x => String(x).toLowerCase() === String(p).toLowerCase())) {
+			character.bonusProficiencies.push(p);
+		}
+	}
+}
+
+// Normalize an armor token: "light" -> "light armor"; "shield" -> "shields".
+_normArmorProf (a) {
+	const l = String(a).toLowerCase().trim();
+	if (l === "shield" || l === "shields") return "shields";
+	return l.includes("armor") ? l : `${l} armor`;
+}
+
+// Normalize a weapon token: "simple"/"martial" -> "... weapons"; else as-is (specific weapon).
+_normWeaponProf (w) {
+	const l = String(w).toLowerCase().trim();
+	if (l === "simple") return "simple weapons";
+	if (l === "martial") return "martial weapons";
+	return l;
+}
+
+/**
+ * Extract FIXED proficiency names from a race/background-style proficiency array, whose entries
+ * are objects mapping a proficiency name to `true`, e.g. `[{"battleaxe|phb": true, "choose": {...}}]`.
+ * Choice keys ("choose", "any*") and non-`true` values are skipped; `|source` tags and {@tags} are
+ * stripped. Armor tokens are normalized via _normArmorProf, weapons via _normWeaponProf.
+ * @param arr The raw proficiency array.
+ * @param kind "armor" | "weapon" | "tool".
+ */
+_extractFixedProficiencies (arr, kind) {
+	const out = [];
+	(Array.isArray(arr) ? arr : []).forEach(group => {
+		if (!group || typeof group !== "object") return;
+		Object.entries(group).forEach(([key, val]) => {
+			if (val !== true) return; // skip choices: "choose" is an object, "any*" is a number
+			if (key === "choose" || /^any/i.test(key)) return;
+			const name = key
+				.replace(/\|.*$/, "")
+				.replace(/\{@\w+\s+([^|}]+)(?:\|[^}]*)?\}/g, "$1")
+				.trim()
+				.toLowerCase();
+			if (!name) return;
+			if (kind === "armor") out.push(this._normArmorProf(name));
+			else if (kind === "weapon") out.push(this._normWeaponProf(name));
+			else out.push(name);
+		});
+	});
+	return out;
+}
+
+/**
+ * Backfill the character's fixed racial and background armor/weapon/tool proficiencies into
+ * `character.bonusProficiencies`, loading race/background JSON as needed. Idempotent (dedupes
+ * case-insensitively), so it is safe to call on every creation and level-up regardless of which
+ * source methods already ran.
+ */
+async applyRaceBackgroundProficiencies (character) {
+	// Race
+	try {
+		const race = character?.race;
+		if (race?.name) {
+			const response = await fetch("data/races.json");
+			if (response.ok) {
+				const raceData = await response.json();
+				const raceInfo = (raceData.race || []).find(r => r.name === race.name && (r.source === race.source || !race.source));
+				if (raceInfo) {
+					this._addBonusProficiencies(character, [
+						...this._extractFixedProficiencies(raceInfo.armorProficiencies, "armor"),
+						...this._extractFixedProficiencies(raceInfo.weaponProficiencies, "weapon"),
+						...this._extractFixedProficiencies(raceInfo.toolProficiencies, "tool"),
+					]);
+				}
+			}
+		}
+	} catch (e) { console.warn("Could not apply racial proficiencies:", e); }
+
+	// Background
+	try {
+		const bg = character?.background;
+		if (bg?.name) {
+			const response = await fetch("data/backgrounds.json");
+			if (response.ok) {
+				const bgData = await response.json();
+				const bgInfo = (bgData.background || []).find(b => b.name === bg.name && (b.source === bg.source || !bg.source));
+				if (bgInfo) {
+					this._addBonusProficiencies(character, [
+						...this._extractFixedProficiencies(bgInfo.armorProficiencies, "armor"),
+						...this._extractFixedProficiencies(bgInfo.weaponProficiencies, "weapon"),
+						...this._extractFixedProficiencies(bgInfo.toolProficiencies, "tool"),
+					]);
+				}
+			}
+		}
+	} catch (e) { console.warn("Could not apply background proficiencies:", e); }
+}
+
+/**
+ * Apply a feat's STRUCTURED mechanical effects to the character: ability-score increases,
+ * saving-throw/skill/language/tool/weapon/armor proficiencies, expertise, damage resistances,
+ * and a few name-specific bonuses (e.g. Tough's hit points). Feats carry structured grant keys
+ * in feats.json, so this is data-driven rather than prose-scanned: fixed grants apply
+ * automatically, and genuine "choose" grants are routed to a chooser modal. Idempotent via
+ * `character._appliedFeatKeys`, so it is safe to re-run on every finalize.
+ * @param character Live character object (direct-property ability scores).
+ * @param feat A loaded feat object from feats.json.
+ * @param [opts.featLabel] Display label for modals/toasts (defaults to feat.name).
+ */
+async applyFeatToCharacter (character, feat, {featLabel} = {}) {
+	if (!character || !feat) return;
+	const label = featLabel || feat.name || "Feat";
+
+	if (!Array.isArray(character._appliedFeatKeys)) character._appliedFeatKeys = [];
+	const key = `${feat.name || ""}|${feat.source || ""}`;
+	if (character._appliedFeatKeys.includes(key)) return;
+	character._appliedFeatKeys.push(key);
+
+	const ABILS = ["str", "dex", "con", "int", "wis", "cha"];
+	const ALL_SKILLS = (globalThis.CharacterBuilderFeatureGrants && globalThis.CharacterBuilderFeatureGrants.ALL_SKILLS) || [];
+	const applied = [];
+	const abFull = (ab) => (Parser.attAbvToFull ? Parser.attAbvToFull(ab) : String(ab).toUpperCase());
+	const getScore = (ab) => Number(character[ab] ?? 10);
+	const bump = (ab, amt) => {
+		const nv = Math.min(20, getScore(ab) + (Number(amt) || 0));
+		character[ab] = nv;
+		applied.push(`${String(ab).toUpperCase()} \u2192 ${nv}`);
+	};
+	const skillKey = (s) => String(s).toLowerCase().trim().replace(/\s+/g, "_");
+	// Number of picks an entry represents when it is a CHOICE (0 = fixed grant, handled elsewhere).
+	const choiceCount = (entry) => {
+		if (!entry || typeof entry !== "object") return 0;
+		if (entry.choose) {
+			if (Array.isArray(entry.choose)) return entry.choose[0]?.count || 1;
+			return entry.choose.count || 1;
+		}
+		const any = Object.entries(entry).find(([k, v]) => /^any/i.test(k) && typeof v === "number");
+		return any ? any[1] : 0;
+	};
+
+	// ----- Ability score increases -----
+	for (const entry of (feat.ability || [])) {
+		if (!entry || typeof entry !== "object") continue;
+		if (entry.choose) {
+			const amount = entry.choose.amount || 1;
+			const count = entry.choose.count || 1;
+			const opts = (entry.choose.from || ABILS).filter(ab => getScore(ab) < 20);
+			if (!opts.length) continue;
+			const picked = await InputUiUtil.pGetUserMultipleChoice({
+				title: `${label}: Ability Score Increase`,
+				htmlDescription: `<p class="ve-muted">Choose ${count} ability score${count > 1 ? "s" : ""} to increase by ${amount} (max 20).</p>`,
+				values: opts,
+				count,
+				fnDisplay: abFull,
+				isResolveItems: true,
+			});
+			(picked || []).forEach(ab => bump(ab, amount));
+		} else {
+			Object.entries(entry).forEach(([ab, amt]) => { if (ABILS.includes(ab)) bump(ab, amt); });
+		}
 	}
 
-	async applyLevelUpFeaturesToCharacter (character) {
+	// ----- Saving throw proficiencies -----
+	if (!Array.isArray(character.saveProficiencies)) character.saveProficiencies = [];
+	for (const entry of (feat.savingThrowProficiencies || [])) {
+		if (!entry || typeof entry !== "object") continue;
+		const known = new Set(character.saveProficiencies.map(s => String(s).toLowerCase()));
+		if (entry.choose) {
+			const opts = (entry.choose.from || ABILS).filter(ab => !known.has(ab));
+			if (!opts.length) continue;
+			const picked = await InputUiUtil.pGetUserMultipleChoice({
+				title: `${label}: Saving Throw Proficiency`,
+				htmlDescription: `<p class="ve-muted">Choose a saving throw to gain proficiency in.</p>`,
+				values: opts, count: 1, fnDisplay: abFull, isResolveItems: true,
+			});
+			(picked || []).forEach(ab => { if (!known.has(ab)) { character.saveProficiencies.push(ab); applied.push(`Save: ${abFull(ab)}`); } });
+		} else {
+			Object.entries(entry).forEach(([ab, v]) => { if (v === true && ABILS.includes(ab) && !known.has(ab)) { character.saveProficiencies.push(ab); applied.push(`Save: ${abFull(ab)}`); } });
+		}
+	}
+
+	// ----- Skill proficiencies (fixed + choose + anySkill:N) -----
+	if (!Array.isArray(character.skillProficiencies)) character.skillProficiencies = [];
+	const addSkillProf = (name) => {
+		const k = skillKey(name);
+		if (k && !character.skillProficiencies.includes(k)) { character.skillProficiencies.push(k); applied.push(`Skill: ${this._grantsPrettyName(k)}`); }
+	};
+	for (const entry of (feat.skillProficiencies || [])) {
+		if (!entry || typeof entry !== "object") continue;
+		Object.entries(entry).forEach(([k, v]) => { if (v === true && k !== "choose" && !/^any/i.test(k)) addSkillProf(k); });
+		const cnt = choiceCount(entry);
+		if (cnt) {
+			const from = (entry.choose?.from || ALL_SKILLS).map(skillKey);
+			const opts = from.filter((k, i, a) => a.indexOf(k) === i && !character.skillProficiencies.includes(k));
+			const count = Math.min(cnt, opts.length);
+			if (count) {
+				const picked = await InputUiUtil.pGetUserMultipleChoice({
+					title: `${label}: Skill Proficiency`,
+					htmlDescription: `<p class="ve-muted">Choose ${count} skill${count > 1 ? "s" : ""} to gain proficiency in.</p>`,
+					values: opts, count, fnDisplay: k => this._grantsPrettyName(k), isResolveItems: true,
+				});
+				(picked || []).forEach(addSkillProf);
+			}
+		}
+	}
+
+	// ----- Expertise (choose from existing skill proficiencies) -----
+	if (!Array.isArray(character.expertise)) character.expertise = [];
+	for (const entry of (feat.expertise || [])) {
+		const cnt = choiceCount(entry) || 1;
+		const opts = character.skillProficiencies.filter(k => !character.expertise.includes(k));
+		const count = Math.min(cnt, opts.length);
+		if (!count) continue;
+		const picked = await InputUiUtil.pGetUserMultipleChoice({
+			title: `${label}: Expertise`,
+			htmlDescription: `<p class="ve-muted">Choose ${count} skill${count > 1 ? "s" : ""} to gain expertise in (double proficiency bonus).</p>`,
+			values: opts, count, fnDisplay: k => this._grantsPrettyName(k), isResolveItems: true,
+		});
+		(picked || []).forEach(k => { if (!character.expertise.includes(k)) { character.expertise.push(k); applied.push(`Expertise: ${this._grantsPrettyName(k)}`); } });
+	}
+
+	// ----- Languages (fixed + any:N choose) -----
+	if (!Array.isArray(character.languages)) character.languages = [];
+	const titleCase = (s) => String(s).replace(/\b\w/g, c => c.toUpperCase());
+	const hasLang = (l) => character.languages.some(x => String(x).toLowerCase() === String(l).toLowerCase());
+	const addLang = (l) => { if (l && !hasLang(l)) { character.languages.push(titleCase(l)); applied.push(`Language: ${titleCase(l)}`); } };
+	for (const entry of (feat.languageProficiencies || [])) {
+		if (!entry || typeof entry !== "object") continue;
+		Object.entries(entry).forEach(([k, v]) => { if (v === true && k !== "choose" && !/^any/i.test(k)) addLang(k); });
+		const cnt = choiceCount(entry);
+		if (cnt) {
+			const langOpts = [...(Parser.LANGUAGES_STANDARD || []), ...(Parser.LANGUAGES_EXOTIC || [])].filter(l => !hasLang(l));
+			const count = Math.min(cnt, langOpts.length);
+			if (count) {
+				const picked = await InputUiUtil.pGetUserMultipleChoice({
+					title: `${label}: Languages`,
+					htmlDescription: `<p class="ve-muted">Choose ${count} language${count > 1 ? "s" : ""}.</p>`,
+					values: langOpts, count, isResolveItems: true, isSearchable: true,
+				});
+				(picked || []).forEach(addLang);
+			}
+		}
+	}
+
+	// ----- Fixed tool / weapon / armor proficiencies \u2192 bonusProficiencies -----
+	const fixedProfs = [
+		...this._extractFixedProficiencies(feat.armorProficiencies, "armor"),
+		...this._extractFixedProficiencies(feat.weaponProficiencies, "weapon"),
+		...this._extractFixedProficiencies(feat.toolProficiencies, "tool"),
+	];
+	if (fixedProfs.length) { this._addBonusProficiencies(character, fixedProfs); fixedProfs.forEach(p => applied.push(`Proficiency: ${p}`)); }
+
+	// ----- Tool / weapon proficiency CHOICES (free-text prompt) -----
+	const promptProfChoices = async (arr, kindLabel) => {
+		for (const entry of (arr || [])) {
+			const cnt = choiceCount(entry);
+			for (let i = 0; i < cnt; ++i) {
+				const val = await InputUiUtil.pGetUserString({
+					title: `${label}: ${kindLabel} Proficiency${cnt > 1 ? ` (${i + 1}/${cnt})` : ""}`,
+					isSkippable: true,
+				});
+				if (val && val.trim()) { this._addBonusProficiencies(character, [val.trim().toLowerCase()]); applied.push(`${kindLabel}: ${val.trim()}`); }
+			}
+		}
+	};
+	await promptProfChoices(feat.toolProficiencies, "Tool");
+	await promptProfChoices(feat.weaponProficiencies, "Weapon");
+
+	// ----- Skilled-style combined choice: pick skills (tools can be added manually) -----
+	for (const entry of (feat.skillToolLanguageProficiencies || [])) {
+		const group = Array.isArray(entry.choose) ? entry.choose[0] : entry.choose;
+		const cnt = group?.count || 0;
+		if (!cnt) continue;
+		const opts = ALL_SKILLS.map(skillKey).filter(k => !character.skillProficiencies.includes(k));
+		const count = Math.min(cnt, opts.length);
+		if (!count) continue;
+		const picked = await InputUiUtil.pGetUserMultipleChoice({
+			title: `${label}: Proficiencies`,
+			htmlDescription: `<p class="ve-muted">Choose ${count} skill${count > 1 ? "s" : ""} to gain proficiency in. (Tool proficiencies from this feat can be added manually.)</p>`,
+			values: opts, count, fnDisplay: k => this._grantsPrettyName(k), isResolveItems: true,
+		});
+		(picked || []).forEach(addSkillProf);
+	}
+
+	// ----- Damage resistances -----
+	for (const entry of (feat.resist || [])) {
+		if (!Array.isArray(character.resist)) character.resist = [];
+		const addResist = (r) => { const rl = String(r).toLowerCase(); if (!character.resist.some(x => String(x).toLowerCase() === rl)) { character.resist.push(rl); applied.push(`Resistance: ${rl}`); } };
+		if (typeof entry === "string") addResist(entry);
+		else if (entry?.choose) {
+			const opts = entry.choose.from || [];
+			if (opts.length) {
+				const picked = await InputUiUtil.pGetUserMultipleChoice({
+					title: `${label}: Damage Resistance`,
+					htmlDescription: `<p class="ve-muted">Choose a damage type to gain resistance to.</p>`,
+					values: opts, count: 1, isResolveItems: true,
+				});
+				(picked || []).forEach(addResist);
+			}
+		}
+	}
+
+	// ----- Feat-granted spells (innate / known) -----
+	try {
+		await this.applyFeatSpellsToCharacter(character, feat, {featLabel: label});
+	} catch (spellErr) {
+		console.error("Error applying feat spells:", spellErr);
+	}
+
+	// ----- Name-specific mechanical bonuses not captured in structured data -----
+	if (/^tough$/i.test(feat.name || "") && character.hp && typeof character.hp === "object") {
+		const totalLevel = CharacterEditorPage.getCharacterLevel(character) || 1;
+		const bonusHp = 2 * totalLevel;
+		character.hp.max = (Number(character.hp.max) || 0) + bonusHp;
+		character.hp.current = (Number(character.hp.current) || 0) + bonusHp;
+		applied.push(`HP +${bonusHp} (Tough)`);
+	}
+
+	if (applied.length) {
+		console.log(`\u2728 Feat effects applied for "${label}":`, applied);
+		try { JqueryUtil.doToast({content: `${label}: ${applied.join("; ")}`, type: "success"}); } catch (ignored) { /* best-effort */ }
+	}
+}
+
+/**
+ * Apply the spells a feat grants (`additionalSpells`) to the character's spell list. Handles fixed
+ * spells (added directly) and `{choose: "filter"}` expressions (routed to a searchable chooser),
+ * across both `known` and `innate` (daily/rest) buckets. When a feat offers multiple named lists
+ * (e.g. Magic Initiate's class options), the user first picks one list. Chosen/fixed spells are
+ * written as `"Name|SOURCE"` tags under `character.spells.levels[level].spells`, matching the rest
+ * of the sheet. Called from applyFeatToCharacter (which is idempotent), and safe to re-run because
+ * spells are deduped by name.
+ * @param character Live character object.
+ * @param feat A loaded feat object from feats.json.
+ * @param [opts.featLabel] Display label for modals/toasts.
+ */
+async applyFeatSpellsToCharacter (character, feat, {featLabel} = {}) {
+	const groups = feat && feat.additionalSpells;
+	if (!Array.isArray(groups) || !groups.length) return;
+	const label = featLabel || feat.name || "Feat";
+
+	if (!this._allSpellData) {
+		try { this._allSpellData = await DataUtil.spell.pLoadAll(); } catch (e) { console.warn("Could not load spell data for feat spells:", e); return; }
+	}
+	const allSpells = this._allSpellData || [];
+	if (!allSpells.length) return;
+
+	// When a feat provides multiple named spell lists (Magic Initiate: Bard/Cleric/...), pick one.
+	let group = groups[0];
+	const named = groups.filter(g => g && g.name);
+	if (named.length > 1) {
+		const picked = await InputUiUtil.pGetUserMultipleChoice({
+			title: `${label}: Spell List`,
+			htmlDescription: `<p class="ve-muted">Choose which spell list to learn from.</p>`,
+			values: named.map(g => g.name),
+			count: 1,
+			isResolveItems: true,
+		});
+		const chosenName = (picked || [])[0];
+		group = named.find(g => g.name === chosenName) || group;
+	}
+	if (!group) return;
+
+	character.spells = character.spells || {levels: {}};
+	character.spells.levels = character.spells.levels || {};
+	const ensureLevel = (lvl) => {
+		const k = String(lvl);
+		if (!character.spells.levels[k]) character.spells.levels[k] = {spells: [], maxSlots: 0};
+		if (!Array.isArray(character.spells.levels[k].spells)) character.spells.levels[k].spells = [];
+		return character.spells.levels[k];
+	};
+	const hasSpellNamed = (name) => Object.values(character.spells.levels).some(bucket =>
+		(bucket.spells || []).some(x => String(x).split("|")[0].trim().toLowerCase() === String(name).toLowerCase()));
+	const addSpellObj = (sp) => {
+		if (!sp || hasSpellNamed(sp.name)) return false;
+		ensureLevel(sp.level ?? 0).spells.push(`${sp.name}|${sp.source || "PHB"}`);
+		return true;
+	};
+	// Resolve a spell reference ("mage hand", "sword burst|TCE", "mage hand#c") to a loaded spell.
+	const findSpell = (ref) => {
+		const base = String(ref).split("#")[0];
+		const [namePart, srcPart] = base.split("|");
+		const name = namePart.trim().toLowerCase();
+		const src = srcPart ? srcPart.trim().toLowerCase() : null;
+		return allSpells.find(s => s.name.toLowerCase() === name && (!src || String(s.source || "").toLowerCase() === src))
+			|| allSpells.find(s => s.name.toLowerCase() === name);
+	};
+
+	// Harvest fixed spell names and {choose} expressions from a spell bag value.
+	const fixedNames = [];
+	const chooseExprs = [];
+	const harvest = (val) => {
+		if (typeof val === "string") fixedNames.push(val);
+		else if (val && typeof val === "object" && val.choose) chooseExprs.push({expr: val.choose, count: val.count || 1});
+	};
+	if (group.known && group.known._) (Array.isArray(group.known._) ? group.known._ : []).forEach(harvest);
+	const innateRoot = group.innate && group.innate._;
+	if (innateRoot && typeof innateRoot === "object") {
+		["will", "ritual", "daily", "rest", "resource"].forEach(freq => {
+			const bucket = innateRoot[freq];
+			if (bucket && typeof bucket === "object") Object.values(bucket).forEach(arr => (Array.isArray(arr) ? arr : []).forEach(harvest));
+		});
+	}
+
+	const added = [];
+	for (const nm of fixedNames) {
+		const sp = findSpell(nm);
+		if (sp) { if (addSpellObj(sp)) added.push(sp.name); }
+		else console.warn(`Feat "${label}": granted spell not found in database: ${nm}`);
+	}
+
+	for (const {expr, count} of chooseExprs) {
+		const matches = this._filterSpellsByExpr(allSpells, expr).filter(sp => !hasSpellNamed(sp.name));
+		const optNames = [...new Set(matches.map(s => s.name))].sort();
+		if (!optNames.length) continue;
+		const pickCount = Math.min(count, optNames.length);
+		const picked = await InputUiUtil.pGetUserMultipleChoice({
+			title: `${label}: Choose Spell${pickCount > 1 ? "s" : ""}`,
+			htmlDescription: `<p class="ve-muted">Choose ${pickCount} spell${pickCount > 1 ? "s" : ""} granted by this feat.</p>`,
+			values: optNames,
+			count: pickCount,
+			isResolveItems: true,
+			isSearchable: true,
+		});
+		(picked || []).forEach(nm => { const sp = findSpell(nm); if (sp && addSpellObj(sp)) added.push(sp.name); });
+	}
+
+	// If the character had no spellcasting ability recorded, seed it from the feat's ability.
+	if (group.ability && group.ability !== "inherit" && !character.spells.ability) {
+		const ABFULL = {str: "Strength", dex: "Dexterity", con: "Constitution", int: "Intelligence", wis: "Wisdom", cha: "Charisma"};
+		if (ABFULL[group.ability]) character.spells.ability = ABFULL[group.ability];
+	}
+
+	if (added.length) {
+		console.log(`\u2728 Feat spells added for "${label}":`, added);
+		try { JqueryUtil.doToast({content: `${label} spells: ${added.join(", ")}`, type: "success"}); } catch (ignored) { /* best-effort */ }
+	}
+}
+
+/**
+ * Filter a loaded spell list by a 5etools `choose` filter expression such as
+ * "level=1|school=E;D" or "level=0|class=Bard". Supports `level` (numbers), `school` (letter
+ * codes, `;`-separated = OR), and `class` (matched against the spell's merged class list). Unknown
+ * keys are ignored, and `class` is applied defensively \u2014 if a spell carries no class data it is
+ * not excluded, so the chooser degrades gracefully rather than showing nothing.
+ * @param allSpells Loaded spell array (from DataUtil.spell.pLoadAll()).
+ * @param expr The filter expression string.
+ */
+_filterSpellsByExpr (allSpells, expr) {
+	const preds = [];
+	String(expr).split("|").map(p => p.trim()).filter(Boolean).forEach(part => {
+		const idx = part.indexOf("=");
+		if (idx < 0) return;
+		const key = part.slice(0, idx).trim().toLowerCase();
+		const vals = part.slice(idx + 1).split(";").map(v => v.trim()).filter(Boolean);
+		if (!vals.length) return;
+		if (key === "level") {
+			const nums = vals.map(v => Number(v)).filter(n => !Number.isNaN(n));
+			if (nums.length) preds.push(sp => nums.includes(sp.level));
+		} else if (key === "school") {
+			const set = new Set(vals.map(v => v.toUpperCase()));
+			preds.push(sp => set.has(String(sp.school || "").toUpperCase()));
+		} else if (key === "class") {
+			const set = new Set(vals.map(v => v.toLowerCase()));
+			preds.push(sp => {
+				const fromList = (sp.classes && (sp.classes.fromClassList || sp.classes.fromClassListVariant)) || [];
+				if (!fromList.length) return true; // no class data available \u2192 don't over-filter
+				return fromList.some(c => set.has(String(c.name || "").toLowerCase()));
+			});
+		}
+	});
+	return allSpells.filter(sp => sp && typeof sp.level === "number" && preds.every(p => p(sp)));
+}
+
+/**
+ * Apply a Fighting Style's mechanical effects to the character, so the sheet reflects the choice
+ * without manual editing. Fighting styles are recorded in a structured `character.fightingStyles`
+ * list (for exports/queries), and the one deterministic numeric effect — Defense's +1 AC — is
+ * applied to the character's armour AC entry. The remaining styles (Archery, Dueling, Great/Two-
+ * Weapon Fighting, etc.) modify individual weapon attack/damage rolls; this sheet stores attacks as
+ * free-form text, so those stay descriptive (added elsewhere as a Features & Traits entry) rather
+ * than being force-edited into action strings. Mechanical effects are idempotent via
+ * `character._appliedFightingStyles`, so this is safe to call on every finalize/level-up.
+ * @param character The live character object.
+ * @param styleName The chosen fighting style's display name (e.g. "Defense").
+ * @param [opts.source] Source book for the structured record (defaults to "PHB").
+ */
+applyFightingStyleToCharacter (character, styleName, {source} = {}) {
+	if (!character || !styleName) return;
+	const key = String(styleName).trim().toLowerCase();
+	if (!key) return;
+
+	// Structured record (dedupe by name), independent of the idempotency guard so it self-heals.
+	if (!Array.isArray(character.fightingStyles)) character.fightingStyles = [];
+	if (!character.fightingStyles.some(s => String((s && s.name) || s).trim().toLowerCase() === key)) {
+		character.fightingStyles.push({name: styleName, source: source || "PHB"});
+	}
+
+	// Numeric/mechanical effects run once per style.
+	if (!Array.isArray(character._appliedFightingStyles)) character._appliedFightingStyles = [];
+	if (character._appliedFightingStyles.includes(key)) return;
+	character._appliedFightingStyles.push(key);
+
+	if (key === "defense") {
+		if (Array.isArray(character.ac) && character.ac.length) {
+			const isArmourEntry = (a) => {
+				const from = Array.isArray(a.from) ? a.from.join(" ") : String(a.from || "");
+				if (/natural|unarmored|unarmoured|mage armor|mage armour/i.test(from)) return false;
+				return /armor|armour|plate|mail|leather|hide|breastplate|shield/i.test(from);
+			};
+			const entry = character.ac.find(isArmourEntry) || character.ac[0];
+			if (entry && typeof entry.ac === "number") {
+				entry.from = Array.isArray(entry.from) ? entry.from : (entry.from != null ? [entry.from] : []);
+				if (!entry.from.some(f => /defense fighting style/i.test(String(f)))) {
+					entry.ac += 1;
+					entry.from.push("Defense fighting style");
+					console.log(`Applied Defense fighting style: +1 AC -> ${entry.ac}`);
+				}
+			}
+		}
+	}
+}
+
+/**
+ * Populate `character.bonusProficiencies` with the primary class's fixed armor/weapon/tool
+ * proficiencies, derived from the class JSON's `startingProficiencies`. These are granted at
+ * level 1 and never change, so this only needs the primary class. Choice-based tool entries
+ * ("of your choice") are skipped. Values are stored lowercase (the sheet renderer title-cases
+ * them) and deduped case-insensitively, so it is safe to call on both creation and every
+ * level-up, and to merge with feature-granted proficiencies without producing duplicates.
+ * @param character The live character object.
+ * @param [classInfoOpt] An already-loaded primary class-info object, to avoid a redundant load.
+ */
+async applyBaseClassProficiencies (character, classInfoOpt) {
+	let classInfo = classInfoOpt;
+	if (!classInfo) {
+		const primary = character?.class?.[0];
+		if (!primary?.name) return;
+		try {
+			const cd = await this.loadClassData(primary.name);
+			classInfo = cd?.class?.[0];
+		} catch (ignored) { return; }
+	}
+	if (!classInfo?.startingProficiencies) return;
+
+	const sp = classInfo.startingProficiencies;
+	const cleanTag = (str) => typeof str === "string"
+		? str.replace(/\{@\w+\s+([^|}]+)(?:\|[^}]*)?\}/g, "$1").trim()
+		: "";
+	const collect = (arr) => (Array.isArray(arr) ? arr : [])
+		.map(it => (typeof it === "string" ? cleanTag(it) : (it?.proficiency ? cleanTag(it.proficiency) : "")))
+		.filter(Boolean);
+	const baseProfs = [
+		...collect(sp.armor).map(a => this._normArmorProf(a)),
+		...collect(sp.weapons).map(w => this._normWeaponProf(w)),
+		...collect(sp.tools).map(t => t.toLowerCase())
+			.filter(t => !/of your choice|choose|any one|any type/i.test(t)),
+	];
+	this._addBonusProficiencies(character, baseProfs);
+}
+
+/**
+ * Inspect a newly-gained class/subclass feature's prose for grants (skill/tool/language/armor/
+ * weapon proficiencies, expertise, limited-use resources) and update the character sheet.
+ * Unambiguous fixed grants are auto-applied; "of your choice" grants open a chooser modal, and
+ * resource counters are offered via a confirmation prompt. Idempotent per feature via
+ * `character._grantedFeatureKeys`, so it is safe to call across the duplicated feature passes
+ * and repeated level-ups.
+ * @param character The live character object (`this.levelUpState.characterData`).
+ * @param feature The loaded feature object (`{name, entries, level, source, ...}`).
+ * @param [opts.classEntry] The owning class entry, used for the idempotency key.
+ */
+async applyFeatureGrantsToCharacter (character, feature, {classEntry} = {}) {
+	const FG = globalThis.CharacterBuilderFeatureGrants;
+	if (!FG || !character || !feature) return;
+
+	// Idempotency guard: never apply the same feature's grants twice.
+	if (!Array.isArray(character._grantedFeatureKeys)) character._grantedFeatureKeys = [];
+	const key = `${classEntry?.name || ""}|${feature.name || ""}|${feature.level ?? ""}|${feature.source || ""}`;
+	if (character._grantedFeatureKeys.includes(key)) return;
+
+	const grants = FG.scanFeatureGrants(feature);
+	if (FG.isEmptyGrants(grants)) {
+		character._grantedFeatureKeys.push(key); // mark processed so we don't re-scan
+		return;
+	}
+
+	const featLabel = feature.name || "Feature";
+	const applied = [];
+
+	if (!Array.isArray(character.skillProficiencies)) character.skillProficiencies = [];
+	if (!Array.isArray(character.languages)) character.languages = [];
+	if (!Array.isArray(character.expertise)) character.expertise = [];
+	if (!Array.isArray(character.bonusProficiencies)) character.bonusProficiencies = [];
+
+	// ----- Fixed skill proficiencies (auto) -----
+	for (const sk of grants.skills) {
+		if (!character.skillProficiencies.includes(sk)) {
+			character.skillProficiencies.push(sk);
+			applied.push(`Skill: ${this._grantsPrettyName(sk)}`);
+		}
+	}
+
+	// ----- Fixed languages (auto) -----
+	for (const lang of grants.languages) {
+		if (!character.languages.some(l => String(l).toLowerCase() === String(lang).toLowerCase())) {
+			character.languages.push(lang);
+			applied.push(`Language: ${lang}`);
+		}
+	}
+
+	// ----- Fixed armor/weapon/tool training (auto) -----
+	// Not rendered as structured sheet data, but stored so nothing is silently lost;
+	// the descriptive prose is already visible under Features & Traits.
+	for (const p of [...grants.armor, ...grants.weapons, ...grants.tools]) {
+		if (!character.bonusProficiencies.some(x => String(x).toLowerCase() === String(p).toLowerCase())) {
+			character.bonusProficiencies.push(p);
+			applied.push(`Proficiency: ${p}`);
+		}
+	}
+
+	// ----- Skill proficiency choices (chooser) -----
+	for (const choice of grants.skillChoices) {
+		const known = new Set(character.skillProficiencies);
+		const opts = (choice.from && choice.from.length ? choice.from : FG.ALL_SKILLS)
+			.map(s => FG._normSkillKey(s))
+			.filter((k, i, arr) => arr.indexOf(k) === i && !known.has(k));
+		const count = Math.min(choice.count || 1, opts.length);
+		if (!count) continue;
+		const picked = await InputUiUtil.pGetUserMultipleChoice({
+			title: `${featLabel}: Skill Proficiency`,
+			htmlDescription: `<p class="ve-muted">Choose ${count} skill${count > 1 ? "s" : ""} to gain proficiency in.</p>`,
+			values: opts,
+			count,
+			fnDisplay: k => this._grantsPrettyName(k),
+			isResolveItems: true,
+		});
+		(picked || []).forEach(k => {
+			if (!character.skillProficiencies.includes(k)) {
+				character.skillProficiencies.push(k);
+				applied.push(`Skill: ${this._grantsPrettyName(k)}`);
+			}
+		});
+	}
+
+	// ----- Expertise choices (chooser; requires existing proficiency) -----
+	for (const exp of grants.expertise) {
+		const opts = character.skillProficiencies.filter(k => !character.expertise.includes(k));
+		const count = Math.min(exp.count || 1, opts.length);
+		if (!count) continue;
+		const picked = await InputUiUtil.pGetUserMultipleChoice({
+			title: `${featLabel}: Expertise`,
+			htmlDescription: `<p class="ve-muted">Choose ${count} skill${count > 1 ? "s" : ""} to gain expertise in (double proficiency bonus).</p>`,
+			values: opts,
+			count,
+			fnDisplay: k => this._grantsPrettyName(k),
+			isResolveItems: true,
+		});
+		(picked || []).forEach(k => {
+			if (!character.expertise.includes(k)) {
+				character.expertise.push(k);
+				applied.push(`Expertise: ${this._grantsPrettyName(k)}`);
+			}
+		});
+	}
+
+	// ----- Language choices (chooser) -----
+	for (const choice of grants.languageChoices) {
+		const known = new Set((character.languages || []).map(l => String(l).toLowerCase()));
+		const langOpts = [...(Parser.LANGUAGES_STANDARD || []), ...(Parser.LANGUAGES_EXOTIC || [])]
+			.filter(l => !known.has(l.toLowerCase()));
+		const count = Math.min(choice.count || 1, langOpts.length);
+		if (!count) continue;
+		const picked = await InputUiUtil.pGetUserMultipleChoice({
+			title: `${featLabel}: Languages`,
+			htmlDescription: `<p class="ve-muted">Choose ${count} language${count > 1 ? "s" : ""}.</p>`,
+			values: langOpts,
+			count,
+			isResolveItems: true,
+			isSearchable: true,
+		});
+		(picked || []).forEach(l => {
+			if (!character.languages.includes(l)) {
+				character.languages.push(l);
+				applied.push(`Language: ${l}`);
+			}
+		});
+	}
+
+	// ----- Tool proficiency choices (free-text prompt) -----
+	for (const choice of grants.toolChoices) {
+		const count = choice.count || 1;
+		for (let i = 0; i < count; ++i) {
+			const val = await InputUiUtil.pGetUserString({
+				title: `${featLabel}: Tool Proficiency${count > 1 ? ` (${i + 1}/${count})` : ""}`,
+				isSkippable: true,
+			});
+			if (val && val.trim() && !character.bonusProficiencies.some(x => String(x).toLowerCase() === val.trim().toLowerCase())) {
+				character.bonusProficiencies.push(val.trim());
+				applied.push(`Tool: ${val.trim()}`);
+			}
+		}
+	}
+
+	// ----- Limited-use resource counters (confirm before adding) -----
+	for (const res of grants.resources) {
+		if (!Array.isArray(character.customTrackers)) character.customTrackers = [];
+		if (character.customTrackers.some(t => String(t.name || "").toLowerCase() === res.name.toLowerCase())) continue;
+		const totalLevel = CharacterEditorPage.getCharacterLevel(character);
+		const maxVal = res.max === "PB" ? this.getProficiencyBonus(totalLevel) : res.max;
+		if (!maxVal || maxVal < 1) continue;
+		const ok = await InputUiUtil.pGetUserBoolean({
+			title: "Add Resource Tracker?",
+			htmlDescription: `<p><strong>${featLabel}</strong> looks like it can be used <strong>${maxVal}</strong> time${maxVal === 1 ? "" : "s"} per ${res.per}.</p><p>Add a counter to track it?</p>`,
+			textYes: "Add tracker",
+			textNo: "Skip",
+		});
+		if (ok) {
+			character.customTrackers.push({
+				name: res.name,
+				type: "counter",
+				current: maxVal,
+				max: maxVal,
+				description: `Usable ${maxVal} time${maxVal === 1 ? "" : "s"} per ${res.per}`,
+			});
+			applied.push(`Tracker: ${res.name} (${maxVal}/${res.per})`);
+		}
+	}
+
+	character._grantedFeatureKeys.push(key);
+
+	if (applied.length) {
+		console.log(`\u2728 Feature grants applied for "${featLabel}":`, applied);
+		try {
+			JqueryUtil.doToast({content: `${featLabel}: ${applied.join("; ")}`, type: "success"});
+		} catch (ignored) { /* toast is best-effort */ }
+	}
+}
+
+async applyLevelUpFeaturesToCharacter (character) {
 		// Initialize both entries and trait arrays if they don't exist
 		if (!character.entries) {
 			character.entries = [];
@@ -17676,6 +18510,23 @@ class CharacterEditorPage {
 			console.log("🔍 COMPREHENSIVE FEATURE DETECTION starting...");
 			console.log("Number of classes to check:", this.levelUpState.characterData.class.length);
 
+			// Backfill the primary class's base armor/weapon/tool proficiencies so they always
+			// appear on the sheet, even for characters created before this was tracked.
+			try {
+				await this.applyBaseClassProficiencies(character);
+			} catch (baseProfErr) {
+				console.error("Error applying base class proficiencies:", baseProfErr);
+			}
+
+			// Backfill fixed race/background armor/weapon/tool proficiencies. This is the
+			// reliable path that runs on every creation/level-up finalize (the normal
+			// creation wizard does not call applyRaceDataToCharacter directly).
+			try {
+				await this.applyRaceBackgroundProficiencies(character);
+			} catch (raceBgProfErr) {
+				console.error("Error applying race/background proficiencies:", raceBgProfErr);
+			}
+
 			for (const classEntry of this.levelUpState.characterData.class) {
 				console.log(`🎯 Checking ALL features for ${classEntry.name} level ${classEntry.level}`);
 				if (classEntry.subclass) {
@@ -17759,6 +18610,15 @@ class CharacterEditorPage {
 									}
 								} else {
 									console.log(`Skipped duplicate comprehensive feature: ${enhancedFeatureName}`);
+								}
+
+								// Scan the feature's prose for proficiency/expertise/language/resource grants
+								// and apply them to the sheet (fixed grants auto-apply; choices prompt).
+								// Idempotent per feature, so safe despite the duplicated feature passes.
+								try {
+									await this.applyFeatureGrantsToCharacter(character, featureData.feature, {classEntry});
+								} catch (grantErr) {
+									console.error(`Error applying feature grants for "${featureName}":`, grantErr);
 								}
 							}
 						}
@@ -17857,6 +18717,17 @@ class CharacterEditorPage {
 					} else {
 						console.log(`Skipped duplicate feat: ${choice.featName}`);
 					}
+
+					// Apply the feat's structured mechanical effects (ability increases, proficiencies,
+					// expertise, resistances, HP, etc.) so the user never has to edit the sheet by hand.
+					if (choice.featData) {
+						try {
+							await this.applyFeatToCharacter(character, choice.featData, {featLabel: choice.featName});
+							this.recalculateDerivedStats(character);
+						} catch (featErr) {
+							console.error("Error applying feat effects:", featErr);
+						}
+					}
 				} else if (choice.type === "fightingStyle" && choice.styleName) {
 					// Apply fighting style choice
 					const styleDescription = [choice.styleDescription || `${choice.styleName} fighting style selected.`];
@@ -17874,6 +18745,14 @@ class CharacterEditorPage {
 						console.log(`Applied fighting style: ${choice.styleName} at level ${this.levelUpState.newLevel}`);
 					} else {
 						console.log(`Skipped duplicate fighting style: ${choice.styleName}`);
+					}
+
+					// Apply the style's structured/mechanical effects (records the style; applies
+					// Defense's +1 AC). Idempotent, so re-running finalize won't double-count.
+					try {
+						this.applyFightingStyleToCharacter(character, choice.styleName, {source: choice.styleSource});
+					} catch (fsErr) {
+						console.error("Error applying fighting style effects:", fsErr);
 					}
 				} else if (choice.type === "metamagic" && choice.selections) {
 					// Apply metamagic choices

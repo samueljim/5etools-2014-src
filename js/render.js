@@ -10243,12 +10243,31 @@ Renderer.character = class {
 				.map(label => `<span class="character-combat__tag">${label}</span>`)
 				.join("");
 			combatChipsHero.push({
-				label: "Languages",
-				value: tagsHtml,
-				title: languagesFull,
-				emphasis: true,
-				text: true,
-			});
+					label: "Languages",
+					value: tagsHtml,
+					title: languagesFull,
+					emphasis: true,
+					text: true,
+				});
+		}
+
+		if (character.bonusProficiencies?.length) {
+			const profLabels = character.bonusProficiencies
+				.map(p => (typeof p === "string" ? p : (p?.name || String(p))))
+				.filter(Boolean)
+				.map(p => p.replace(/\b\w/g, c => c.toUpperCase()));
+			if (profLabels.length) {
+				const tagsHtml = profLabels
+					.map(label => `<span class="character-combat__tag">${label}</span>`)
+					.join("");
+				combatChipsHero.push({
+					label: "Other Proficiencies",
+					value: tagsHtml,
+					title: profLabels.join(", "),
+					emphasis: true,
+					text: true,
+				});
+			}
 		}
 
 		if (character.size) {

@@ -103,22 +103,50 @@
 	}
 
 	function computeSpellSlots (character) {
-		let full = 0;
-		let half = 0;
-		let third = 0;
+		// Split caster classes into Warlock pact magic (always tracked separately) and the
+		// "regular" Vancian casters that share the standard spell-slot tables.
+		const regular = [];
 		let pact = null;
 
 		(character.class || []).forEach(cls => {
 			const contrib = getCasterLevelContribution(cls);
-			if (contrib.type === "full") full += contrib.level;
-			else if (contrib.type === "half") half += Math.floor(contrib.level / 2);
-			else if (contrib.type === "halfRoundUp") half += Math.ceil(contrib.level / 2);
-			else if (contrib.type === "third") third += Math.floor(contrib.level / 3);
-			else if (contrib.type === "pact") pact = WARLOCK_PACT[Math.min(20, contrib.level) - 1];
+			if (contrib.type === "none") return;
+			if (contrib.type === "pact") pact = WARLOCK_PACT[Math.min(20, contrib.level) - 1];
+			else regular.push(contrib);
 		});
 
-		const casterLevel = Math.min(20, full + half + third);
-		const slotsArr = casterLevel > 0 ? (FULL_CASTER_SLOTS[casterLevel - 1] || []) : [];
+		let casterLevel = 0;
+		let slotsArr = [];
+
+		if (regular.length === 1) {
+			// Single spellcasting class: use that class's OWN slot table. Half-casters
+			// (Paladin/Ranger) and third-casters (Eldritch Knight/Arcane Trickster) do NOT
+			// follow the full-caster table, so mapping them through it (as the multiclass
+			// rule does) under-grants slots. Artificer is a half-caster that rounds UP and
+			// gains slots at level 1, which matches the full table indexed by ceil(level/2).
+			const c = regular[0];
+			let table = FULL_CASTER_SLOTS;
+			let idx = c.level;
+			if (c.type === "half") { table = HALF_CASTER_SLOTS; idx = c.level; }
+			else if (c.type === "third") { table = THIRD_CASTER_SLOTS; idx = c.level; }
+			else if (c.type === "halfRoundUp") { table = FULL_CASTER_SLOTS; idx = Math.ceil(c.level / 2); }
+			else { table = FULL_CASTER_SLOTS; idx = c.level; } // full
+			casterLevel = Math.min(20, idx);
+			slotsArr = casterLevel > 0 ? (table[casterLevel - 1] || []) : [];
+		} else if (regular.length > 1) {
+			// Multiclass spellcaster (PHB p.164): sum full levels + floor(half) + ceil(artificer)
+			// + floor(third), then read the combined level off the full-caster table.
+			let combined = 0;
+			regular.forEach(c => {
+				if (c.type === "full") combined += c.level;
+				else if (c.type === "half") combined += Math.floor(c.level / 2);
+				else if (c.type === "halfRoundUp") combined += Math.ceil(c.level / 2);
+				else if (c.type === "third") combined += Math.floor(c.level / 3);
+			});
+			casterLevel = Math.min(20, combined);
+			slotsArr = casterLevel > 0 ? (FULL_CASTER_SLOTS[casterLevel - 1] || []) : [];
+		}
+
 		const slots = {};
 		slotsArr.forEach((n, i) => { slots[String(i + 1)] = n; });
 
