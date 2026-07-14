@@ -80,30 +80,31 @@
 				const subclassShort = sc.shortName || sc.name;
 				const subclassName = sc.name || sc.shortName;
 				try {
-					const baseSubclassFi = PageFilterSpells._getSubclassFilterItem({
-						className: cls.name,
-						classSource,
-						subclassShortName: subclassShort,
-						subclassName,
-						subclassSource,
-						isVariantClass: false,
-						definedInSource: subclassSource,
-					});
-					if (baseSubclassFi?.item) subclassFilterValues[baseSubclassFi.item] = 1;
-
-					if (sc.subSubclass) {
-						const kindFi = PageFilterSpells._getSubclassFilterItem({
+					const addSubclassValue = (subSubclassName) => {
+						const fi = PageFilterSpells._getSubclassFilterItem({
 							className: cls.name,
 							classSource,
 							subclassShortName: subclassShort,
 							subclassName,
 							subclassSource,
-							subSubclassName: sc.subSubclass,
+							subSubclassName,
 							isVariantClass: false,
 							definedInSource: subclassSource,
 						});
-						if (kindFi?.item) subclassFilterValues[kindFi.item] = 1;
-					}
+						if (fi?.item) subclassFilterValues[fi.item] = 1;
+					};
+
+					// Base subclass (e.g. "Warlock: Genie") — matches spells shared across all kinds.
+					addSubclassValue(undefined);
+
+					// Sub-subclass "kinds" (e.g. Genie → Marid). A character can have more than one
+					// (e.g. a shared base plus a kind), so support a string, array, or comma list and
+					// add a filter value for each so the kind-specific spells are allowed too.
+					const rawKinds = sc.subSubclass;
+					const kinds = (Array.isArray(rawKinds) ? rawKinds : (typeof rawKinds === "string" ? rawKinds.split(",") : []))
+						.map(k => String(k ?? "").trim())
+						.filter(Boolean);
+					[...new Set(kinds)].forEach(kind => addSubclassValue(kind));
 				} catch (e) { /* ignore */ }
 			}
 		});
