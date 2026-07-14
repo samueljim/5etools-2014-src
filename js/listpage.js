@@ -1262,6 +1262,7 @@ class ListPage {
 	}
 
 	async _pOnLoad_pLoadListState () {
+		if (!this._sublistManager) return;
 		await this._sublistManager.pLoadState();
 		this._sublistManager.doUpdateSublistVisibility();
 	}

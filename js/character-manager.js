@@ -3863,8 +3863,29 @@ class CharacterManager {
 	 * @param {any} newValue - New value for the stat
 	 * @returns {Promise<boolean>} Success status
 	 */
-	static async updateCharacterStat (characterId, statPath, newValue) {
-		const character = this.getCharacterById(characterId);
+	/**
+	 * Resolve a character from any known id (server UUID, composite name_source, or edit registry).
+	 */
+	static resolveCharacter (characterId) {
+		if (!characterId) return null;
+
+		const fromEdit = globalThis._CHARACTER_EDIT_DATA?.[characterId];
+		if (fromEdit && !this._isCharacterStub(fromEdit)) return fromEdit;
+
+		const direct = this._characters.get(characterId);
+		if (direct && !this._isCharacterStub(direct)) return direct;
+
+		for (const c of this._characters.values()) {
+			if (!c || this._isCharacterStub(c)) continue;
+			if (c.id === characterId) return c;
+			if (this._generateCompositeId(c.name, c.source) === characterId) return c;
+		}
+
+		return fromEdit || null;
+	}
+
+	static async updateCharacterStat (characterId, statPath, newValue, {forceType} = {}) {
+		const character = this.resolveCharacter(characterId);
 		if (!character) {
 			console.warn(`CharacterManager: Character ${characterId} not found for stat update`);
 			return false;
@@ -3876,8 +3897,7 @@ class CharacterManager {
 		}
 
 		try {
-			// Parse and set the value
-			const parsedValue = this._parseStatValue(newValue);
+			const parsedValue = this._parseStatValue(newValue, {forceType});
 			this._setNestedProperty(character, statPath, parsedValue);
 
 			// Save to server first (also restores `_CHARACTER_EDIT_DATA` after purge)
@@ -3886,7 +3906,8 @@ class CharacterManager {
 			if (!success) {
 				// Revert local changes if server update failed
 				console.warn("CharacterManager: Server update failed, reverting local changes");
-				await this.ensureFullCharacter(characterId, { forceNetwork: true });
+				const refreshId = character.id || characterId;
+				await this.ensureFullCharacter(refreshId, { forceNetwork: true });
 			}
 
 			return success;
@@ -3897,18 +3918,102 @@ class CharacterManager {
 	}
 
 	/**
+	 * Mutate an array field on a character and save.
+	 * @param {string} characterId
+	 * @param {string} arrayPath Dot path to an array (e.g. "equipment", "spells.levels.1.spells")
+	 * @param {"push"|"splice"|"replaceIndex"|"set"} op
+	 * @param {any} payload push: value; splice: {index, deleteCount?, items?}; replaceIndex: {index, value}; set: array
+	 */
+	static async updateCharacterArray (characterId, arrayPath, op, payload) {
+		const character = this.resolveCharacter(characterId);
+		if (!character) {
+			console.warn(`CharacterManager: Character ${characterId} not found for array update`);
+			return false;
+		}
+
+		if (!this.canEditCharacter(character)) {
+			console.warn(`CharacterManager: No permission to edit character: ${character.name}`);
+			return false;
+		}
+
+		try {
+			let arr = this._getNestedProperty(character, arrayPath);
+			if (!Array.isArray(arr)) {
+				arr = [];
+				this._setNestedProperty(character, arrayPath, arr);
+			}
+
+			switch (op) {
+				case "push":
+					arr.push(payload);
+					break;
+				case "splice": {
+					const index = Number(payload?.index);
+					const deleteCount = payload?.deleteCount != null ? Number(payload.deleteCount) : 1;
+					const items = Array.isArray(payload?.items) ? payload.items : [];
+					if (Number.isNaN(index)) throw new Error("splice requires numeric index");
+					arr.splice(index, deleteCount, ...items);
+					break;
+				}
+				case "replaceIndex": {
+					const index = Number(payload?.index);
+					if (Number.isNaN(index) || index < 0 || index >= arr.length) {
+						throw new Error("replaceIndex requires a valid index");
+					}
+					arr[index] = payload.value;
+					break;
+				}
+				case "set":
+					this._setNestedProperty(character, arrayPath, Array.isArray(payload) ? payload : []);
+					break;
+				default:
+					throw new Error(`Unknown array op: ${op}`);
+			}
+
+			const success = await this.saveCharacter(character, true);
+			if (!success) {
+				console.warn("CharacterManager: Server update failed, reverting local changes");
+				await this.ensureFullCharacter(characterId, { forceNetwork: true });
+			}
+			return success;
+		} catch (error) {
+			console.error("CharacterManager: Error updating character array:", error);
+			return false;
+		}
+	}
+
+	/**
 	 * Helper to parse stat values to appropriate types
 	 */
-	static _parseStatValue (value) {
+	static _parseStatValue (value, {forceType} = {}) {
+		if (forceType === "string") {
+			if (value === null || value === undefined) return null;
+			return String(value);
+		}
+		if (forceType === "boolean") {
+			if (typeof value === "boolean") return value;
+			if (value === "true" || value === 1 || value === "1") return true;
+			if (value === "false" || value === 0 || value === "0") return false;
+			return Boolean(value);
+		}
 		if (value === null || value === "" || value === undefined) {
 			return null;
 		}
-		// Try to parse as number if it looks like one
+		if (typeof value === "boolean") return value;
+		if (value === "true") return true;
+		if (value === "false") return false;
+
+		const asString = value.toString();
+		// Never coerce renderer tags or other non-numeric text to numbers
+		if (/^\{@/.test(asString.trim()) || /[^\d.+\-eE]/.test(asString.trim()) && Number.isNaN(Number(asString))) {
+			return value;
+		}
+
 		const numValue = Number(value);
-		if (!isNaN(numValue) && value.toString().trim() !== "") {
+		if (!isNaN(numValue) && asString.trim() !== "") {
 			return numValue;
 		}
-		return value; // Return as string if not a number
+		return value;
 	}
 
 	/**
@@ -3917,9 +4022,11 @@ class CharacterManager {
 	static _setNestedProperty (obj, path, value) {
 		const keys = path.split(".");
 		const lastKey = keys.pop();
-		const target = keys.reduce((current, key) => {
-			if (!current[key] || typeof current[key] !== "object") {
-				current[key] = {};
+		const target = keys.reduce((current, key, idx) => {
+			const nextKey = keys[idx + 1] ?? lastKey;
+			const nextIsIndex = /^\d+$/.test(String(nextKey));
+			if (current[key] == null || typeof current[key] !== "object") {
+				current[key] = nextIsIndex ? [] : {};
 			}
 			return current[key];
 		}, obj);

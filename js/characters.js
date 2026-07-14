@@ -1,74 +1,6 @@
 
 // Both CharacterManager and RenderCharacters are available globally via script tags
 
-class CharactersSublistManager extends SublistManager {
-	static _getRowTemplate () {
-		return [
-			new SublistCellTemplate({
-				name: "Name",
-				css: "bold ve-col-5 pl-0 pr-1",
-				colStyle: "",
-			}),
-			new SublistCellTemplate({
-				name: "Class",
-				css: "ve-col-3-8 px-1 ve-text-center",
-				colStyle: "text-center",
-			}),
-			new SublistCellTemplate({
-				name: "Race",
-				css: "ve-col-1-2 px-1",
-				colStyle: "",
-			}),
-			new SublistCellTemplate({
-				name: "Level",
-				css: "ve-col-2 pl-1 pr-0 ve-text-center",
-				colStyle: "text-center",
-			}),
-		];
-	}
-
-	static _getRowCellsHtml ({values, templates = null}) {
-		templates = templates || this._getRowTemplate();
-		return values
-			.map((val, i) => SublistCell.renderHtml({templates, cell: val, ix: i}))
-			.join("");
-	}
-
-	pGetSublistItem (character, hash) {
-		const cellsText = [
-			character.name,
-			character._fClass || "Unknown",
-			character._fRace || "Unknown",
-			character._fLevel || 0,
-		];
-
-		const ele = ee`<div class="ve-lst__row ve-lst__row--sublist ve-flex-col">
-			<a href="#${UrlUtil.autoEncodeHash(character)}" class="ve-lst__row-border ve-lst__row-inner">
-				${this.constructor._getRowCellsHtml({values: cellsText})}
-			</a>
-		</div>`
-			.onn("contextmenu", evt => this._handleSublistItemContextMenu(evt, listItem))
-			.onn("click", evt => this._listSub.doSelect(listItem, evt));
-
-		const listItem = new ListItem(
-			hash,
-			ele,
-			character.name,
-			{
-				hash,
-				class: character._fClass || "Unknown",
-				race: character._fRace || "Unknown",
-				level: character._fLevel || 1,
-			},
-			{
-				entity: character,
-				mdRow: [...cellsText],
-			},
-		);
-		return listItem;
-	}
-}
-
 class CharactersPage extends ListPageMultiSource {
 	constructor () {
 		super({
@@ -708,7 +640,6 @@ class CharactersPage extends ListPageMultiSource {
 }
 
 const charactersPage = new CharactersPage();
-charactersPage.sublistManager = new CharactersSublistManager();
 
 // Expose globally for WebSocket character updates
 window.charactersPage = charactersPage;

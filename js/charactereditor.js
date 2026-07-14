@@ -8130,24 +8130,7 @@ class CharacterEditorPage {
 			console.log("🎯 Setting up Edit Spells button listener");
 			editSpellsBtn.addEventListener("click", () => {
 				console.log("🔮 Edit Spells button clicked");
-				// Initialize spell manager if not already created
-				if (!this.spellManager) {
-					// Get the CharacterSpellManager class using the factory function
-					const CharacterSpellManagerClass = window.CharacterSpellManager || getCharacterSpellManager();
-					if (CharacterSpellManagerClass) {
-						this.spellManager = new CharacterSpellManagerClass();
-					} else {
-						console.error("CharacterSpellManager is not available. ListPage may not be loaded yet.");
-						return;
-					}
-				}
-				// Get current character data from the editor
-				const characterData = JSON.parse(this.ace.getValue());
-				this.spellManager.openSpellManager(characterData, (selectedSpells) => {
-					console.log("Spells selected from Edit button:", selectedSpells);
-					// Apply selected spells to character
-					this.applySelectedSpellsFromManager(selectedSpells, characterData);
-				});
+				this.openSpellEditor();
 			});
 		} else {
 			console.log("❌ Edit Spells button not found in DOM");
@@ -8179,6 +8162,41 @@ class CharacterEditorPage {
 
 		// Update button visibility based on edit mode
 		this.updateButtonVisibility();
+	}
+
+	// Opens the spell manager/editor for the character currently in the editor,
+	// applying any selected spells back into the JSON + preview on completion.
+	// Shared by the toolbar "Edit Spells" button and the in-sheet button rendered
+	// under the preview's Spells section.
+	openSpellEditor () {
+		// Initialize spell manager if not already created
+		if (!this.spellManager) {
+			// Get the CharacterSpellManager class using the factory function
+			const CharacterSpellManagerClass = window.CharacterSpellManager || getCharacterSpellManager();
+			if (CharacterSpellManagerClass) {
+				this.spellManager = new CharacterSpellManagerClass();
+			} else {
+				console.error("CharacterSpellManager is not available. ListPage may not be loaded yet.");
+				return;
+			}
+		}
+
+		// Get current character data from the editor
+		let characterData;
+		try {
+			characterData = JSON.parse(this.ace.getValue());
+		} catch (e) {
+			console.error("Cannot open spell editor — character JSON is invalid:", e);
+			document.getElementById("message").textContent = "Fix the character JSON before editing spells";
+			document.getElementById("message").style.color = "red";
+			return;
+		}
+
+		this.spellManager.openSpellManager(characterData, (selectedSpells) => {
+			console.log("Spells selected from Edit button:", selectedSpells);
+			// Apply selected spells to character
+			this.applySelectedSpellsFromManager(selectedSpells, characterData);
+		});
 	}
 
 	renderCharacter () {
@@ -8214,11 +8232,12 @@ class CharacterEditorPage {
 				// Don't auto-update the JSON editor - spell slots will be updated only during level-up
 			}
 
-			// Use the existing 5etools character rendering system
+			// Use the existing 5etools character rendering system.
+			// Preview is always static — quick-edit conflicts with the Ace JSON editor.
 			let renderedContent;
 			try {
-				const fn = Renderer.hover.getFnRenderCompact(UrlUtil.PG_CHARACTERS);
-				renderedContent = fn(characterData);
+				const fn = Renderer.hover.getFnRenderCompact(UrlUtil.PG_CHARACTERS, {isStatic: true});
+				renderedContent = fn(characterData, {isStatic: true});
 			} catch (renderError) {
 				console.error("Character rendering error:", renderError);
 			}
@@ -8230,6 +8249,28 @@ class CharacterEditorPage {
 			// Clear and populate the output area using the same structure as characters page
 			$output.empty().append(renderedContent);
 
+			// Add an "Edit Spells" affordance directly under the preview's Spells
+			// section, so spellcasters can open the spell editor in-context. The
+			// preview is static, so this is wired up here rather than in render.js.
+			try {
+				const spellsSection = $output[0]?.querySelector(".character-spells");
+				if (spellsSection && this.hasSpellcastingClass(characterData)) {
+					const wrpBtn = document.createElement("div");
+					wrpBtn.className = "character-sheet-section-toolbar character-spells__toolbar";
+					wrpBtn.style.marginTop = "0.35rem";
+					const btnEditSpells = document.createElement("button");
+					btnEditSpells.type = "button";
+					btnEditSpells.className = "ve-btn ve-btn-xxs ve-btn-default character-spells__edit-btn";
+					btnEditSpells.textContent = "Edit Spells";
+					btnEditSpells.title = "Open the spell editor";
+					btnEditSpells.addEventListener("click", () => this.openSpellEditor());
+					wrpBtn.appendChild(btnEditSpells);
+					spellsSection.appendChild(wrpBtn);
+				}
+			} catch (btnErr) {
+				console.warn("Failed to add in-sheet Edit Spells button:", btnErr);
+			}
+
 			// Restore scroll position after content is rendered
 			// Use requestAnimationFrame to ensure DOM is updated before restoring scroll
 			requestAnimationFrame(() => {
@@ -8237,10 +8278,6 @@ class CharacterEditorPage {
 					$output.scrollTop(scrollPosition);
 				}
 			});
-
-			// Bind listeners for dice rolling and other interactions using existing system
-			const fnBind = Renderer.hover.getFnBindListenersCompact(UrlUtil.PG_CHARACTERS);
-			if (fnBind) fnBind(characterData, $output[0]);
 
 			document.getElementById("message").textContent = "Character rendered successfully";
 			document.getElementById("message").style.color = "green";
@@ -16631,7 +16668,7 @@ class CharacterEditorPage {
 			results.warnings.push(`Spell DC ${character.spells.dc} doesn't match expected ${expectedDC} (${spellAbility.toUpperCase()} ${abilityScore})`);
 		}
 
-		const attackBonus = parseInt(character.spells.attackBonus.replace("+", ""));
+		const attackBonus = parseInt(String(character.spells.attackBonus).replace("+", ""), 10);
 		if (attackBonus !== expectedAttack) {
 			results.warnings.push(`Spell attack ${character.spells.attackBonus} doesn't match expected +${expectedAttack}`);
 		}

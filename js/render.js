@@ -9636,6 +9636,380 @@ Renderer.character = class {
 		}
 	}
 
+	/** Register character for inline quick-edit and return preferred id (server id when present). */
+	static _ensureCharacterEditId (character) {
+		const compositeId = globalThis.CharacterManager
+			? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
+			: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
+		const characterId = character.id || compositeId;
+		if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
+		globalThis._CHARACTER_EDIT_DATA[characterId] = character;
+		if (compositeId && compositeId !== characterId) {
+			globalThis._CHARACTER_EDIT_DATA[compositeId] = character;
+		}
+		if (character.id && character.id !== characterId) {
+			globalThis._CHARACTER_EDIT_DATA[character.id] = character;
+		}
+		// Keep Quick Edit mode sticky across composite ↔ server id changes
+		if (!globalThis._CHARACTER_QUICK_EDIT_MODE) globalThis._CHARACTER_QUICK_EDIT_MODE = {};
+		const modeOn = !!(
+			globalThis._CHARACTER_QUICK_EDIT_MODE[characterId]
+			|| globalThis._CHARACTER_QUICK_EDIT_MODE[compositeId]
+			|| (character.id && globalThis._CHARACTER_QUICK_EDIT_MODE[character.id])
+		);
+		if (modeOn) {
+			globalThis._CHARACTER_QUICK_EDIT_MODE[characterId] = true;
+			if (compositeId) globalThis._CHARACTER_QUICK_EDIT_MODE[compositeId] = true;
+			if (character.id) globalThis._CHARACTER_QUICK_EDIT_MODE[character.id] = true;
+		}
+		return characterId;
+	}
+
+	static _isQuickEditEnabled (characterId) {
+		if (!characterId) return false;
+		if (!globalThis._CHARACTER_QUICK_EDIT_MODE) globalThis._CHARACTER_QUICK_EDIT_MODE = {};
+		return !!globalThis._CHARACTER_QUICK_EDIT_MODE[characterId];
+	}
+
+	static _setQuickEditEnabled (characterId, enabled) {
+		if (!characterId) return;
+		if (!globalThis._CHARACTER_QUICK_EDIT_MODE) globalThis._CHARACTER_QUICK_EDIT_MODE = {};
+		globalThis._CHARACTER_QUICK_EDIT_MODE[characterId] = !!enabled;
+		// Also key by composite aliases present in the edit registry
+		const character = globalThis._CHARACTER_EDIT_DATA?.[characterId];
+		if (character && globalThis.CharacterManager) {
+			const compositeId = globalThis.CharacterManager._generateCompositeId(character.name, character.source);
+			if (compositeId) globalThis._CHARACTER_QUICK_EDIT_MODE[compositeId] = !!enabled;
+			if (character.id) globalThis._CHARACTER_QUICK_EDIT_MODE[character.id] = !!enabled;
+		}
+	}
+
+	/**
+	 * Make feature/trait entry trees quick-editable via wrappedHtml leaves.
+	 * Preserves original character.entries indices in data-stat-path.
+	 */
+	static _makeEntriesQuickEditable (entries, basePath, ed) {
+		if (!Array.isArray(entries)) return entries;
+		return entries.map((entry, i) => {
+			const path = `${basePath}.${i}`;
+			if (typeof entry === "string") {
+				const rendered = Renderer.get().render(entry);
+				return {
+					type: "wrappedHtml",
+					html: `<div class="character-entry-edit">${ed(path, entry, {
+						editMode: "text",
+						display: rendered,
+						title: "Double-click to edit",
+						extraClass: "character-entry-edit__text",
+					})}</div>`,
+				};
+			}
+			if (!entry || typeof entry !== "object") return entry;
+
+			const cpy = MiscUtil.copyFast(entry);
+			if (cpy.name != null && typeof cpy.name === "string") {
+				cpy._displayName = ed(`${path}.name`, cpy.name, {
+					editMode: "text",
+					display: Renderer.get().render(cpy.name),
+					title: "Double-click to edit name",
+					extraClass: "character-entry-edit__name",
+				});
+			}
+			if (Array.isArray(cpy.entries)) {
+				cpy.entries = Renderer.character._makeEntriesQuickEditable(cpy.entries, `${path}.entries`, ed);
+			}
+			return cpy;
+		});
+	}
+
+	/**
+	 * Build a click-to-edit span for the character sheet.
+	 * @param {boolean} canEdit
+	 * @param {string|null} characterId
+	 * @param {string} path
+	 * @param {*} value raw stored value
+	 * @param {object} [opts]
+	 */
+	static _editableStatHtml (canEdit, characterId, path, value, opts = {}) {
+		const display = opts.display != null ? opts.display : (value ?? "");
+		if (!canEdit || !characterId) {
+			return opts.staticHtml != null ? opts.staticHtml : String(display);
+		}
+		const editMode = opts.editMode || "number";
+		const title = (opts.title || "Double-click to edit").replace(/\{@/g, "&#123;@");
+		// Encode `{@` in attributes so a later recursiveRender pass does not treat them as tags
+		const attrValue = String(value ?? "").replace(/\{@/g, "&#123;@");
+		const attrs = [
+			`class="character-stat-display${opts.extraClass ? ` ${opts.extraClass}` : ""}"`,
+			`data-stat-path="${String(path).qq()}"`,
+			`data-character-id="${String(characterId).qq()}"`,
+			`data-current-value="${attrValue.qq()}"`,
+			`data-edit-mode="${editMode}"`,
+			opts.max != null ? `data-max-value="${String(opts.max).qq()}"` : "",
+			opts.min != null ? `data-min-value="${String(opts.min).qq()}"` : "",
+			opts.classesData ? `data-classes-data="${String(opts.classesData).replace(/\{@/g, "&#123;@").qq()}"` : "",
+			`title="${String(title).qq()}"`,
+		].filter(Boolean).join(" ");
+		return `<span ${attrs}>${display}</span>`;
+	}
+
+	static _resolveEditableCharacter (characterId) {
+		if (characterId && globalThis.CharacterManager?.resolveCharacter) {
+			const resolved = globalThis.CharacterManager.resolveCharacter(characterId);
+			if (resolved) {
+				Renderer.character._ensureCharacterEditId(resolved);
+				return resolved;
+			}
+		}
+
+		if (characterId && globalThis._CHARACTER_EDIT_DATA?.[characterId]) {
+			return globalThis._CHARACTER_EDIT_DATA[characterId];
+		}
+
+		if (characterId && globalThis.CharacterManager) {
+			const found = [...(globalThis.CharacterManager._characters?.values?.() || [])]
+				.find(c => c && (
+					c.id === characterId
+					|| globalThis.CharacterManager._generateCompositeId(c.name, c.source) === characterId
+				));
+			if (found) {
+				Renderer.character._ensureCharacterEditId(found);
+				return found;
+			}
+		}
+
+		// Fallbacks used by characters page / DM screen panels
+		const fallback = globalThis.charactersPage?._currentCharacter
+			|| globalThis._CHARACTER_EDIT_DATA && Object.values(globalThis._CHARACTER_EDIT_DATA)[0];
+		if (fallback) {
+			Renderer.character._ensureCharacterEditId(fallback);
+			return fallback;
+		}
+		return null;
+	}
+
+	static _getManagerId (character) {
+		return character.id
+			|| (globalThis.CharacterManager
+				? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
+				: null);
+	}
+
+	/** Wire double-click (and toggle click) directly onto editable spans. */
+	static _wireStatDisplays (rootEle) {
+		if (!rootEle?.querySelectorAll) return;
+		rootEle.querySelectorAll(".character-stat-display").forEach(display => {
+			const editMode = display.getAttribute("data-edit-mode") || "number";
+			if (editMode === "toggle") {
+				display.onclick = (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					Renderer.character._beginStatEditFromElement(display);
+				};
+				display.ondblclick = null;
+				return;
+			}
+
+			display.onclick = null;
+			display.ondblclick = (e) => {
+				// Allow links/dice to keep their own double-click behavior
+				if (e.target.closest?.("a, [data-packed-dice], button, input, textarea, select")) return;
+				e.preventDefault();
+				e.stopPropagation();
+				Renderer.character._beginStatEditFromElement(display);
+			};
+		});
+	}
+
+	static _beginStatEditFromElement (display) {
+		if (!display?.getAttribute) return;
+		const eleDisplay = e_({ele: display});
+		const statPath = eleDisplay.attr("data-stat-path");
+		const characterId = eleDisplay.attr("data-character-id");
+		let currentValue = eleDisplay.attr("data-current-value");
+		if (currentValue == null) currentValue = "";
+		currentValue = String(currentValue).replace(/&#123;@/g, "{@").replace(/&amp;#123;@/g, "{@");
+		const classesData = eleDisplay.attr("data-classes-data");
+		const editMode = eleDisplay.attr("data-edit-mode") || "number";
+		const maxValueAttr = eleDisplay.attr("data-max-value");
+		const minValueAttr = eleDisplay.attr("data-min-value");
+
+		const character = Renderer.character._resolveEditableCharacter(characterId);
+		if (!character) {
+			console.warn("Character quick-edit: could not resolve character for", characterId);
+			return;
+		}
+		if (!Renderer.character._hasSourceAccess(character.source)) {
+			console.warn("Character quick-edit: no edit access for source", character.source);
+			return;
+		}
+
+		if (editMode === "toggle") {
+			const next = !(String(currentValue) === "true" || currentValue === true || currentValue === "1");
+			Renderer.character._updateCharacterStat(character, character.source, statPath, next)
+				.catch(err => console.error(err));
+			return;
+		}
+
+		if (editMode === "text") {
+			const isNotes = eleDisplay.hasClass("character-notes-display")
+				|| eleDisplay.hasClass("character-entry-edit__text")
+				|| eleDisplay.hasClass("character-entry-edit__name");
+			const rows = isNotes || String(currentValue).length > 60 ? 4 : 2;
+			const ta = ee`<textarea class="character-stat-input-edit character-stat-input-edit--text" rows="${rows}"></textarea>`;
+			const nativeTa = ta[0] || ta;
+			nativeTa.value = currentValue;
+
+			display.replaceWith(ta);
+
+			let tagAc = null;
+			try {
+				if (globalThis.CharacterTagAutocomplete) {
+					tagAc = CharacterTagAutocomplete.attach(nativeTa, {});
+				}
+			} catch (err) {
+				console.warn("Character tag autocomplete failed to attach:", err);
+				tagAc = null;
+			}
+
+			const focusTarget = tagAc?.eleWrap?.querySelector?.("textarea") || nativeTa;
+			setTimeout(() => {
+				try {
+					focusTarget.focus?.();
+					if (typeof focusTarget.select === "function" && String(currentValue).length < 80) {
+						focusTarget.select();
+					}
+				} catch (_) { /* ignore */ }
+			}, 0);
+
+			let isFinishing = false;
+			const doFinish = async (evt) => {
+				if (isFinishing) return;
+				if (tagAc?.isBusy?.()) return;
+				if (evt?.type === "keydown") {
+					if (evt.key === "Escape") {
+						/* finish below */
+					} else if (evt.key === "Enter" && (evt.ctrlKey || evt.metaKey)) {
+						evt.preventDefault();
+					} else {
+						return;
+					}
+				}
+				isFinishing = true;
+				try { tagAc?.destroy?.(); } catch (_) { /* ignore */ }
+
+				const newValue = evt?.key === "Escape" ? currentValue : (focusTarget.value ?? nativeTa.value ?? "");
+				let rendered;
+				try {
+					rendered = newValue
+						? Renderer.get().render(String(newValue))
+						: (statPath === "customText" ? `<span class="ve-muted">Click to add notes…</span>` : "\u2014");
+				} catch (err) {
+					console.warn("Failed to render edited text:", err);
+					rendered = String(newValue || "").qq();
+				}
+
+				const extraClass = [
+					eleDisplay.hasClass("character-notes-display") ? "character-notes-display" : "",
+					eleDisplay.hasClass("character-entry-edit__text") ? "character-entry-edit__text" : "",
+					eleDisplay.hasClass("character-entry-edit__name") ? "character-entry-edit__name" : "",
+				].filter(Boolean).join(" ");
+
+				const attrValue = String(newValue).replace(/\{@/g, "&#123;@");
+				const eleNew = ee`<span class="character-stat-display${extraClass ? ` ${extraClass}` : ""}" data-stat-path="${statPath}" data-character-id="${characterId}" data-current-value="${attrValue.qq()}" data-edit-mode="text" title="${(eleDisplay.attr("title") || "Double-click to edit").qq()}"></span>`;
+				eleNew.html(rendered);
+
+				const replaceTarget = tagAc?.eleWrap?.isConnected
+					? tagAc.eleWrap
+					: (nativeTa.isConnected ? nativeTa : (ta.isConnected ? ta : null));
+				if (replaceTarget?.replaceWith) replaceTarget.replaceWith(eleNew);
+				else if (replaceTarget?.parentNode) replaceTarget.parentNode.replaceChild(eleNew[0] || eleNew, replaceTarget);
+
+				const wired = eleNew[0] || eleNew;
+				if (wired) Renderer.character._wireStatDisplays(wired.parentElement || wired);
+
+				if (evt?.key !== "Escape" && String(newValue) !== String(currentValue)) {
+					if (statPath.startsWith("equipment.")) Renderer.character._ensureStructuredEquipment(character);
+					const managerId = Renderer.character._getManagerId(character);
+					try {
+						if (globalThis.CharacterManager && managerId) {
+							await CharacterManager.updateCharacterStat(managerId, statPath, newValue, {forceType: "string"});
+						} else {
+							await Renderer.character._updateCharacterStat(character, character.source, statPath, newValue);
+						}
+					} catch (error) {
+						console.error("Error updating character text stat:", error);
+					}
+				}
+			};
+
+			const onBlur = (evt) => {
+				const wrap = tagAc?.eleWrap;
+				const next = evt.relatedTarget;
+				if (wrap && next && wrap.contains(next)) return;
+				if (tagAc?.isBusy?.()) return;
+				setTimeout(() => {
+					if (isFinishing) return;
+					if (tagAc?.isBusy?.()) return;
+					if (wrap && wrap.contains(document.activeElement)) return;
+					if (document.activeElement?.closest?.(".ve-modal, .modal, [role=\"dialog\"], .ui-modal, .veapp__modal")) return;
+					doFinish(evt);
+				}, 250);
+			};
+
+			e_({ele: focusTarget}).onn("blur", onBlur);
+			e_({ele: focusTarget}).onn("keydown", doFinish);
+			return;
+		}
+
+		// number (default)
+		const ipt = ee`<input type="number" class="character-stat-input-edit" value="${currentValue}" ${minValueAttr != null ? `min="${minValueAttr}"` : `min="0"`} ${maxValueAttr != null ? `max="${maxValueAttr}"` : ""} style="width: ${Math.max(40, String(currentValue).length * 8 + 10)}px;" data-stat-path="${statPath}" data-character-id="${characterId}" ${classesData ? `data-classes-data="${classesData.qq()}"` : ""} />`;
+
+		display.replaceWith(ipt);
+		ipt.focuse();
+		ipt.selecte();
+
+		let isFinishing = false;
+		const doFinish = async (evt) => {
+			if (isFinishing) return;
+			if (evt.type === "keydown" && evt.key !== "Enter" && evt.key !== "Escape") {
+				return;
+			}
+			isFinishing = true;
+
+			const newValue = evt.key === "Escape" ? currentValue : ipt.val();
+
+			const eleNewDisplay = ee`<span class="character-stat-display" data-stat-path="${statPath}" data-character-id="${characterId}" data-current-value="${newValue}" data-edit-mode="number" ${maxValueAttr != null ? `data-max-value="${maxValueAttr}"` : ""} ${minValueAttr != null ? `data-min-value="${minValueAttr}"` : ""} ${classesData ? `data-classes-data="${classesData.qq()}"` : ""} title="Double-click to edit">${newValue}</span>`;
+
+			if (ipt.isConnected) ipt.replaceWith(eleNewDisplay);
+			const wired = eleNewDisplay[0] || eleNewDisplay;
+			if (wired) Renderer.character._wireStatDisplays(wired.parentElement || wired);
+
+			if (evt.key !== "Escape" && String(newValue) !== String(currentValue)) {
+				try {
+					if (statPath.startsWith("class.currentHitDice.") && classesData) {
+						const success = await Renderer.character._updateHitDiceFromClasses(character, character.source, statPath, newValue, classesData);
+						if (!success) console.warn(`Failed to update character hit dice ${statPath} on server`);
+					} else {
+						if (statPath.startsWith("equipment.")) Renderer.character._ensureStructuredEquipment(character);
+						const success = await Renderer.character._updateCharacterStat(character, character.source, statPath, newValue);
+						if (!success) console.warn(`Failed to update character stat ${statPath} on server`);
+					}
+				} catch (error) {
+					console.error("Error updating character stat:", error);
+				}
+			}
+		};
+
+		ipt.onn("blur", doFinish);
+		ipt.onn("keydown", doFinish);
+	}
+
+	static _sectionToolbarHtml (canEdit, characterId, section, extraAttrs = "") {
+		if (!canEdit || !characterId) return "";
+		return `<span class="character-sheet-toolbar" data-character-id="${String(characterId).qq()}" data-section="${String(section).qq()}" ${extraAttrs}></span>`;
+	}
+
 	static getCompactRenderedString (character, {isStatic = false} = {}) {
 		// Check if this is a stub character that needs lazy loading
 		if (Renderer.character._isCharacterStub(character)) {
@@ -9680,6 +10054,12 @@ Renderer.character = class {
 		renderer.recursiveRender({type: "entries", entries: [inlineSummary]}, renderStack, {depth: 1});
 
 		const hasEditAccess = Renderer.character._hasSourceAccess(character.source);
+		const hasEditPermission = hasEditAccess && !isStatic;
+		const characterId = hasEditPermission ? Renderer.character._ensureCharacterEditId(character) : null;
+		// Owner sheets are fully editable; soft hover affordances keep the sheet usable
+		const canEdit = hasEditPermission;
+		const ed = (path, value, opts) => Renderer.character._editableStatHtml(canEdit, characterId, path, value, opts);
+		const edPlay = ed;
 
 		// Combat Stats - hero (HP/AC) + primary + secondary chip rows
 		const combatChipsHero = [];
@@ -9691,23 +10071,13 @@ Renderer.character = class {
 			const currentHp = hp.current != null ? hp.current : hp.average || hp.max || "?";
 			const maxHp = hp.max || hp.average || "?";
 
-			// Check if user has edit access for this character's source
-			if (hasEditAccess && !isStatic) {
-				// Render editable HP with click-to-edit functionality
-				// Store character data in a global registry instead of embedding in HTML
-				const characterId = globalThis.CharacterManager
-					? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
-				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-
-				// Create click-to-edit HP display
-				const hpDisplay = `<span class="character-stat-display" data-stat-path="hp.current" data-character-id="${characterId}" data-current-value="${currentHp}" data-max-value="${maxHp}" title="Click to edit">${currentHp}</span><span class="character-combat__sep">/</span><span class="character-combat__max">${maxHp}</span>`;
-
-				const tempHpDisplay = (typeof hp.temp === "number") ? `<span class="character-combat__temp">+<span class="character-stat-display" data-stat-path="hp.temp" data-character-id="${characterId}" data-current-value="${hp.temp}" title="Click to edit Temporary HP">${hp.temp}</span> temp</span>` : "";
+			if (canEdit) {
+				const hpDisplay = `${edPlay("hp.current", currentHp, {max: maxHp, title: "Double-click to edit HP"})}<span class="character-combat__sep">/</span>${edPlay("hp.max", maxHp, {min: 1, title: "Double-click to edit max HP", display: maxHp, extraClass: "character-combat__max"})}`;
+				const tempHpDisplay = (typeof hp.temp === "number" || canEdit)
+					? `<span class="character-combat__temp">+${edPlay("hp.temp", hp.temp ?? 0, {title: "Double-click to edit Temporary HP"})} temp</span>`
+					: "";
 				combatChipsHero.push({label: "HP", value: `${hpDisplay}${tempHpDisplay}`, emphasis: true});
 			} else {
-				// Render static HP display
 				const tempHpDisplay = (typeof hp.temp === "number") ? `<span class="character-combat__temp">+${hp.temp} temp</span>` : "";
 				combatChipsHero.push({label: "HP", value: `<span>${currentHp}</span><span class="character-combat__sep">/</span><span class="character-combat__max">${maxHp}</span>${tempHpDisplay}`, emphasis: true});
 			}
@@ -9717,7 +10087,8 @@ Renderer.character = class {
 		const acData = Renderer.character._getCharacterAC(character);
 		if (acData) {
 			const acSource = acData.source ? `<span class="character-combat__ac-source ve-muted">${acData.source}</span>` : "";
-			combatChipsHero.push({label: "AC", value: `<span>${acData.ac}</span>${acSource}`, emphasis: true});
+			const acValue = ed("ac", acData.ac, {min: 0, title: "Double-click to edit AC", staticHtml: `<span>${acData.ac}</span>`});
+			combatChipsHero.push({label: "AC", value: `${acValue}${acSource}`, emphasis: true});
 		}
 
 		// Hit Dice — next to AC
@@ -9765,19 +10136,14 @@ Renderer.character = class {
 			Object.entries(hitDiceByType).forEach(([dieType, data]) => {
 				const { max, current, classes } = data;
 
-				let characterId = null;
-				if (hasEditAccess && !isStatic) {
-					characterId = globalThis.CharacterManager
-						? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-						: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
-					if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-					globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-				}
-
 				const dieRoll = `{@dice 1${dieType}||${dieType}}`;
-				if (hasEditAccess && !isStatic && characterId) {
+				if (canEdit && characterId) {
 					const classesData = classes.map(c => `${c.index}:${c.level}:${c.currentAvailable}`).join(",");
-					const clickableCount = `<span class="character-stat-display" data-stat-path="class.currentHitDice.${dieType}" data-character-id="${characterId}" data-current-value="${current}" data-max-value="${max}" data-classes-data="${classesData}" title="Click to edit ${dieType} hit dice available">${current}</span>`;
+					const clickableCount = edPlay(`class.currentHitDice.${dieType}`, current, {
+						max,
+						classesData,
+						title: `Double-click to edit ${dieType} hit dice available`,
+					});
 					combatChipsHero.push({
 						label: "Hit Dice",
 						value: `${clickableCount}<span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span><span class="character-combat__temp">${dieRoll}</span>`,
@@ -9794,28 +10160,12 @@ Renderer.character = class {
 		}
 
 		// Death Saves — next to AC / Hit Dice
-		if (character.deathSaves) {
-			const successes = character.deathSaves.successes || 0;
-			const failures = character.deathSaves.failures || 0;
-			let characterId = null;
+		if (character.deathSaves || canEdit) {
+			const successes = character.deathSaves?.successes || 0;
+			const failures = character.deathSaves?.failures || 0;
 
-			if (hasEditAccess && !isStatic) {
-				characterId = globalThis.CharacterManager
-					? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
-				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-			}
-
-			let successPt;
-			let failurePt;
-			if (hasEditAccess && !isStatic && characterId) {
-				successPt = `<span class="character-stat-display" data-stat-path="deathSaves.successes" data-character-id="${characterId}" data-current-value="${successes}" data-max-value="3" title="Click to edit death save successes">${successes}</span>`;
-				failurePt = `<span class="character-stat-display" data-stat-path="deathSaves.failures" data-character-id="${characterId}" data-current-value="${failures}" data-max-value="3" title="Click to edit death save failures">${failures}</span>`;
-			} else {
-				successPt = `<span>${successes}</span>`;
-				failurePt = `<span>${failures}</span>`;
-			}
+			const successPt = edPlay("deathSaves.successes", successes, {max: 3, min: 0, title: "Double-click to edit death save successes", staticHtml: `<span>${successes}</span>`});
+			const failurePt = edPlay("deathSaves.failures", failures, {max: 3, min: 0, title: "Double-click to edit death save failures", staticHtml: `<span>${failures}</span>`});
 
 			combatChipsHero.push({
 				label: "Death",
@@ -9824,22 +10174,26 @@ Renderer.character = class {
 			});
 		}
 
-		if (character.speed) {
-			const speedEntries = Object.entries(character.speed);
+		if (character.speed || canEdit) {
+			const speedObj = character.speed || {walk: 30};
+			const speedEntries = Object.entries(speedObj);
 			const walkEntry = speedEntries.find(([type]) => type === "walk");
 			const otherEntries = speedEntries.filter(([type]) => type !== "walk");
-			const walkVal = walkEntry ? `${walkEntry[1]} ft.` : (speedEntries[0] ? `${speedEntries[0][0] === "walk" ? "" : `${speedEntries[0][0]} `}${speedEntries[0][1]} ft.` : "\u2014");
+			const walkNum = walkEntry ? walkEntry[1] : (speedEntries[0]?.[1] ?? 30);
+			const walkVal = canEdit
+				? `${ed("speed.walk", walkNum, {min: 0, title: "Double-click to edit walk speed"})} ft.`
+				: (walkEntry ? `${walkEntry[1]} ft.` : (speedEntries[0] ? `${speedEntries[0][0] === "walk" ? "" : `${speedEntries[0][0]} `}${speedEntries[0][1]} ft.` : "\u2014"));
 			const otherPt = otherEntries.length
 				? `<span class="character-combat__temp">${otherEntries.map(([type, value]) => `${type} ${value} ft.`).join(", ")}</span>`
 				: "";
 			combatChipsHero.push({label: "Speed", value: `<span>${walkVal}</span>${otherPt}`, emphasis: true});
 		}
 
-		// Add Initiative with dice rolling
+		// Add Initiative with dice rolling (derived from DEX / stored initiative — not quick-editable)
 		const dexScore = character.dex || 10;
 		const dexMod = Parser.getAbilityModifier(dexScore);
 		const dexModValue = typeof dexMod === "number" ? dexMod : parseInt(dexMod) || 0;
-		const initMod = character.initiative || dexModValue;
+		const initMod = character.initiative != null ? character.initiative : dexModValue;
 		const initStr = initMod >= 0 ? `+${initMod}` : `${initMod}`;
 		combatChipsHero.push({label: "Initiative", value: `{@dice 1d20${initStr}|${initStr}|Initiative}`, emphasis: true});
 
@@ -9865,8 +10219,13 @@ Renderer.character = class {
 		if (!profBonus && characterLevel > 0) {
 			profBonus = `+${Math.ceil(characterLevel / 4) + 1}`;
 		}
-		if (profBonus) {
-			combatChipsHero.push({label: "Proficiency", value: `${profBonus}`, emphasis: true});
+		if (profBonus || canEdit) {
+			const profVal = profBonus || `+${Math.ceil((characterLevel || 1) / 4) + 1}`;
+			combatChipsHero.push({
+				label: "Proficiency",
+				value: ed("proficiencyBonus", profVal, {title: "Double-click to edit proficiency bonus", staticHtml: `${profVal}`}),
+				emphasis: true,
+			});
 		}
 
 		if (character.languages?.length) {
@@ -9894,38 +10253,45 @@ Renderer.character = class {
 
 		if (character.size) {
 			const sizeFull = Parser.sizeAbvToFull(character.size) || character.size;
-			combatChipsSecondary.push({label: "Size", value: sizeFull});
+			combatChipsHero.push({label: "Size", value: sizeFull});
 		}
 
 		if (character.age) {
-			combatChipsSecondary.push({label: "Age", value: `${character.age}`});
+			combatChipsHero.push({label: "Age", value: `${character.age}`});
 		}
 
 		if (character.senses) {
 			const sensesFull = Object.entries(character.senses)
 				.map(([type, value]) => `${value}`).filter(Boolean)
 				.join(", ");
-			combatChipsSecondary.push({label: "Senses", value: sensesFull, title: sensesFull, truncate: true});
+			combatChipsHero.push({label: "Senses", value: sensesFull, title: sensesFull, truncate: true});
 		}
 
 		if (character.resist) {
 			const resistFull = Object.entries(character.resist)
 				.map(([type, value]) => `${value}`).filter(Boolean)
 				.join(", ");
-			combatChipsSecondary.push({label: "Resist", value: resistFull, title: resistFull, truncate: true});
+			combatChipsHero.push({label: "Resist", value: resistFull, title: resistFull, truncate: true});
 		}
 
 		if (character.immune) {
 			const immuneFull = Object.entries(character.immune)
 				.map(([type, value]) => `${value}`).filter(Boolean)
 				.join(", ");
-			combatChipsSecondary.push({label: "Immune", value: immuneFull, title: immuneFull, truncate: true});
+			combatChipsHero.push({label: "Immune", value: immuneFull, title: immuneFull, truncate: true});
 		}
 
 		// Ability Scores
 		const abilities = ["str", "dex", "con", "int", "wis", "cha"];
 		const abilityCellsHtml = abilities.map(ab => {
 			const score = character[ab] || 10;
+			const abilityMod = Parser.getAbilityModifier(score);
+			const modValue = typeof abilityMod === "number" ? abilityMod : parseInt(abilityMod) || 0;
+			const modStr = modValue >= 0 ? `+${modValue}` : `${modValue}`;
+			if (canEdit) {
+				const scoreHtml = ed(ab, score, {min: 1, max: 30, title: `Double-click to edit ${ab.toUpperCase()}`});
+				return `<div class="character-ability"><div class="character-ability__abbr">${ab.toUpperCase()}</div><div class="character-ability__score">${scoreHtml}</div><div class="character-ability__mod ve-muted">{@d20 ${modStr}|${modStr}|${ab.toUpperCase()} check}</div></div>`;
+			}
 			return `<div class="character-ability"><div class="character-ability__abbr">${ab.toUpperCase()}</div><div class="character-ability__score">{@ability ${ab} ${score}}</div></div>`;
 		}).join("");
 
@@ -10079,16 +10445,32 @@ Renderer.character = class {
 
 		// Actions - compact attack-aware blocks
 		if (character.action?.length) {
-			const actionBlocksHtml = character.action.map(action => {
+			const actionBlocksHtml = character.action.map((action, actionIndex) => {
 				const entries = action.entries || [];
 				const isAttack = entries.some(e => typeof e === "string" && /\{@atk\b/.test(e));
-				const bodyHtml = entries.map(entry => {
-					if (typeof entry === "string") return `<p class="character-action__line">${entry}</p>`;
-					// Nested entry objects — keep as renderable JSON via recursiveRender later
+				const bodyHtml = entries.map((entry, entryIndex) => {
+					if (typeof entry === "string") {
+						const rendered = Renderer.get().render(entry);
+						if (canEdit) {
+							return `<p class="character-action__line">${ed(`action.${actionIndex}.entries.${entryIndex}`, entry, {
+								editMode: "text",
+								display: rendered,
+								title: "Double-click to edit action text (renderer tags supported)",
+							})}</p>`;
+						}
+						return `<p class="character-action__line">${entry}</p>`;
+					}
 					return `<div class="character-action__nested">${renderer.render(entry)}</div>`;
 				}).join("");
-				const nameSafe = (action.name || "Action").toString().qq();
-				return `<div class="character-action${isAttack ? " character-action--attack" : ""}"><div class="character-action__name">${nameSafe}</div><div class="character-action__body">${bodyHtml}</div></div>`;
+				const nameSafe = (action.name || "Action").toString();
+				const nameHtml = canEdit
+					? ed(`action.${actionIndex}.name`, action.name || "Action", {
+						editMode: "text",
+						display: Renderer.get().render(nameSafe),
+						title: "Double-click to edit action name",
+					})
+					: nameSafe.qq();
+				return `<div class="character-action${isAttack ? " character-action--attack" : ""}"><div class="character-action__name">${nameHtml}</div><div class="character-action__body">${bodyHtml}</div></div>`;
 			}).join("");
 
 			renderer.recursiveRender({
@@ -10103,15 +10485,19 @@ Renderer.character = class {
 			const spellParts = [];
 
 			const metaChips = [];
-			if (character.spells.dc != null) {
-				metaChips.push(`<div class="character-spells__chip"><span class="character-spells__chip-label">Save DC</span><span class="character-spells__chip-value">${character.spells.dc}</span></div>`);
+			if (character.spells.dc != null || canEdit) {
+				const dcVal = character.spells.dc ?? "";
+				metaChips.push(`<div class="character-spells__chip"><span class="character-spells__chip-label">Save DC</span><span class="character-spells__chip-value">${ed("spells.dc", dcVal, {min: 0, title: "Double-click to edit spell save DC", staticHtml: `${dcVal || "\u2014"}`})}</span></div>`);
 			}
-			if (character.spells.attackBonus != null) {
-				const atkBonus = character.spells.attackBonus;
+			if (character.spells.attackBonus != null || canEdit) {
+				const atkBonus = character.spells.attackBonus ?? 0;
 				const atkStr = typeof atkBonus === "number"
 					? (atkBonus >= 0 ? `+${atkBonus}` : `${atkBonus}`)
 					: String(atkBonus);
-				metaChips.push(`<div class="character-spells__chip"><span class="character-spells__chip-label">Attack</span><span class="character-spells__chip-value">{@d20 ${atkStr}|${atkStr}|Spell Attack}</span></div>`);
+				const atkDisplay = canEdit
+					? ed("spells.attackBonus", atkBonus, {title: "Double-click to edit spell attack bonus", display: atkStr})
+					: `{@d20 ${atkStr}|${atkStr}|Spell Attack}`;
+				metaChips.push(`<div class="character-spells__chip"><span class="character-spells__chip-label">Attack</span><span class="character-spells__chip-value">${atkDisplay}</span></div>`);
 			}
 			if (character.spells.ability) {
 				metaChips.push(`<div class="character-spells__chip"><span class="character-spells__chip-label">Ability</span><span class="character-spells__chip-value">${Parser.attAbvToFull(character.spells.ability) || character.spells.ability}</span></div>`);
@@ -10124,7 +10510,7 @@ Renderer.character = class {
 				const levelRows = [];
 				const sortedLevels = Object.entries(character.spells.levels)
 					.map(([level, levelData]) => [parseInt(level, 10), level, levelData])
-					.filter(([, , levelData]) => levelData?.spells?.length)
+					.filter(([, , levelData]) => levelData && (levelData.spells?.length || levelData.maxSlots > 0))
 					.sort((a, b) => a[0] - b[0]);
 
 				sortedLevels.forEach(([levelNum, levelKey, levelData]) => {
@@ -10134,28 +10520,26 @@ Renderer.character = class {
 
 					let slotsHtml = "";
 					if (levelNum > 0 && levelData.maxSlots && levelData.maxSlots > 0) {
-						const characterId = globalThis.CharacterManager
-							? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-							: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
 						const slotsRemaining = levelData.slotsRemaining != null ? levelData.slotsRemaining : 0;
 
-						if (hasEditAccess && !isStatic) {
-							if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-							globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-							slotsHtml = `<span class="character-spells__slots"><span class="character-stat-display" data-stat-path="spells.levels.${levelKey}.slotsRemaining" data-character-id="${characterId}" data-current-value="${slotsRemaining}" data-max-value="${levelData.maxSlots}" title="Click to edit spell slots remaining">${slotsRemaining}</span>/${levelData.maxSlots} slots</span>`;
+						if (canEdit) {
+							slotsHtml = `<span class="character-spells__slots">${edPlay(`spells.levels.${levelKey}.slotsRemaining`, slotsRemaining, {max: levelData.maxSlots, title: "Double-click to edit spell slots remaining"})}/${levelData.maxSlots} slots</span>`;
 						} else {
 							slotsHtml = `<span class="character-spells__slots">${slotsRemaining}/${levelData.maxSlots} slots</span>`;
 						}
 					}
 
-					const spellLinks = levelData.spells.map(spell => {
+					const spellLinks = (levelData.spells || []).map((spell) => {
+						let linkHtml;
 						if (typeof spell === "string") {
-							return `<span class="character-spells__spell">{@spell ${spell}}</span>`;
+							linkHtml = spell.includes("{@") ? spell : `{@spell ${spell}}`;
 						} else if (spell?.name) {
 							const source = spell.source ? `|${spell.source}` : "";
-							return `<span class="character-spells__spell">{@spell ${spell.name}${source}}</span>`;
+							linkHtml = `{@spell ${spell.name}${source}}`;
+						} else {
+							return null;
 						}
-						return null;
+						return `<span class="character-spells__spell">${linkHtml}</span>`;
 					}).filter(Boolean).join("");
 
 					levelRows.push(`<div class="character-spells__level"><div class="character-spells__level-head"><span class="character-spells__level-name">${levelName}</span>${slotsHtml}</div><div class="character-spells__list">${spellLinks}</div></div>`);
@@ -10166,69 +10550,86 @@ Renderer.character = class {
 				}
 			}
 
-			if (spellParts.length) {
+			// Edit Spells affordance — mirrors the Equipment "+ Item" toolbar so
+			// spellcasters can open the spell editor directly from the live sheet.
+			const spellsToolbar = canEdit
+				? `<div class="character-sheet-section-toolbar"><button type="button" class="ve-btn ve-btn-xxs ve-btn-default character-sheet-btn-add" data-character-id="${characterId}" data-action="edit-spells" title="Edit spells">Edit Spells</button></div>`
+				: "";
+
+			if (spellParts.length || spellsToolbar) {
 				renderer.recursiveRender({
 					type: "entries",
 					name: "Spells",
-					entries: [`<div class="character-spells">${spellParts.join("")}</div>`],
+					entries: [`<div class="character-spells">${spellParts.join("")}${spellsToolbar}</div>`],
 				}, renderStack, {depth: 1});
 			}
 		}
 
-		if (character.customTrackers?.length) {
-			let characterId = null;
-
-			if (hasEditAccess && !isStatic) {
-				characterId = globalThis.CharacterManager
-					? globalThis.CharacterManager._generateCompositeId(character.name, character.source)
-					: `${character.name}_${character.source}`.replace(/[^a-zA-Z0-9]/g, "");
-				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-			}
-
-			const hasNotes = character.customTrackers.some(t => t.description || (t.type === "condition" && t.duration));
-			const headCells = hasNotes
-				? `<th class="character-data-table__name">Name</th><th class="character-data-table__value">Value</th><th class="character-data-table__notes">Notes</th>`
+		if (character.customTrackers?.length || canEdit) {
+			const trackers = character.customTrackers || [];
+			const hasNotes = trackers.some(t => t.description || (t.type === "condition" && t.duration));
+			const headCells = hasNotes || canEdit
+				? `<th class="character-data-table__name">Name</th><th class="character-data-table__value">Value</th><th class="character-data-table__notes">Notes</th>${canEdit ? `<th class="character-data-table__actions"></th>` : ""}`
 				: `<th class="character-data-table__name">Name</th><th class="character-data-table__value">Value</th>`;
 
-			const rowsHtml = character.customTrackers.map((tracker, index) => {
+			const rowsHtml = trackers.map((tracker, index) => {
 				const trackerName = tracker.name || `Tracker ${index + 1}`;
 				let valueHtml = "\u2014";
-				const noteParts = [];
 
-				if (tracker.type === "counter") {
+				if (tracker.type === "counter" || !tracker.type) {
 					const current = tracker.current || 0;
 					const max = tracker.max || 1;
-					if (hasEditAccess && !isStatic && characterId) {
-						const clickableCount = `<span class="character-stat-display" data-stat-path="customTrackers.${index}.current" data-character-id="${characterId}" data-current-value="${current}" data-max-value="${max}" title="Click to edit ${trackerName}">${current}</span>`;
-						valueHtml = `${clickableCount}<span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span>`;
+					if (canEdit) {
+						const clickableCount = edPlay(`customTrackers.${index}.current`, current, {max, title: `Double-click to edit ${trackerName}`});
+						const maxPart = ed(`customTrackers.${index}.max`, max, {min: 1, title: `Double-click to edit ${trackerName} max`});
+						valueHtml = `${clickableCount}<span class="character-combat__sep">/</span>${maxPart}`;
 					} else {
 						valueHtml = `${current}<span class="character-combat__sep">/</span><span class="character-combat__max">${max}</span>`;
 					}
 				} else if (tracker.type === "condition") {
 					const active = tracker.active || false;
 					const status = active ? "✓ Active" : "✗ Inactive";
-					if (hasEditAccess && !isStatic && characterId) {
-						valueHtml = `<span class="character-stat-display" data-stat-path="customTrackers.${index}.active" data-character-id="${characterId}" data-current-value="${active}" data-max-value="true" title="Click to toggle ${trackerName}">${status}</span>`;
+					if (canEdit) {
+						valueHtml = edPlay(`customTrackers.${index}.active`, active, {
+							editMode: "toggle",
+							display: status,
+							title: `Click to toggle ${trackerName}`,
+						});
 					} else {
 						valueHtml = status;
 					}
-					if (tracker.duration) noteParts.push(tracker.duration);
 				}
 
-				if (tracker.description) noteParts.push(tracker.description);
+				const nameHtml = canEdit
+					? ed(`customTrackers.${index}.name`, trackerName, {editMode: "text", title: "Double-click to edit tracker name"})
+					: `<strong>${String(trackerName).qq()}</strong>`;
 
-				const notesCell = hasNotes
-					? `<td class="character-data-table__notes">${noteParts.length ? noteParts.map(n => String(n).qq()).join(" \u2014 ") : "\u2014"}</td>`
+				const noteRaw = tracker.description || (tracker.type === "condition" && tracker.duration ? tracker.duration : "") || "";
+				const notesCell = (hasNotes || canEdit)
+					? `<td class="character-data-table__notes">${canEdit
+						? ed(`customTrackers.${index}.description`, noteRaw, {
+							editMode: "text",
+							display: noteRaw ? Renderer.get().render(noteRaw) : "\u2014",
+							title: "Double-click to edit notes",
+						})
+						: (noteRaw ? String(noteRaw).qq() : "\u2014")}</td>`
 					: "";
 
-				return `<tr><td class="character-data-table__name"><strong>${String(trackerName).qq()}</strong></td><td class="character-data-table__value">${valueHtml}</td>${notesCell}</tr>`;
+				const actionsCell = canEdit
+					? `<td class="character-data-table__actions"><button type="button" class="character-sheet-btn-icon character-sheet-btn-remove" data-character-id="${characterId}" data-action="remove-tracker" data-index="${index}" title="Remove tracker">×</button></td>`
+					: "";
+
+				return `<tr><td class="character-data-table__name">${nameHtml}</td><td class="character-data-table__value">${valueHtml}</td>${notesCell}${actionsCell}</tr>`;
 			}).join("");
+
+			const toolbar = canEdit
+				? `<div class="character-sheet-section-toolbar"><button type="button" class="ve-btn ve-btn-xxs ve-btn-default character-sheet-btn-add" data-character-id="${characterId}" data-action="add-tracker" title="Add tracker">+ Tracker</button></div>`
+				: "";
 
 			renderer.recursiveRender({
 				type: "entries",
 				name: "Custom Trackers",
-				entries: [`<table class="character-data-table character-trackers"><thead><tr>${headCells}</tr></thead><tbody>${rowsHtml}</tbody></table>`],
+				entries: [`<table class="character-data-table character-trackers"><thead><tr>${headCells}</tr></thead><tbody>${rowsHtml || (canEdit ? `<tr><td colspan="4" class="ve-muted">No trackers yet</td></tr>` : "")}</tbody></table>${toolbar}`],
 			}, renderStack, {depth: 1});
 		}
 
@@ -10236,32 +10637,79 @@ Renderer.character = class {
 		// preserved in `character.entries` and rendered via the main features
 		// pipeline elsewhere. Do not render `character.trait` to avoid confusion.
 
-		// Equipment — compact table
-		if (character.equipment?.length) {
-			const hasNotes = character.equipment.some(item => item.description);
-			const headCells = hasNotes
-				? `<th class="character-data-table__qty">Qty</th><th class="character-data-table__name">Item</th><th class="character-data-table__notes">Notes</th>`
-				: `<th class="character-data-table__qty">Qty</th><th class="character-data-table__name">Item</th>`;
+		// Equipment — compact table (prefer structured equipment[]; migrate from entries when editing)
+		{
+			if (canEdit) Renderer.character._ensureStructuredEquipment(character);
+			const items = Array.isArray(character.equipment) ? character.equipment : [];
+			const showEquipmentSection = items.length || canEdit;
 
-			const rowsHtml = character.equipment.map(item => {
-				const qty = item.quantity != null && item.quantity !== "" ? item.quantity : "\u2014";
-				const rawName = item.name || "Unknown";
-				const nameCell = typeof rawName === "string" && rawName.includes("{@")
-					? rawName
-					: `<strong>${String(rawName).qq()}</strong>`;
-				const notesCell = hasNotes
-					? `<td class="character-data-table__notes">${item.description ? String(item.description).qq() : "\u2014"}</td>`
+			if (showEquipmentSection) {
+				const hasNotes = items.some(item => item.description) || canEdit;
+				const headCells = hasNotes
+					? `<th class="character-data-table__qty">Qty</th><th class="character-data-table__name">Item</th><th class="character-data-table__notes">Notes</th>${canEdit ? `<th class="character-data-table__actions"></th>` : ""}`
+					: `<th class="character-data-table__qty">Qty</th><th class="character-data-table__name">Item</th>`;
+
+				const rowsHtml = items.map((item, index) => {
+					const qty = item.quantity != null && item.quantity !== "" ? item.quantity : "\u2014";
+					const rawName = item.name || "Unknown";
+					const nameRendered = typeof rawName === "string" && rawName.includes("{@")
+						? Renderer.get().render(rawName)
+						: `<strong>${String(rawName).qq()}</strong>`;
+					const qtyHtml = canEdit
+						? ed(`equipment.${index}.quantity`, item.quantity ?? 1, {min: 0, title: "Double-click to edit quantity"})
+						: qty;
+					const nameHtml = canEdit
+						? ed(`equipment.${index}.name`, rawName, {
+							editMode: "text",
+							display: nameRendered,
+							title: "Double-click to edit item (renderer tags supported)",
+						})
+						: nameRendered;
+					const notesCell = hasNotes
+						? `<td class="character-data-table__notes">${canEdit
+							? ed(`equipment.${index}.description`, item.description || "", {
+								editMode: "text",
+								display: item.description ? Renderer.get().render(String(item.description)) : "\u2014",
+								title: "Double-click to edit notes",
+							})
+							: (item.description ? String(item.description).qq() : "\u2014")}</td>`
+						: "";
+					const actionsCell = canEdit
+						? `<td class="character-data-table__actions"><button type="button" class="character-sheet-btn-icon character-sheet-btn-remove" data-character-id="${characterId}" data-action="remove-item" data-index="${index}" title="Remove item">×</button></td>`
+						: "";
+					return `<tr><td class="character-data-table__qty">${qtyHtml}</td><td class="character-data-table__name">${nameHtml}</td>${notesCell}${actionsCell}</tr>`;
+				}).join("");
+
+				const toolbar = canEdit
+					? `<div class="character-sheet-section-toolbar"><button type="button" class="ve-btn ve-btn-xxs ve-btn-default character-sheet-btn-add" data-character-id="${characterId}" data-action="add-item" title="Add item">+ Item</button></div>`
 					: "";
-				return `<tr><td class="character-data-table__qty">${qty}</td><td class="character-data-table__name">${nameCell}</td>${notesCell}</tr>`;
-			}).join("");
 
+				renderer.recursiveRender({
+					type: "entries",
+					name: "Equipment",
+					entries: [`<table class="character-data-table character-equipment"><thead><tr>${headCells}</tr></thead><tbody>${rowsHtml || (canEdit ? `<tr><td colspan="4" class="ve-muted">No items yet — click + Item</td></tr>` : "")}</tbody></table>${toolbar}`],
+				}, renderStack, {depth: 1});
+			}
+		}
+
+		// Player notes (customText) — supports renderer tags
+		if (character.customText || canEdit) {
+			const rawNotes = character.customText || "";
+			const notesDisplay = rawNotes
+				? Renderer.get().render(rawNotes)
+				: `<span class="ve-muted">Click to add notes…</span>`;
+			const notesHtml = ed("customText", rawNotes, {
+				editMode: "text",
+				display: notesDisplay,
+				title: "Double-click to edit notes (renderer tags supported)",
+				extraClass: "character-notes-display",
+			});
 			renderer.recursiveRender({
 				type: "entries",
-				name: "Equipment",
-				entries: [`<table class="character-data-table character-equipment"><thead><tr>${headCells}</tr></thead><tbody>${rowsHtml}</tbody></table>`],
+				name: "Notes",
+				entries: [`<div class="character-notes">${notesHtml}</div>`],
 			}, renderStack, {depth: 1});
 		}
-		// Player notes from custom content instead of hardcoded forms
 
 		// Resources (Hit Dice, Inspiration, etc.) - collapsible section
 		if (character.resources?.length) {
@@ -10286,45 +10734,26 @@ Renderer.character = class {
 			renderer.recursiveRender(conditionInfo, renderStack, {depth: 1});
 		}
 
-		// Custom description - inline format
-		// if (character.customText) {
-		// 	const customInfo = {
-		// 		type: "entries",
-		// 		entries: [`<p><strong>Description:</strong>: ${character.customText}</p>`]
-		// 	};
-		// 	renderer.recursiveRender(customInfo, renderStack, {depth: 1});
-		// }
-
-		// // Fluff entries - inline background
-		// if (character.fluff?.entries?.length) {
-		// 	const fluffText = character.fluff.entries.join(' ');
-		// 	const fluffInfo = {
-		// 		type: "entries",
-		// 		entries: [`<p><strong>Background:</strong>: ${fluffText}</p>`]
-		// 	};
-		// 	renderer.recursiveRender(fluffInfo, renderStack, {depth: 1});
-		// }
-
-		// Character entries — render Items sections as compact tables
+		// Character entries — Items as tables; features/traits/other sections editable in quick-edit mode
 		if (character.entries?.length) {
 			const remainingEntries = [];
-			character.entries.forEach(entry => {
+			character.entries.forEach((entry, entryIndex) => {
 				const isItemsSection = entry
 					&& typeof entry === "object"
 					&& entry.entries
 					&& /^(items|equipment)$/i.test(entry.name || "");
 
 				if (!isItemsSection) {
-					remainingEntries.push(entry);
+					remainingEntries.push({entry, entryIndex});
 					return;
 				}
 
 				// Already rendered structured equipment — skip duplicate Items dump
-				if (character.equipment?.length) return;
+				if (character.equipment?.length || canEdit) return;
 
 				const rows = Renderer.character._getItemRowsFromEntries(entry.entries);
 				if (!rows.length) {
-					remainingEntries.push(entry);
+					remainingEntries.push({entry, entryIndex});
 					return;
 				}
 
@@ -10347,7 +10776,21 @@ Renderer.character = class {
 			});
 
 			if (remainingEntries.length) {
-				renderer.recursiveRender({entries: remainingEntries}, renderStack, {depth: 1});
+				const toRender = canEdit
+					? remainingEntries.map(({entry, entryIndex}) => {
+						const wrapped = Renderer.character._makeEntriesQuickEditable(
+							[entry],
+							`entries`,
+							(path, value, opts) => {
+								// Remap entries.0... → entries.{entryIndex}...
+								const remapped = path.replace(/^entries\.0\b/, `entries.${entryIndex}`);
+								return ed(remapped, value, opts);
+							},
+						)[0];
+						return wrapped;
+					})
+					: remainingEntries.map(({entry}) => entry);
+				renderer.recursiveRender({entries: toRender}, renderStack, {depth: 1});
 			}
 		}
 
@@ -10467,110 +10910,203 @@ Renderer.character = class {
 		}
 	}
 
-	static _bindCharacterSheetListeners (ele) {
-		const root = e_({ele});
+	/** Migrate entries-based Items into character.equipment[] if needed. Returns true if migrated. */
+	static _ensureStructuredEquipment (character) {
+		if (Array.isArray(character.equipment) && character.equipment.length) return false;
+		const itemsEntry = (character.entries || []).find(entry =>
+			entry && typeof entry === "object" && entry.entries && /^(items|equipment)$/i.test(entry.name || ""),
+		);
+		if (!itemsEntry) {
+			if (!Array.isArray(character.equipment)) character.equipment = [];
+			return false;
+		}
+		const rows = Renderer.character._getItemRowsFromEntries(itemsEntry.entries);
+		character.equipment = rows.map(row => ({
+			name: row.name,
+			quantity: row.qty === "\u2014" ? 1 : (Number(row.qty) || row.qty || 1),
+			description: row.notes || "",
+		}));
+		return true;
+	}
 
-		const resolveEditableCharacter = (characterId) => {
-			let character = globalThis._CHARACTER_EDIT_DATA?.[characterId];
-			if (character) return character;
+	/**
+	 * Confirmation prompt shown before removing a structural row (equipment item, tracker, etc.)
+	 * from a character sheet. Returns true if the user confirms the removal.
+	 * @param {string} [rawName] The raw (possibly tag-containing) name of the entry being removed.
+	 * @param {string} [noun] A short noun for the entry type, e.g. "item" or "tracker".
+	 */
+	static async _pConfirmStructuralRemove (rawName, noun = "entry") {
+		const plainName = rawName != null && String(rawName).trim()
+			? Renderer.stripTags(String(rawName))
+			: "";
+		const escName = plainName
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;")
+			.replace(/>/g, "&gt;");
+		const htmlDescription = escName
+			? `Are you sure you want to remove <b>${escName}</b>?`
+			: `Are you sure you want to remove this ${noun}?`;
+		return InputUiUtil.pGetUserBoolean({
+			title: `Remove ${noun.uppercaseFirst()}`,
+			htmlDescription,
+			textYes: "Remove",
+			textNo: "Cancel",
+		});
+	}
 
-			if (!globalThis.CharacterManager) return null;
+	/**
+	 * Open the shared spell selection UI for an editable character, persisting the
+	 * chosen spells back onto the character on completion. Requires
+	 * `character-spell-manager.js` to be loaded on the host page (e.g. characters.html).
+	 */
+	static async _pOpenSpellEditor (character, managerId) {
+		const getMgr = globalThis.getCharacterSpellManager;
+		const Cls = typeof getMgr === "function" ? getMgr() : globalThis.CharacterSpellManager;
+		if (!Cls) {
+			globalThis.JqueryUtil?.doToast?.({type: "warning", content: "The spell editor is not available on this page."});
+			return;
+		}
+		const mgr = new Cls();
+		await mgr.openSpellManager(character, async (selectedSpells) => {
+			const levels = Renderer.character._buildSpellLevelsFromSelection(character, selectedSpells);
+			await CharacterManager.updateCharacterStat(managerId, "spells.levels", levels);
+		});
+	}
 
-			character = globalThis.CharacterManager.getCharacterById(characterId)
-				|| [...(globalThis.CharacterManager._characters?.values?.() || [])]
-					.find(c => c && globalThis.CharacterManager._generateCompositeId(c.name, c.source) === characterId)
-				|| null;
+	/**
+	 * Build a fresh `spells.levels` object from a spell-manager selection, preserving
+	 * existing slot metadata (maxSlots/slotsRemaining) while replacing the spell lists.
+	 */
+	static _buildSpellLevelsFromSelection (character, selectedSpells) {
+		const prevLevels = character?.spells?.levels && typeof character.spells.levels === "object"
+			? MiscUtil.copyFast(character.spells.levels)
+			: {};
 
-			if (character) {
-				if (!globalThis._CHARACTER_EDIT_DATA) globalThis._CHARACTER_EDIT_DATA = {};
-				globalThis._CHARACTER_EDIT_DATA[characterId] = character;
-				if (character.id) globalThis._CHARACTER_EDIT_DATA[character.id] = character;
-			}
-
-			return character;
-		};
-
-		// Click-to-edit functionality for character stats
-		root.onn("click", (e) => {
-			const display = e.target.closest?.(".character-stat-display");
-			if (!display || !root.contains(display)) return;
-
-			const eleDisplay = e_({ele: display});
-			const statPath = eleDisplay.attr("data-stat-path");
-			const characterId = eleDisplay.attr("data-character-id");
-			const currentValue = eleDisplay.attr("data-current-value");
-			const classesData = eleDisplay.attr("data-classes-data"); // For hit dice
-
-			const character = resolveEditableCharacter(characterId);
-			if (!character) return;
-
-			if (!Renderer.character._hasSourceAccess(character.source)) {
-				return; // Skip if no edit access
-			}
-
-			// Create input element
-			const inputType = "number";
-			const minValue = 0;
-			let maxValue = null;
-
-			if (statPath === "hp.current") {
-				maxValue = eleDisplay.attr("data-max-value");
-			} else if (statPath.startsWith("class.currentHitDice.")) {
-				maxValue = eleDisplay.attr("data-max-value");
-			}
-
-			const ipt = ee`<input type="${inputType}" class="character-stat-input-edit" value="${currentValue}" min="${minValue}" ${maxValue ? `max="${maxValue}"` : ""} style="width: ${Math.max(40, String(currentValue).length * 8 + 10)}px;" data-stat-path="${statPath}" data-character-id="${characterId}" ${classesData ? `data-classes-data="${classesData.qq()}"` : ""} />`;
-
-			// Replace display with input
-			display.replaceWith(ipt);
-			ipt.focuse();
-			ipt.selecte();
-
-			let isFinishing = false;
-			const doFinish = async (evt) => {
-				if (isFinishing) return;
-				if (evt.type === "keydown" && evt.key !== "Enter" && evt.key !== "Escape") {
-					return;
-				}
-				isFinishing = true;
-
-				const newValue = evt.key === "Escape" ? currentValue : ipt.val();
-
-				// Create new display span
-				const eleNewDisplay = ee`<span class="character-stat-display" data-stat-path="${statPath}" data-character-id="${characterId}" data-current-value="${newValue}" ${maxValue ? `data-max-value="${maxValue}"` : ""} ${classesData ? `data-classes-data="${classesData.qq()}"` : ""} title="Click to edit">${newValue}</span>`;
-
-				// Replace input with display
-				if (ipt.isConnected) ipt.replaceWith(eleNewDisplay);
-
-				// Update server if value changed and not escaped
-				if (evt.key !== "Escape" && String(newValue) !== String(currentValue)) {
-					try {
-						// Handle hit dice updates specially
-						if (statPath.startsWith("class.currentHitDice.") && classesData) {
-							const success = await Renderer.character._updateHitDiceFromClasses(character, character.source, statPath, newValue, classesData);
-							if (!success) {
-								console.warn(`Failed to update character hit dice ${statPath} on server`);
-							}
-						} else {
-							const success = await Renderer.character._updateCharacterStat(character, character.source, statPath, newValue);
-							if (!success) {
-								console.warn(`Failed to update character stat ${statPath} on server`);
-							}
-						}
-					} catch (error) {
-						console.error("Error updating character stat:", error);
-					}
-				}
-			};
-
-			ipt.onn("blur", doFinish);
-			ipt.onn("keydown", doFinish);
+		// Preserve slot metadata but clear spell lists; drop legacy "levelN" keys.
+		const levels = {};
+		Object.entries(prevLevels).forEach(([key, data]) => {
+			if (/^level/i.test(key)) return;
+			levels[key] = {...(data && typeof data === "object" ? data : {}), spells: []};
 		});
 
-		// Load saved conditions
-		Renderer.character._loadConditionsFromStorage(root);
+		(selectedSpells || []).forEach(spell => {
+			if (spell?.level == null) return;
+			const lvl = String(spell.level);
+			if (!levels[lvl]) levels[lvl] = {maxSlots: 0, slotsRemaining: 0, spells: []};
+			if (!Array.isArray(levels[lvl].spells)) levels[lvl].spells = [];
+			const nameWithSource = spell.source && spell.source !== "PHB"
+				? `${spell.name}|${spell.source}`
+				: spell.name;
+			levels[lvl].spells.push(nameWithSource);
+		});
 
-		// Setup notes persistence
+		return levels;
+	}
+
+	static _bindCharacterSheetListeners (ele) {
+		const rootEle = ele?.jquery ? ele[0] : ele;
+		if (!rootEle?.addEventListener) return;
+		const root = e_({ele: rootEle});
+
+		// Direct ondblclick on each editable field (survives better than delegated click-pairing)
+		Renderer.character._wireStatDisplays(rootEle);
+
+		const rerenderAfterQuickEditToggle = (character) => {
+			if (globalThis.CharacterManager?._notifyListeners) {
+				globalThis.CharacterManager._notifyListeners();
+				return;
+			}
+			const table = root.closest?.("table") || rootEle;
+			if (!table || !character) return;
+			const fn = Renderer.hover.getFnRenderCompact(UrlUtil.PG_CHARACTERS);
+			const html = fn(character);
+			if (typeof table.html === "function") table.html(html);
+			else table.innerHTML = html;
+			Renderer.character.bindListenersCompact(character, table);
+		};
+
+		// Toolbar / structural handlers — bind once per root
+		if (!rootEle.__characterSheetToolbarBound) {
+			rootEle.__characterSheetToolbarBound = true;
+
+			root.onn("click", (e) => {
+				const btn = e.target.closest?.(".character-sheet-edit-toggle");
+				if (!btn || !rootEle.contains(btn)) return;
+				e.preventDefault();
+				e.stopPropagation();
+
+				const characterId = btn.getAttribute("data-character-id");
+				const character = Renderer.character._resolveEditableCharacter(characterId);
+				if (!character) return;
+
+				const next = btn.getAttribute("data-quick-edit") !== "on";
+				Renderer.character._setQuickEditEnabled(characterId, next);
+				rerenderAfterQuickEditToggle(character);
+			});
+
+			root.onn("click", async (e) => {
+				const btn = e.target.closest?.("[data-action]");
+				if (!btn || !rootEle.contains(btn)) return;
+				if (!btn.classList.contains("character-sheet-btn-add") && !btn.classList.contains("character-sheet-btn-remove")) return;
+
+				e.preventDefault();
+				e.stopPropagation();
+
+				const action = btn.getAttribute("data-action");
+				const characterId = btn.getAttribute("data-character-id");
+				const character = Renderer.character._resolveEditableCharacter(characterId);
+				if (!character || !Renderer.character._hasSourceAccess(character.source)) return;
+				if (!globalThis.CharacterManager) return;
+
+				const managerId = Renderer.character._getManagerId(character);
+
+				try {
+					if (action === "add-item") {
+						Renderer.character._ensureStructuredEquipment(character);
+						let itemPayload = {name: "New Item", quantity: 1, description: ""};
+						if (typeof SearchWidget?.pGetUserItemSearch === "function") {
+							await SearchWidget.pDoGlobalInit?.();
+							const picked = await SearchWidget.pGetUserItemSearch();
+							if (picked?.tag) {
+								itemPayload = {name: picked.tag, quantity: 1, description: ""};
+							} else if (picked == null) {
+								return;
+							}
+						}
+						await CharacterManager.updateCharacterArray(managerId, "equipment", "push", itemPayload);
+					} else if (action === "remove-item") {
+						Renderer.character._ensureStructuredEquipment(character);
+						const index = Number(btn.getAttribute("data-index"));
+						if (!await Renderer.character._pConfirmStructuralRemove(character.equipment?.[index]?.name, "item")) return;
+						await CharacterManager.updateCharacterArray(managerId, "equipment", "splice", {index, deleteCount: 1});
+					} else if (action === "add-tracker") {
+						const typeChoice = await InputUiUtil.pGetUserEnum({
+							title: "Tracker Type",
+							values: ["Counter", "Condition"],
+							isResolveItem: true,
+						});
+						if (typeChoice == null) return;
+						const name = await InputUiUtil.pGetUserString({title: "Tracker Name", default: typeChoice === "Condition" ? "Condition" : "Tracker"});
+						if (name == null || name === "") return;
+						const payload = typeChoice === "Condition"
+							? {type: "condition", name, active: false, description: ""}
+							: {type: "counter", name, current: 0, max: 1, description: ""};
+						if (!Array.isArray(character.customTrackers)) character.customTrackers = [];
+						await CharacterManager.updateCharacterArray(managerId, "customTrackers", "push", payload);
+					} else if (action === "remove-tracker") {
+						const index = Number(btn.getAttribute("data-index"));
+						if (!await Renderer.character._pConfirmStructuralRemove(character.customTrackers?.[index]?.name, "tracker")) return;
+						await CharacterManager.updateCharacterArray(managerId, "customTrackers", "splice", {index, deleteCount: 1});
+					} else if (action === "edit-spells") {
+						await Renderer.character._pOpenSpellEditor(character, managerId);
+					}
+				} catch (err) {
+					console.error("Character sheet structural edit failed:", err);
+				}
+			});
+		}
+
+		Renderer.character._loadConditionsFromStorage(root);
 		Renderer.character._setupCharacterNotePersistence();
 	}
 
@@ -11299,7 +11835,8 @@ Renderer.character = class {
 
 		// All character updates now go through CharacterManager
 		if (globalThis.CharacterManager) {
-			const characterId = characterData.id || globalThis.CharacterManager._generateCompositeId(characterData.name, characterData.source);
+			const characterId = characterData.id
+				|| globalThis.CharacterManager._generateCompositeId(characterData.name, characterData.source);
 			return await globalThis.CharacterManager.updateCharacterStat(characterId, statPath, newValue);
 		}
 
@@ -19200,7 +19737,7 @@ Renderer.hover = class {
 			case UrlUtil.PG_ACTIONS: return Renderer.action.getCompactRenderedString.bind(Renderer.action);
 			case UrlUtil.PG_LANGUAGES: return Renderer.language.getCompactRenderedString.bind(Renderer.language);
 			case UrlUtil.PG_CHAR_CREATION_OPTIONS: return Renderer.charoption.getCompactRenderedString.bind(Renderer.charoption);
-			case UrlUtil.PG_CHARACTERS: return Renderer.character.getCompactRenderedString.bind(Renderer.character);
+			case UrlUtil.PG_CHARACTERS: return it => Renderer.character.getCompactRenderedString(it, {isStatic});
 			case UrlUtil.PG_RECIPES: return Renderer.recipe.getCompactRenderedString.bind(Renderer.recipe);
 			case UrlUtil.PG_HOMECRAFTS: return Renderer.homecraft.getCompactRenderedString.bind(Renderer.homecraft);
 			case UrlUtil.PG_CLASS_SUBCLASS_FEATURES: return Renderer.hover.getGenericCompactRenderedString.bind(Renderer.hover);

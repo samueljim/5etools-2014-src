@@ -939,3 +939,147 @@
 	background: transparent !important;
 	color: inherit !important;
 }
+
+/* Quick-edit affordances — only visible in Quick Edit mode; no always-on underlines */
+.character-sheet-edit-bar {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+	margin: 0.25rem 0 0.75rem;
+}
+
+.character-sheet-edit-bar__hint {
+	font-size: 0.85em;
+}
+
+.character-stat-display {
+	cursor: pointer;
+	border-bottom: none;
+	padding: 0 1px;
+	border-radius: 2px;
+}
+
+.character-stat-display:hover,
+.character-stat-display:focus {
+	background: color-mix(in srgb, currentColor 10%, transparent);
+	outline: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
+	outline-offset: 1px;
+}
+
+.character-entry-edit__name.character-stat-display,
+.character-entry-edit__text.character-stat-display {
+	display: inline;
+}
+
+.character-notes-display.character-stat-display {
+	display: block;
+}
+
+.character-stat-input-edit {
+	font: inherit;
+	color: inherit;
+	background: transparent;
+	border: 1px solid currentColor;
+	border-radius: 2px;
+	padding: 0 2px;
+	max-width: 100%;
+}
+
+.character-stat-input-edit--text {
+	display: block;
+	width: 100%;
+	min-height: 4.5rem;
+	resize: vertical;
+}
+
+.character-notes-display {
+	display: block;
+	white-space: pre-wrap;
+	min-height: 1.5rem;
+}
+
+.character-sheet-section-toolbar {
+	margin-bottom: 0.35rem;
+}
+
+.character-sheet-btn-icon {
+	border: none;
+	background: transparent;
+	color: inherit;
+	opacity: 0.55;
+	cursor: pointer;
+	padding: 0 0.2rem;
+	line-height: 1;
+	font-size: 1rem;
+}
+
+.character-sheet-btn-icon:hover {
+	opacity: 1;
+	color: #c0392b;
+}
+
+.character-data-table__actions {
+	width: 1.5rem;
+	text-align: center;
+}
+
+/* Row delete (×) affordance for trackers/equipment stays hidden until the row
+   is hovered or being edited (focus-within), so it is not easy to click by
+   mistake. `pointer-events` is disabled while hidden to block stray clicks. */
+.character-data-table__actions .character-sheet-btn-remove {
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.12s ease-in-out;
+}
+
+.character-data-table tbody tr:hover .character-data-table__actions .character-sheet-btn-remove,
+.character-data-table tbody tr:focus-within .character-data-table__actions .character-sheet-btn-remove {
+	opacity: 0.55;
+	pointer-events: auto;
+}
+
+.character-data-table tbody tr:hover .character-data-table__actions .character-sheet-btn-remove:hover,
+.character-data-table tbody tr:focus-within .character-data-table__actions .character-sheet-btn-remove:hover {
+	opacity: 1;
+}
+
+.character-tag-ac {
+	position: relative;
+	width: 100%;
+}
+
+.character-tag-ac__field {
+	position: relative;
+	width: 100%;
+}
+
+.character-tag-ac__dropdown {
+	position: absolute;
+	z-index: 50;
+	left: 0;
+	right: 0;
+	top: 100%;
+	max-height: 220px;
+	overflow: auto;
+	background: var(--rgb-bg, #fff);
+	border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.ve-night-mode .character-tag-ac__dropdown,
+.ve-night-mode--oled .character-tag-ac__dropdown {
+	background: #1a1a1a;
+}
+
+.character-tag-ac__row {
+	display: block;
+	border-radius: 0;
+	border: none;
+	border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.character-tag-ac__row.active,
+.character-tag-ac__row:hover {
+	background: color-mix(in srgb, currentColor 12%, transparent);
+}
