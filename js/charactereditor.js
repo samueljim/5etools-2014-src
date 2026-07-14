@@ -6651,32 +6651,47 @@ class CharacterEditorPage {
 		const hook = pick("Hook", 1)[0] || "";
 		const relation = pick("Relationship", 1)[0] || "";
 		const backstoryParts = [];
+		const bgLower = (tempBackground.name || "wanderer").toLowerCase();
 		let place = "";
 		if (tempBackground.name && /baldur'?s gate/i.test(tempBackground.name)) {
 			place = "Baldur's Gate";
-			backstoryParts.push(`${finalName} is from the big city and has always known life as a ${tempBackground.name.toLowerCase()}.`);
+			backstoryParts.push(`${finalName} is a child of the big city, having always known life as a ${bgLower}.`);
 		} else {
 			place = pick("Place", 1)[0] || "";
-			backstoryParts.push(`${finalName} was shaped life as a ${tempBackground.name.toLowerCase()} ${place ? ` in ${place}` : ""}.`);
+			const openers = [
+				`${finalName} came of age as a ${bgLower}${place ? ` in ${place}` : ""}.`,
+				`Long before the road called, ${finalName} lived the life of a ${bgLower}${place ? ` in ${place}` : ""}.`,
+				`${finalName} was forged by years spent as a ${bgLower}${place ? ` around ${place}` : ""}.`,
+			];
+			backstoryParts.push(openers[Math.floor(Math.random() * openers.length)]);
 		}
 		const contact = pick("Contact", 1)[0] || "";
 		const bgVignette = this.getBackgroundStory(tempBackground.name);
 		if (origin) backstoryParts.push(origin);
 		if (turning) backstoryParts.push(turning);
 		if (bgVignette) backstoryParts.push(bgVignette);
-		if (contact) backstoryParts.push(`A central figure: ${contact} has left a mark on their life.`);
+		if (contact) backstoryParts.push(`${contact} still lingers in their memory, a figure they cannot quite leave behind.`);
 
-		if (hook) backstoryParts.push(`A notable episode: ${hook}.`);
+		if (hook) backstoryParts.push(hook.endsWith(".") ? hook : `${hook}.`);
 		const backstory = backstoryParts.join(" ");
 
-		// Personality paragraph (compact)
-		const personalities = pick("Personality", 3);
+		// Personality paragraph. Traits/ideals/flaws are authored in the first
+		// person, so we present them as quotes to keep the prose grammatical.
+		const personalities = pick("Personality", 2);
 		const ideals = pick("Ideal", 1);
 		const flaws = pick("Flaw", 1);
+		const asQuote = (s) => `\u201c${String(s).replace(/\s*\.$/, "")}.\u201d`;
 		const personality = [];
-		if (personalities.length) personality.push(`They are known for ${personalities.join(", ")}.`);
-		if (ideals.length) personality.push(`An inner creed: ${ideals[0]}.`);
-		if (flaws.length) personality.push(`A weakness haunts them: ${flaws[0]}.`);
+		if (personalities.length) {
+			const lead = personalities.length > 1 ? "In their own words:" : "As they put it:";
+			personality.push(`${lead} ${personalities.map(asQuote).join(" ")}`);
+		}
+		if (ideals.length) {
+			// Ideals carry a trailing alignment tag e.g. "(Lawful)"; drop it for flow.
+			const idealText = String(ideals[0]).replace(/\s*\([^)]*\)\s*$/, "");
+			personality.push(`Above all, one ideal guides them: ${asQuote(idealText)}`);
+		}
+		if (flaws.length) personality.push(`Yet they carry a flaw they rarely admit: ${asQuote(flaws[0])}`);
 		const personalityPara = personality.join(" ");
 
 		// Party-joining reason — strongly alignment-aware and tied to hooks/bonds
@@ -6797,12 +6812,12 @@ class CharacterEditorPage {
 			let other = choose(pool);
 			if (other !== joinReason) joinReason = `${joinReason} ${other}`;
 		}
-		// Tie to specific hooks or bonds if present
+		// Tie to specific bonds if present (bonds are authored first-person, so quote)
 		const tieParts = [];
-		if (bonds.length) tieParts.push(`A vow to ${bonds[0]} pulls them.`);
+		if (bonds.length) tieParts.push(`One bond drives them still: \u201c${String(bonds[0]).replace(/\s*\.$/, "")}.\u201d`);
 		if (relation) tieParts.push(`A connection to ${relation} complicates their path.`);
 		if (contact) tieParts.push(`${contact} factors into their motives.`);
-		if (obsession) tieParts.push(`An obsession — ${obsession} — colors their choices.`);
+		if (obsession) tieParts.push(`An obsession \u2014 ${obsession} \u2014 colors their choices.`);
 		if (hook) tieParts.push(`Rumors of ${hook} first drew them to travel.`);
 		const joinPara = [joinReason].concat(tieParts).join(" ");
 
@@ -6811,51 +6826,98 @@ class CharacterEditorPage {
 	}
 
 	/**
-	 * Extract personality traits from background JSON data
+	 * Extract the authentic Suggested Characteristics tables (personality traits,
+	 * ideals, bonds, flaws) from the background JSON data for ANY background.
+	 *
+	 * These tables carry no `caption`; instead the second column label
+	 * (`colLabels[1]`) identifies the table type ("Personality Trait", "Ideal",
+	 * "Bond", "Flaw"). The prose sits in the second cell of each row (`row[1]`),
+	 * with the die number in `row[0]`. Tables are nested inside `entries` blocks
+	 * (e.g. "Suggested Characteristics"), so we walk recursively.
+	 *
+	 * @returns {Promise<{traits: string[], ideals: string[], bonds: string[], flaws: string[]}>}
 	 */
-	async extractBackgroundPersonalityTraits (background) {
+	async extractBackgroundCharacteristics (background) {
+		const empty = {traits: [], ideals: [], bonds: [], flaws: []};
+		if (!background || !background.name) return empty;
+
 		try {
-			// Load the full background data to get personality trait tables
-			const response = await fetch("data/backgrounds.json");
-			const backgroundData = await response.json();
-			const backgrounds = backgroundData.background || [];
-
-			// Find the full background data for this background
-			const fullBackground = backgrounds.find(bg => bg.name === background.name && bg.source === background.source);
-			if (!fullBackground || !fullBackground.entries) {
-				return null;
+			// Cache the parsed background list across calls to avoid repeat fetches
+			if (!this._backgroundDataCache) {
+				const response = await fetch("data/backgrounds.json");
+				const backgroundData = await response.json();
+				this._backgroundDataCache = backgroundData.background || [];
 			}
+			const backgrounds = this._backgroundDataCache;
 
-			// Look for personality trait tables in the background entries
-			const findPersonalityTraits = (entries) => {
-				for (const entry of entries) {
-					if (entry.type === "table" && entry.caption
-						&& entry.caption.toLowerCase().includes("personality trait")) {
-						// Extract traits from table rows (skip header row)
-						return entry.rows.map(row => row[1]).filter(trait => trait && typeof trait === "string");
-					}
-					// Recursively search in nested entries
-					if (entry.entries && Array.isArray(entry.entries)) {
-						const found = findPersonalityTraits(entry.entries);
-						if (found) return found;
-					}
-				}
+			// Prefer an exact name+source match; fall back to name-only if the
+			// source passed in doesn't line up with the data (e.g. reprints).
+			const fullBackground = backgrounds.find(bg => bg.name === background.name && bg.source === background.source)
+				|| backgrounds.find(bg => bg.name === background.name);
+			if (!fullBackground || !fullBackground.entries) return empty;
+
+			const result = {traits: [], ideals: [], bonds: [], flaws: []};
+
+			const classifyLabel = (label) => {
+				const l = String(label || "").toLowerCase();
+				if (l.includes("personality trait")) return "traits";
+				if (l.includes("ideal")) return "ideals";
+				if (l.includes("bond")) return "bonds";
+				if (l.includes("flaw")) return "flaws";
 				return null;
 			};
 
-			return findPersonalityTraits(fullBackground.entries);
+			const cleanCell = (cell) => {
+				if (typeof cell === "string") return cell.trim();
+				if (cell && typeof cell === "object" && typeof cell.entry === "string") return cell.entry.trim();
+				return null;
+			};
+
+			const walk = (node) => {
+				if (Array.isArray(node)) {
+					node.forEach(walk);
+					return;
+				}
+				if (!node || typeof node !== "object") return;
+
+				if (node.type === "table" && Array.isArray(node.rows) && Array.isArray(node.colLabels)) {
+					const bucket = classifyLabel(node.colLabels[node.colLabels.length - 1]);
+					if (bucket) {
+						for (const row of node.rows) {
+							if (!Array.isArray(row)) continue;
+							// Prose is the last column; the die roll sits in column 0.
+							const prose = cleanCell(row[row.length - 1]);
+							if (prose) result[bucket].push(prose);
+						}
+					}
+				}
+
+				if (node.entries) walk(node.entries);
+			};
+
+			walk(fullBackground.entries);
+			return result;
 		} catch (error) {
-			console.warn("Could not load personality traits for background:", background.name, error);
-			return null;
+			console.warn("Could not load characteristics for background:", background.name, error);
+			return empty;
 		}
+	}
+
+	/**
+	 * Backwards-compatible helper: extract just the personality traits.
+	 */
+	async extractBackgroundPersonalityTraits (background) {
+		const {traits} = await this.extractBackgroundCharacteristics(background);
+		return traits && traits.length ? traits : null;
 	}
 
 	async generateCharacterDepth (background, race, classes, alignment = null) {
 		// Return a flat array of labeled depth strings (e.g., 'Personality: ...') for rendering
 		const entries = [];
 
-		// Try to get authentic personality traits from background JSON data
-		const authenticTraits = await this.extractBackgroundPersonalityTraits(background);
+		// Try to get authentic characteristics (traits, ideals, bonds, flaws) from background JSON data
+		const authentic = await this.extractBackgroundCharacteristics(background);
+		const authenticTraits = authentic.traits && authentic.traits.length ? authentic.traits : null;
 
 		// Expanded background-based personality traits (fallback for backgrounds without JSON trait tables)
 		const backgroundTraits = {
@@ -7008,12 +7070,13 @@ class CharacterEditorPage {
 			}
 		}
 
-		// Get background ideals
-		const bgIdeals = backgroundIdeals[background.name] || [
-			"Purpose. I seek to understand my place in this vast world.",
-			"Growth. Every challenge is an opportunity to become stronger.",
-			"Balance. Extremes in any direction lead to suffering.",
-		];
+		// Get background ideals - prefer authentic ideals from JSON data, fallback to hardcoded
+		const bgIdeals = (authentic.ideals && authentic.ideals.length ? authentic.ideals : null)
+			|| backgroundIdeals[background.name] || [
+				"Purpose. I seek to understand my place in this vast world.",
+				"Growth. Every challenge is an opportunity to become stronger.",
+				"Balance. Extremes in any direction lead to suffering.",
+			];
 		const chosenIdeal = bgIdeals[Math.floor(Math.random() * bgIdeals.length)];
 		entries.push(`Ideal: ${chosenIdeal}`);
 
@@ -7313,6 +7376,12 @@ class CharacterEditorPage {
 			],
 		};
 
+		// Add an authentic background-specific bond first (so it's picked with priority)
+		if (authentic.bonds && authentic.bonds.length) {
+			const bgBond = authentic.bonds[Math.floor(Math.random() * authentic.bonds.length)];
+			entries.push(`Bond: ${bgBond}`);
+		}
+
 		// Add class bonds (prioritize first class as strongest bond)
 		classes.forEach(cls => {
 			const classOptions = classBonds[cls.name] || [
@@ -7345,11 +7414,22 @@ class CharacterEditorPage {
 			"I'm stubborn to a fault and rarely admit when I'm wrong.",
 		];
 
-		// Add 1-3 flaws
+		// Add flaws - prefer authentic background flaws, then round out with universal ones
+		const flawPool = (authentic.flaws && authentic.flaws.length ? authentic.flaws : universalFlaws);
 		const numFlaws = 1 + Math.floor(Math.random() * 3);
-		for (let i = 0; i < numFlaws; i++) {
-			const flaw = universalFlaws[Math.floor(Math.random() * universalFlaws.length)];
-			entries.push(`Flaw: ${flaw}`);
+		const addedFlaws = new Set();
+		// Guarantee at least one authentic background flaw when available
+		if (authentic.flaws && authentic.flaws.length) {
+			const bgFlaw = authentic.flaws[Math.floor(Math.random() * authentic.flaws.length)];
+			entries.push(`Flaw: ${bgFlaw}`);
+			addedFlaws.add(bgFlaw);
+		}
+		for (let i = addedFlaws.size; i < numFlaws; i++) {
+			const flaw = flawPool[Math.floor(Math.random() * flawPool.length)];
+			if (!addedFlaws.has(flaw)) {
+				entries.push(`Flaw: ${flaw}`);
+				addedFlaws.add(flaw);
+			}
 		}
 
 		// Fantasy Enhanced Mannerisms and Quirks
