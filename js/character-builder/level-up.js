@@ -157,6 +157,71 @@
 		};
 	}
 
+	// --------------------------------------------------------------------------------------------
+	// Class-option "known" counts (invocations / metamagic / maneuvers / fighting styles).
+	// Pure + data-free so both the random creator and the interactive leveler agree on how many
+	// of each choosable option a character should have at their current class levels (RAW, PHB/TCE).
+	// --------------------------------------------------------------------------------------------
+
+	function _invocationsKnownWarlock (lvl) {
+		if (lvl < 2) return 0;
+		// PHB Warlock table: invocations known by warlock level.
+		const table = {2: 2, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 5, 10: 5, 11: 5, 12: 6, 13: 6, 14: 6, 15: 7, 16: 7, 17: 7, 18: 8, 19: 8, 20: 8};
+		return table[Math.min(20, lvl)] || 0;
+	}
+
+	function _metamagicKnownSorcerer (lvl) {
+		if (lvl < 3) return 0;
+		if (lvl >= 17) return 4;
+		if (lvl >= 10) return 3;
+		return 2;
+	}
+
+	function _maneuversKnownBattleMaster (lvl) {
+		if (lvl < 3) return 0;
+		if (lvl >= 15) return 9;
+		if (lvl >= 10) return 7;
+		if (lvl >= 7) return 5;
+		return 3;
+	}
+
+	function _isSubclass (cls, ...needles) {
+		const sub = String(cls?.subclass?.shortName || cls?.subclass?.name || "").toLowerCase();
+		return needles.some(n => sub.includes(n));
+	}
+
+	// Returns how many of each choosable class option the character should currently know, keyed by
+	// option type. Multiclass-safe (sums per qualifying class).
+	function getClassOptionCounts (character) {
+		const out = {invocations: 0, metamagic: 0, maneuvers: 0, fightingStyles: 0};
+		const classes = (character && Array.isArray(character.class)) ? character.class : [];
+		for (const cls of classes) {
+			const name = String(cls?.name || "").toLowerCase();
+			const lvl = cls?.level || 0;
+			switch (name) {
+				case "warlock":
+					out.invocations += _invocationsKnownWarlock(lvl);
+					break;
+				case "sorcerer":
+					out.metamagic += _metamagicKnownSorcerer(lvl);
+					break;
+				case "fighter":
+					if (lvl >= 1) out.fightingStyles += 1;
+					// Champion gains a second fighting style at level 10 (Additional Fighting Style).
+					if (lvl >= 10 && _isSubclass(cls, "champion")) out.fightingStyles += 1;
+					if (_isSubclass(cls, "battle master", "battlemaster")) out.maneuvers += _maneuversKnownBattleMaster(lvl);
+					break;
+				case "paladin":
+					if (lvl >= 2) out.fightingStyles += 1;
+					break;
+				case "ranger":
+					if (lvl >= 2) out.fightingStyles += 1;
+					break;
+			}
+		}
+		return out;
+	}
+
 	async function discoverClassFiles ({includeOptional = false} = {}) {
 		const names = includeOptional
 			? [...PRIMARY_CLASS_FILES, ...OPTIONAL_CLASS_FILES]
@@ -173,6 +238,7 @@
 		checkMulticlassRequirements,
 		getCasterLevelContribution,
 		computeSpellSlots,
+		getClassOptionCounts,
 		discoverClassFiles,
 		FULL_CASTER_SLOTS,
 		HALF_CASTER_SLOTS,

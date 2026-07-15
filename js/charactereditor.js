@@ -2328,16 +2328,8 @@ class CharacterEditorPage {
 					// Cache authoritative spell progressions so the sync count helpers stay accurate.
 					this._cacheClassProgression(classInfo);
 
-					// Calculate spell slots and populate them into the levels structure
-					if (classInfo.casterProgression === "full") {
-						const spellSlots = this.calculateSpellSlots(classLevel, "full");
-						characterTemplate.spells.spellSlots = spellSlots; // Keep for compatibility
-						this.populateSpellSlotsIntoLevels(spellSlots, characterTemplate);
-					} else if (classInfo.casterProgression === "half") {
-						const spellSlots = this.calculateSpellSlots(Math.floor(classLevel / 2), "full");
-						characterTemplate.spells.spellSlots = spellSlots; // Keep for compatibility
-						this.populateSpellSlotsIntoLevels(spellSlots, characterTemplate);
-					}
+					// Calculate spell slots via the canonical computeSpellSlots writer.
+					this.applyComputedSpellSlots(characterTemplate);
 
 					// Add cantrips
 					if (classInfo.cantripProgression) {
@@ -2918,159 +2910,77 @@ class CharacterEditorPage {
 		console.log("📋 Spell structure after applying spells:", characterTemplate.spells);
 	}
 
+	/**
+	 * Canonical spell-slot writer. Routes ALL slot math through
+	 * CharacterBuilderLevelUp.computeSpellSlots (the single source of truth) and
+	 * merges the result into character.spells.levels for the sheet to render.
+	 *
+	 * slotsRemaining (available/unused slots) bookkeeping:
+	 *   - First time a level gains slots: slotsRemaining = maxSlots.
+	 *   - Gaining slots: add the delta to slotsRemaining.
+	 *   - Losing slots: clamp to min(oldRemaining, newMax).
+	 * Warlock pact slots are merged into levels[] for display AND stored separately
+	 * on character.spells.pactMagic for future short-rest handling.
+	 */
+	applyComputedSpellSlots (character) {
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		if (!LevelUp?.computeSpellSlots) {
+			console.warn("CharacterBuilderLevelUp.computeSpellSlots unavailable; skipping spell-slot update");
+			return;
+		}
+		if (!character.spells) character.spells = {};
+		if (!character.spells.levels) character.spells.levels = {};
+		const levels = character.spells.levels;
+
+		const info = LevelUp.computeSpellSlots(character);
+
+		// Build target max-slot map for levels 1..9, additively merging Warlock pact
+		// slots into the shared display table (matches how pure-Warlock data is stored).
+		const target = {};
+		for (let l = 1; l <= 9; l++) target[l] = info.slots?.[String(l)] || 0;
+		if (info.pactMagic && info.pactMagic.slotLevel >= 1 && info.pactMagic.slotLevel <= 9) {
+			target[info.pactMagic.slotLevel] += info.pactMagic.slots;
+		}
+
+		for (let l = 1; l <= 9; l++) {
+			const key = String(l);
+			const newMax = target[l];
+			const existing = levels[key];
+
+			if (!newMax) {
+				if (existing) { existing.maxSlots = 0; existing.slotsRemaining = 0; }
+				continue;
+			}
+			if (!existing) {
+				levels[key] = {maxSlots: newMax, slotsRemaining: newMax, spells: []};
+				continue;
+			}
+			const oldMax = existing.maxSlots || 0;
+			const oldRemaining = existing.slotsRemaining || 0;
+			existing.maxSlots = newMax;
+			if (!Array.isArray(existing.spells)) existing.spells = [];
+			if (oldMax === 0) existing.slotsRemaining = newMax;
+			else if (newMax > oldMax) existing.slotsRemaining = oldRemaining + (newMax - oldMax);
+			else if (newMax < oldMax) existing.slotsRemaining = Math.max(0, Math.min(oldRemaining, newMax));
+		}
+
+		if (info.pactMagic) character.spells.pactMagic = info.pactMagic;
+		else delete character.spells.pactMagic;
+
+		// Cantrips (level 0) never have spell slots.
+		if (levels["0"]) {
+			delete levels["0"].maxSlots;
+			delete levels["0"].slotsRemaining;
+		}
+	}
+
 	updateSpellSlotProgression (characterTemplate) {
 		// Ensure expected structures exist to avoid runtime errors when rendering
 		if (!characterTemplate.spells) characterTemplate.spells = {};
 		if (!characterTemplate.spells.levels) characterTemplate.spells.levels = {};
 		if (!characterTemplate.class) return;
 
-		// Calculate total caster level for spell slot progression
-		let fullCasterLevel = 0;
-		let halfCasterLevel = 0;
-		let thirdCasterLevel = 0;
-		let warlockLevel = 0;
-
-		characterTemplate.class.forEach(cls => {
-			const classLevel = cls.level || 1;
-			const className = cls.name;
-
-			if (["Bard", "Cleric", "Druid", "Sorcerer", "Wizard"].includes(className)) {
-				fullCasterLevel += classLevel;
-			} else if (["Paladin", "Ranger"].includes(className)) {
-				halfCasterLevel += Math.max(0, classLevel - 1); // Start at level 2
-			} else if (className === "Warlock") {
-				warlockLevel += classLevel; // Handle Warlock separately with Pact Magic
-			} else if ((className === "Fighter" && cls.subclass?.name === "Eldritch Knight")
-					   || (className === "Rogue" && cls.subclass?.name === "Arcane Trickster")) {
-				thirdCasterLevel += Math.max(0, classLevel - 2); // Start at level 3
-			}
-		});
-
-		// Handle Warlock (Pact Magic) separately
-		if (warlockLevel > 0) {
-			this._updateWarlockSpellSlots(characterTemplate, warlockLevel);
-		}
-
-		// Calculate effective caster level for standard spellcasters
-		const effectiveCasterLevel = fullCasterLevel + Math.floor(halfCasterLevel / 2) + Math.floor(thirdCasterLevel / 3);
-
-		if (effectiveCasterLevel > 0) {
-			this._updateStandardSpellSlots(characterTemplate, effectiveCasterLevel);
-		}
-
-		// Ensure cantrips (level 0) never have spell slots
-		if (characterTemplate.spells.levels["0"]) {
-			delete characterTemplate.spells.levels["0"].maxSlots;
-			delete characterTemplate.spells.levels["0"].slotsRemaining;
-		}
-	}
-
-	_updateWarlockSpellSlots (characterTemplate, warlockLevel) {
-		// Ensure spells object exists
-		if (!characterTemplate.spells) characterTemplate.spells = {};
-		if (!characterTemplate.spells.levels) characterTemplate.spells.levels = {};
-
-		// Warlock Pact Magic progression
-		const warlockSlots = {
-			slots: warlockLevel >= 1 ? (warlockLevel >= 11 ? 3 : warlockLevel >= 2 ? 2 : 1) : 0,
-			level: warlockLevel >= 9 ? 5 : warlockLevel >= 7 ? 4 : warlockLevel >= 5 ? 3 : warlockLevel >= 3 ? 2 : 1,
-		};
-
-		if (warlockSlots.slots > 0) {
-			const spellLevel = warlockSlots.level.toString();
-
-			if (!characterTemplate.spells.levels[spellLevel]) {
-				characterTemplate.spells.levels[spellLevel] = {
-					maxSlots: 0,
-					slotsRemaining: 0,
-					spells: [],
-				};
-			}
-
-			const currentLevel = characterTemplate.spells.levels[spellLevel];
-			const oldMaxSlots = currentLevel.maxSlots || 0;
-			const oldslotsRemaining = currentLevel.slotsRemaining || 0;
-
-			// Calculate the difference in slots
-			const slotDifference = warlockSlots.slots - oldMaxSlots;
-
-			// Update max slots
-			currentLevel.maxSlots = warlockSlots.slots;
-
-			// When gaining slots, add the same amount to slotsRemaining (new slots start as "used")
-			// Special case: if this is the first time getting slots for this level, set slotsRemaining = maxSlots
-			if (oldMaxSlots === 0 && warlockSlots.slots > 0) {
-				// First time getting slots at this level - all slots should be "used" (available)
-				currentLevel.slotsRemaining = warlockSlots.slots;
-				console.log(`✨ New Warlock spell level ${spellLevel}: 0 → ${warlockSlots.slots} max slots, 0 → ${currentLevel.slotsRemaining} used (first time)`);
-			} else if (slotDifference > 0) {
-				currentLevel.slotsRemaining = oldslotsRemaining + slotDifference;
-				console.log(`🧙‍♀️ Warlock Level ${spellLevel}: ${oldMaxSlots} → ${warlockSlots.slots} max slots, ${oldslotsRemaining} → ${currentLevel.slotsRemaining} used`);
-			} else if (slotDifference < 0) {
-				currentLevel.slotsRemaining = Math.max(0, Math.min(oldslotsRemaining, warlockSlots.slots));
-				console.log(`🧙‍♀️ Warlock Level ${spellLevel}: ${oldMaxSlots} → ${warlockSlots.slots} max slots, ${oldslotsRemaining} → ${currentLevel.slotsRemaining} used`);
-			}
-			// If slotDifference === 0, no change needed (don't log)
-		}
-	}
-
-	_updateStandardSpellSlots (characterTemplate, effectiveCasterLevel) {
-		// Spell slots per level based on caster level (standard 5e progression)
-		const spellSlotsTable = {
-			1: [0, 2, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-			2: [0, 0, 0, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-			3: [0, 0, 0, 0, 0, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-			4: [0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-			5: [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3],
-			6: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 3, 3, 3, 3],
-			7: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 3, 3],
-			8: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2],
-			9: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1],
-		};
-
-		// Update spell slots for levels 1-9 (cantrips don't use slots)
-		for (let spellLevel = 1; spellLevel <= 9; spellLevel++) {
-			const maxSlots = spellSlotsTable[spellLevel][effectiveCasterLevel] || 0;
-
-			if (maxSlots > 0 || characterTemplate.spells.levels[spellLevel.toString()]) {
-				if (!characterTemplate.spells.levels[spellLevel.toString()]) {
-					characterTemplate.spells.levels[spellLevel.toString()] = {
-						maxSlots: maxSlots, // Set to the correct max slots immediately
-						slotsRemaining: maxSlots, // All slots should start as "used" (available)
-						spells: [],
-					};
-					console.log(`🆕 Created new spell level ${spellLevel}: maxSlots: ${maxSlots}, slotsRemaining: ${maxSlots}`);
-				} else {
-					const currentLevel = characterTemplate.spells.levels[spellLevel.toString()];
-					const oldMaxSlots = currentLevel.maxSlots || 0;
-					const oldslotsRemaining = currentLevel.slotsRemaining || 0;
-
-					// Calculate the difference in slots
-					const slotDifference = maxSlots - oldMaxSlots;
-
-					// Update max slots
-					currentLevel.maxSlots = maxSlots;
-
-					// When gaining slots, add the same amount to slotsRemaining (new slots start as "used")
-					// Special case: if this is the first time getting slots for this level, set slotsRemaining = maxSlots
-					if (oldMaxSlots === 0 && maxSlots > 0) {
-						// First time getting slots at this level - all slots should be "used" (available)
-						currentLevel.slotsRemaining = maxSlots;
-						console.log(`✨ New spell level ${spellLevel}: 0 → ${maxSlots} max slots, 0 → ${currentLevel.slotsRemaining} used (first time)`);
-					} else if (slotDifference > 0) {
-						// Gained additional slots - add the difference to slotsRemaining
-						// This ensures that if you had 1/2 slots, you now have 2/3 slots (both increased by 1)
-						currentLevel.slotsRemaining = oldslotsRemaining + slotDifference;
-						console.log(`📊 Level ${spellLevel}: ${oldMaxSlots} → ${maxSlots} max slots, ${oldslotsRemaining} → ${currentLevel.slotsRemaining} used`);
-					} else if (slotDifference < 0) {
-						// Lost slots - reduce slotsRemaining but don't go below 0
-						currentLevel.slotsRemaining = Math.max(0, Math.min(oldslotsRemaining, maxSlots));
-						console.log(`📊 Level ${spellLevel}: ${oldMaxSlots} → ${maxSlots} max slots, ${oldslotsRemaining} → ${currentLevel.slotsRemaining} used`);
-					}
-					// If slotDifference === 0, no change needed (don't log)
-				}
-			}
-		}
+		this.applyComputedSpellSlots(characterTemplate);
 	}
 
 	applySelectedSpells (selectedSpells, characterTemplate) {
@@ -3140,119 +3050,6 @@ class CharacterEditorPage {
 		const hasSpells = spellcastingClasses.includes(className);
 		console.log(`${hasSpells ? "✅" : "❌"} ${className} ${hasSpells ? "has" : "has no"} spellcasting capabilities`);
 		return hasSpells;
-	}
-
-	calculateSpellSlots (casterLevel, progression) {
-		if (casterLevel <= 0) return {};
-
-		// Spell slots table for full casters
-		const fullCasterSlots = [
-			[2, 0, 0, 0, 0, 0, 0, 0, 0], // Level 1
-			[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 2
-			[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 3
-			[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 4
-			[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 5
-			[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 6
-			[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 7
-			[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 8
-			[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 9
-			[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 10
-			[4, 3, 3, 3, 2, 1, 0, 0, 0], // Level 11
-			[4, 3, 3, 3, 2, 1, 0, 0, 0], // Level 12
-			[4, 3, 3, 3, 2, 1, 1, 0, 0], // Level 13
-			[4, 3, 3, 3, 2, 1, 1, 0, 0], // Level 14
-			[4, 3, 3, 3, 2, 1, 1, 1, 0], // Level 15
-			[4, 3, 3, 3, 2, 1, 1, 1, 0], // Level 16
-			[4, 3, 3, 3, 2, 1, 1, 1, 1], // Level 17
-			[4, 3, 3, 3, 3, 1, 1, 1, 1], // Level 18
-			[4, 3, 3, 3, 3, 2, 1, 1, 1], // Level 19
-			[4, 3, 3, 3, 3, 2, 2, 1, 1], // Level 20
-		];
-
-		// Handle different progression types
-		let slots;
-		if (progression === "full") {
-			if (casterLevel > 20) casterLevel = 20;
-			slots = fullCasterSlots[casterLevel - 1];
-		} else if (progression === "half") {
-			// Half-casters (Paladin/Ranger) start at level 2
-			if (casterLevel < 2) return {};
-
-			const halfCasterSlots = [
-				[0, 0, 0, 0, 0, 0, 0, 0, 0], // Level 1 (no slots)
-				[2, 0, 0, 0, 0, 0, 0, 0, 0], // Level 2
-				[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 3
-				[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 4
-				[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 5
-				[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 6
-				[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 7
-				[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 8
-				[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 9
-				[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 10
-				[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 11
-				[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 12
-				[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 13
-				[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 14
-				[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 15
-				[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 16
-				[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 17
-				[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 18
-				[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 19
-				[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 20
-			];
-
-			if (casterLevel > 20) casterLevel = 20;
-			slots = halfCasterSlots[casterLevel - 1];
-		} else if (progression === "third") {
-			// Third-casters start at level 3 and progress much slower
-			let thirdLevel = Math.floor(casterLevel / 3);
-			if (thirdLevel <= 0) return {};
-			if (thirdLevel > 20) thirdLevel = 20;
-			slots = fullCasterSlots[thirdLevel - 1];
-		} else if (progression === "pact") {
-			// Warlocks have special pact magic progression
-			if (casterLevel >= 17) slots = [0, 0, 0, 0, 4, 0, 0, 0, 0]; // 4 level-5 slots
-			else if (casterLevel >= 15) slots = [0, 0, 0, 0, 3, 0, 0, 0, 0]; // 3 level-5 slots
-			else if (casterLevel >= 11) slots = [0, 0, 0, 0, 3, 0, 0, 0, 0]; // 3 level-5 slots
-			else if (casterLevel >= 9) slots = [0, 0, 0, 0, 2, 0, 0, 0, 0]; // 2 level-5 slots
-			else if (casterLevel >= 7) slots = [0, 0, 0, 2, 0, 0, 0, 0, 0]; // 2 level-4 slots
-			else if (casterLevel >= 5) slots = [0, 0, 2, 0, 0, 0, 0, 0, 0]; // 2 level-3 slots
-			else if (casterLevel >= 3) slots = [0, 2, 0, 0, 0, 0, 0, 0, 0]; // 2 level-2 slots
-			else if (casterLevel >= 1) slots = [1, 0, 0, 0, 0, 0, 0, 0, 0]; // 1 level-1 slot
-			else return {};
-		} else {
-			return {};
-		}
-
-		// Keys must match character.spells.levels ("1"…"9"), not "level1" etc.
-		const spellSlots = {};
-		for (let i = 0; i < slots.length; i++) {
-			if (slots[i] > 0) {
-				spellSlots[String(i + 1)] = slots[i];
-			}
-		}
-
-		return spellSlots;
-	}
-
-	populateSpellSlotsIntoLevels (spellSlots, characterTemplate) {
-		if (!characterTemplate.spells.levels) characterTemplate.spells.levels = {};
-
-		// Convert spellSlots format { "1": 2, "2": 1 } to levels structure
-		Object.entries(spellSlots).forEach(([levelKey, maxSlots]) => {
-			const spellLevel = levelKey;
-
-			if (!characterTemplate.spells.levels[spellLevel]) {
-				characterTemplate.spells.levels[spellLevel] = {
-					maxSlots: 0,
-					slotsRemaining: 0,
-					spells: [],
-				};
-			}
-
-			// Set the max slots but preserve existing slotsRemaining and spells
-			characterTemplate.spells.levels[spellLevel].maxSlots = maxSlots;
-		});
 	}
 
 	applyAbilityScoreImprovements (classes, characterTemplate) {
@@ -4907,24 +4704,24 @@ class CharacterEditorPage {
 	}
 
 	generateMulticlassSpellcasting (casterClasses, abilityScores) {
-		// Calculate multiclass spell slot levels
-		let spellSlotLevel = 0;
 		const casterLevels = {};
+		casterClasses.forEach(cls => { casterLevels[cls.name] = cls.level; });
 
-		casterClasses.forEach(cls => {
-			const casterType = this.getCasterType(cls.name);
-			if (casterType === "full") {
-				spellSlotLevel += cls.level;
-			} else if (casterType === "halfRoundUp") {
-				spellSlotLevel += Math.ceil(cls.level / 2);
-			} else if (casterType === "half") {
-				spellSlotLevel += Math.floor(cls.level / 2);
-			} else if (casterType === "third") {
-				spellSlotLevel += Math.floor(cls.level / 3);
+		// Build multiclass spell slots from the canonical computeSpellSlots (single source
+		// of truth). Warlock pact slots are merged into the shared display table.
+		const levels = {};
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		if (LevelUp?.computeSpellSlots) {
+			const info = LevelUp.computeSpellSlots({class: casterClasses});
+			const maxByLevel = {};
+			for (let l = 1; l <= 9; l++) maxByLevel[l] = info.slots?.[String(l)] || 0;
+			if (info.pactMagic && info.pactMagic.slotLevel >= 1 && info.pactMagic.slotLevel <= 9) {
+				maxByLevel[info.pactMagic.slotLevel] += info.pactMagic.slots;
 			}
-			// Pact casters (Warlock) don't contribute to multiclass spell slots
-			casterLevels[cls.name] = cls.level;
-		});
+			for (let l = 1; l <= 9; l++) {
+				if (maxByLevel[l] > 0) levels[l] = {maxSlots: maxByLevel[l], slotsRemaining: 0, spells: []};
+			}
+		}
 
 		// Use primary caster for spell attack bonus and DC
 		const primaryCaster = casterClasses.reduce((highest, current) =>
@@ -4941,24 +4738,10 @@ class CharacterEditorPage {
 			dc: 8 + profBonus + spellMod,
 			attackBonus: (profBonus + spellMod) >= 0 ? `+${profBonus + spellMod}` : `${profBonus + spellMod}`,
 			ability: spellcastingInfo.ability,
-			levels: this.generateMulticlassSpellSlots(spellSlotLevel),
+			levels: levels,
 			multiclass: true,
 			casterLevels: casterLevels,
 		};
-	}
-
-	getCasterType (className) {
-		const fullCasters = ["Wizard", "Sorcerer", "Bard", "Cleric", "Druid"];
-		const halfCasters = ["Paladin", "Ranger"];
-		const thirdCasters = ["Eldritch Knight", "Arcane Trickster"];
-		const pactCasters = ["Warlock"];
-
-		if (fullCasters.includes(className)) return "full";
-		if (className === "Artificer") return "halfRoundUp"; // half-caster that rounds UP and gains slots at level 1
-		if (halfCasters.includes(className)) return "half";
-		if (thirdCasters.includes(className)) return "third";
-		if (pactCasters.includes(className)) return "pact";
-		return "none";
 	}
 
 	generateSpellSlots (casterClass, abilityScores) {
@@ -4994,91 +4777,15 @@ class CharacterEditorPage {
 	}
 
 	getSpellSlotsForLevel (casterClass, spellLevel) {
-		// Special handling for Warlock - they have unique slot mechanics
-		if (casterClass.name === "Warlock") {
-			const warlockLevel = casterClass.level;
-
-			// Warlock slot progression
-			let slotLevel, numSlots;
-			if (warlockLevel >= 17) { slotLevel = 5; numSlots = 4; } else if (warlockLevel >= 15) { slotLevel = 5; numSlots = 3; } else if (warlockLevel >= 11) { slotLevel = 5; numSlots = 3; } else if (warlockLevel >= 9) { slotLevel = 5; numSlots = 2; } else if (warlockLevel >= 7) { slotLevel = 4; numSlots = 2; } else if (warlockLevel >= 5) { slotLevel = 3; numSlots = 2; } else if (warlockLevel >= 3) { slotLevel = 2; numSlots = 2; } else if (warlockLevel >= 1) { slotLevel = 1; numSlots = 1; } else return 0;
-
-			// Warlocks only have slots at their highest available level
-			return spellLevel === slotLevel ? numSlots : 0;
-		}
-
-		// Artificer: half-caster that ROUNDS UP and gains slots from level 1. Its slot
-		// progression matches the full-caster table read at an effective level of ceil(level/2).
-		if (casterClass.name === "Artificer") {
-			const effLevel = Math.min(Math.ceil(casterClass.level / 2), 20);
-			if (effLevel === 0 || spellLevel > 5) return 0; // Artificers cap at 5th-level spells
-			const artificerFull = [
-				[2, 0, 0, 0, 0, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0, 0, 0, 0], [4, 2, 0, 0, 0, 0, 0, 0, 0],
-				[4, 3, 0, 0, 0, 0, 0, 0, 0], [4, 3, 2, 0, 0, 0, 0, 0, 0], [4, 3, 3, 0, 0, 0, 0, 0, 0],
-				[4, 3, 3, 1, 0, 0, 0, 0, 0], [4, 3, 3, 2, 0, 0, 0, 0, 0], [4, 3, 3, 3, 1, 0, 0, 0, 0],
-				[4, 3, 3, 3, 2, 0, 0, 0, 0],
-			];
-			return artificerFull[effLevel - 1]?.[spellLevel - 1] || 0;
-		}
-
-		// Half-caster progression for Paladin and Ranger
-		if (casterClass.name === "Paladin" || casterClass.name === "Ranger") {
-			const halfCasterSlots = [
-				[0, 0, 0, 0, 0, 0, 0, 0, 0], // Level 1
-				[2, 0, 0, 0, 0, 0, 0, 0, 0], // Level 2
-				[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 3
-				[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 4
-				[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 5
-				[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 6
-				[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 7
-				[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 8
-				[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 9
-				[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 10
-				[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 11
-				[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 12
-				[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 13
-				[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 14
-				[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 15
-				[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 16
-				[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 17
-				[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 18
-				[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 19
-				[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 20
-			];
-
-			const classLevel = Math.min(casterClass.level, 20);
-			if (classLevel < 2 || spellLevel > 5) return 0; // Rangers/Paladins start at level 2 and max at 5th level spells
-
-			return halfCasterSlots[classLevel - 1][spellLevel - 1] || 0;
-		}
-
-		// Regular full caster progression
-		const fullCasterSlots = [
-			[2, 0, 0, 0, 0, 0, 0, 0, 0], // Level 1
-			[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 2
-			[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 3
-			[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 4
-			[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 5
-			[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 6
-			[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 7
-			[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 8
-			[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 9
-			[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 10
-			[4, 3, 3, 3, 2, 1, 0, 0, 0], // Level 11
-			[4, 3, 3, 3, 2, 1, 0, 0, 0], // Level 12
-			[4, 3, 3, 3, 2, 1, 1, 0, 0], // Level 13
-			[4, 3, 3, 3, 2, 1, 1, 0, 0], // Level 14
-			[4, 3, 3, 3, 2, 1, 1, 1, 0], // Level 15
-			[4, 3, 3, 3, 2, 1, 1, 1, 0], // Level 16
-			[4, 3, 3, 3, 2, 1, 1, 1, 1], // Level 17
-			[4, 3, 3, 3, 3, 1, 1, 1, 1], // Level 18
-			[4, 3, 3, 3, 3, 2, 1, 1, 1], // Level 19
-			[4, 3, 3, 3, 3, 2, 2, 1, 1], // Level 20
-		];
-
-		const classLevel = Math.min(casterClass.level, 20);
-		if (classLevel === 0 || spellLevel > 9) return 0;
-
-		return fullCasterSlots[classLevel - 1][spellLevel - 1] || 0;
+		// Route through the canonical computeSpellSlots (single source of truth). Build a
+		// one-class character so half/third/artificer/warlock progressions are all handled
+		// in one place. Warlock pact slots are reported at their pact slot level.
+		const LevelUp = globalThis.CharacterBuilderLevelUp;
+		if (!LevelUp?.computeSpellSlots) return 0;
+		const info = LevelUp.computeSpellSlots({class: [casterClass]});
+		let n = info.slots?.[String(spellLevel)] || 0;
+		if (info.pactMagic && info.pactMagic.slotLevel === spellLevel) n += info.pactMagic.slots;
+		return n;
 	}
 
 	getCantripCount (className, classLevel, subclassName = null) {
@@ -5223,50 +4930,6 @@ class CharacterEditorPage {
 		}
 
 		return selectedCantrips;
-	}
-
-	generateMulticlassSpellSlots (totalCasterLevel) {
-		const levels = {};
-
-		// Multiclass spellcaster slot progression
-		const multiclassSlots = [
-			[2, 0, 0, 0, 0, 0, 0, 0, 0], // Level 1
-			[3, 0, 0, 0, 0, 0, 0, 0, 0], // Level 2
-			[4, 2, 0, 0, 0, 0, 0, 0, 0], // Level 3
-			[4, 3, 0, 0, 0, 0, 0, 0, 0], // Level 4
-			[4, 3, 2, 0, 0, 0, 0, 0, 0], // Level 5
-			[4, 3, 3, 0, 0, 0, 0, 0, 0], // Level 6
-			[4, 3, 3, 1, 0, 0, 0, 0, 0], // Level 7
-			[4, 3, 3, 2, 0, 0, 0, 0, 0], // Level 8
-			[4, 3, 3, 3, 1, 0, 0, 0, 0], // Level 9
-			[4, 3, 3, 3, 2, 0, 0, 0, 0], // Level 10
-			[4, 3, 3, 3, 2, 1, 0, 0, 0], // Level 11
-			[4, 3, 3, 3, 2, 1, 0, 0, 0], // Level 12
-			[4, 3, 3, 3, 2, 1, 1, 0, 0], // Level 13
-			[4, 3, 3, 3, 2, 1, 1, 0, 0], // Level 14
-			[4, 3, 3, 3, 2, 1, 1, 1, 0], // Level 15
-			[4, 3, 3, 3, 2, 1, 1, 1, 0], // Level 16
-			[4, 3, 3, 3, 2, 1, 1, 1, 1], // Level 17
-			[4, 3, 3, 3, 3, 1, 1, 1, 1], // Level 18
-			[4, 3, 3, 3, 3, 2, 1, 1, 1], // Level 19
-			[4, 3, 3, 3, 3, 2, 2, 1, 1], // Level 20
-		];
-
-		if (totalCasterLevel > 0 && totalCasterLevel <= 20) {
-			const slotArray = multiclassSlots[totalCasterLevel - 1];
-			for (let level = 1; level <= 9; level++) {
-				const maxSlots = slotArray[level - 1];
-				if (maxSlots > 0) {
-					levels[level] = {
-						maxSlots: maxSlots,
-						slotsRemaining: 0,
-						spells: [],
-					};
-				}
-			}
-		}
-
-		return levels;
 	}
 
 	getCurrentCantripCount (className) {
@@ -8137,6 +7800,14 @@ class CharacterEditorPage {
 				template.hp.max = template.hp.max || template.hp.average;
 				template.hp.formula = template.hp.formula || `${template.hp.average}`;
 				template.hp.temp = template.hp.temp || 0;
+			}
+
+			// Auto-select choosable class options (invocations / metamagic / maneuvers / pact boon /
+			// fighting style) so generated sheets are complete without manual editing.
+			try {
+				await this.applyAutoClassOptions(template);
+			} catch (autoOptErr) {
+				console.warn("Auto class-option selection failed:", autoOptErr);
 			}
 
 			// Update the editor with the new character
@@ -11121,7 +10792,7 @@ class CharacterEditorPage {
 			ability: spellcastingInfo.ability,
 			levels: {},
 			spellcastingAbility: spellcastingInfo.abilityKey,
-			casterProgression: this.getCasterType(primaryCaster.name),
+			casterProgression: globalThis.CharacterBuilderLevelUp?.getCasterLevelContribution?.(primaryCaster)?.type || "full",
 		};
 
 		// Add cantrips (level 0)
@@ -11134,15 +10805,21 @@ class CharacterEditorPage {
 			spellStructure.cantripsKnown = userSpells.cantrips.length;
 		}
 
+		// Compute authoritative max spell slots for the whole character (multiclass-aware,
+		// pact merged) via the canonical source of truth.
+		const slotInfo = globalThis.CharacterBuilderLevelUp?.computeSpellSlots?.(character) || {slots: {}};
+		const maxByLevel = {};
+		for (let l = 1; l <= 9; l++) maxByLevel[l] = slotInfo.slots?.[String(l)] || 0;
+		if (slotInfo.pactMagic && slotInfo.pactMagic.slotLevel >= 1 && slotInfo.pactMagic.slotLevel <= 9) {
+			maxByLevel[slotInfo.pactMagic.slotLevel] += slotInfo.pactMagic.slots;
+		}
+
 		// Add leveled spells
 		let totalSpellsKnown = 0;
 		for (let level = 1; level <= 9; level++) {
 			const levelKey = `level${level}`;
 			if (userSpells[levelKey] && userSpells[levelKey].length > 0) {
-				// Calculate max spell slots using consistent method
-				const casterProgression = this.getCasterType(primaryCaster.name);
-				const allSlots = this.calculateSpellSlots(primaryCaster.level, casterProgression);
-				const maxSlots = allSlots[`level${level}`] || 0;
+				const maxSlots = maxByLevel[level] || 0;
 
 				spellStructure.levels[level] = {
 					maxSlots: maxSlots,
@@ -11715,19 +11392,8 @@ class CharacterEditorPage {
 			return;
 		}
 
-		// Apply pact/slot math before opening spell UI
-		const slotInfo = globalThis.CharacterBuilderLevelUp?.computeSpellSlots?.(character);
-		if (slotInfo) {
-			character.spells = character.spells || {levels: {}};
-			character.spells.levels = character.spells.levels || {};
-			Object.entries(slotInfo.slots || {}).forEach(([lvl, n]) => {
-				character.spells.levels[lvl] = character.spells.levels[lvl] || {spells: [], maxSlots: n};
-				character.spells.levels[lvl].maxSlots = n;
-			});
-			if (slotInfo.pactMagic) {
-				character.spells.pactMagic = slotInfo.pactMagic;
-			}
-		}
+		// Apply pact/slot math before opening spell UI (canonical writer)
+		this.applyComputedSpellSlots(character);
 
 		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
 			title: "Update Spells?",
@@ -12903,116 +12569,19 @@ class CharacterEditorPage {
 	}
 
 	async showFightingStyleChoiceModal (feature, featureData) {
-		// Determine available fighting styles based on class
 		const character = this.levelUpState.characterData;
-		const currentClass = character.class?.[this.levelUpState.selectedClassIndex]?.name || "Fighter";
-
-		// Common fighting styles for Fighter, Paladin, Ranger
-		const allFightingStyles = [
-			{ name: "Archery", description: "+2 bonus to ranged weapon attack rolls", classes: ["Fighter", "Paladin", "Ranger"] },
-			{ name: "Defense", description: "+1 bonus to AC while wearing armor", classes: ["Fighter", "Paladin", "Ranger"] },
-			{ name: "Dueling", description: "+2 damage when wielding a one-handed weapon with no other weapons", classes: ["Fighter", "Paladin", "Ranger"] },
-			{ name: "Great Weapon Fighting", description: "Reroll 1s and 2s on damage dice with two-handed weapons", classes: ["Fighter", "Paladin", "Ranger"] },
-			{ name: "Protection", description: "Use reaction and shield to impose disadvantage on attacks against nearby allies", classes: ["Fighter", "Paladin"] },
-			{ name: "Two-Weapon Fighting", description: "Add ability modifier to damage of second attack when fighting with two weapons", classes: ["Fighter", "Ranger"] },
-			{ name: "Blessed Warrior", description: "Learn two cantrips from the cleric spell list", classes: ["Paladin"] },
-			{ name: "Blind Fighting", description: "See in darkness within 10 feet", classes: ["Fighter", "Paladin", "Ranger"] },
-			{ name: "Interception", description: "Reduce damage to nearby allies", classes: ["Fighter", "Paladin"] },
-			{ name: "Superior Technique", description: "Learn one maneuver and gain a superiority die", classes: ["Fighter"] },
-			{ name: "Thrown Weapon Fighting", description: "Draw and add +2 damage to thrown weapon attacks", classes: ["Fighter", "Ranger"] },
-			{ name: "Unarmed Fighting", description: "Deal 1d4 + STR damage with unarmed strikes", classes: ["Fighter"] },
-			{ name: "Druidcraft", description: "Natural magic and wild fighting techniques", classes: ["Ranger"] },
-			{ name: "Hunter's Mark", description: "Enhanced tracking and hunting abilities", classes: ["Ranger"] },
-		];
-
-		// Filter fighting styles available to the current class
-		const availableStyles = allFightingStyles.filter(style =>
-			style.classes.includes(currentClass),
-		);
-
-		// Check for already selected fighting styles to avoid duplicates
-		const existingStyles = character.entries?.filter(entry =>
-			entry.name?.includes("Fighting Style"),
-		).map(entry => entry.name) || [];
-
-		const modalContent = `
-			<p class="mb-3"><strong>Current Level:</strong> ${this.levelUpState.currentLevel}</p>
-			<p class="mb-3"><strong>New Level:</strong> ${this.levelUpState.newLevel}</p>
-			<h6>Choose Fighting Style (${currentClass})</h6>
-			<p class="text-muted mb-3">Select a fighting style that matches your combat preferences. You cannot change this later.</p>
-
-			<div class="form-group">
-				<label for="fighting-style-select"><strong>Available Fighting Styles:</strong></label>
-				<select class="form-control" id="fighting-style-select">
-					<option value="">-- Select a Fighting Style --</option>
-					${availableStyles.map(style => {
-		const isAlreadySelected = existingStyles.some(existing => existing.includes(style.name));
-		return `<option value="${style.name}" ${isAlreadySelected ? "disabled" : ""}>${style.name}${isAlreadySelected ? " (Already Selected)" : ""}</option>`;
-	}).join("")}
-				</select>
-			</div>
-
-			<div id="fighting-style-description" class="alert alert-info" style="display: none;">
-				<strong id="style-name"></strong>
-				<p id="style-description" class="mb-0 mt-2"></p>
-			</div>
-		`;
-
-		// Create 5etools native modal
-		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
-			title: "Level Up Character - Fighting Style",
-			hasFooter: true,
-			isPermanent: true,
-		});
-
-		// Store modal close function
-		this.levelUpModalClose = doClose;
-
-		// Add content to modal
-		$modalInner.html(modalContent);
-
-		// Create footer buttons
-		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`)
-			.click(() => doClose(false));
-
-		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary" disabled>Select Fighting Style</button>`)
-			.click(() => {
-				const selectedStyle = $modalInner.find("#fighting-style-select").val();
-				const styleData = fightingStyles.find(s => s.name === selectedStyle);
-
-				// Store the fighting style choice
-				this.levelUpState.choices.push({
-					type: "fightingStyle",
-					feature: feature,
-					styleName: selectedStyle,
-					styleDescription: styleData.description,
-				});
-
-				// Continue to next feature
-				this.levelUpState.currentFeatureIndex++;
-				doClose(true);
-				this.showNextFeatureChoice();
-			});
-
-		$modalFooter.append($btnCancel, $btnConfirm);
-
-		// Add change handler for fighting style selection
-		$modalInner.find("#fighting-style-select").change((e) => {
-			const selectedValue = e.target.value;
-			const $btnConfirm = $modalFooter.find(".ve-btn-primary");
-
-			if (selectedValue) {
-				$btnConfirm.prop("disabled", false);
-				const styleData = fightingStyles.find(s => s.name === selectedValue);
-
-				// Show fighting style description
-				$modalInner.find("#fighting-style-description").show();
-				$modalInner.find("#style-name").text(styleData.name);
-				$modalInner.find("#style-description").text(styleData.description);
-			} else {
-				$btnConfirm.prop("disabled", true);
-				$modalInner.find("#fighting-style-description").hide();
-			}
+		const currentClass = String(character.class?.[this.levelUpState.selectedClassIndex]?.name || "Fighter").toLowerCase();
+		const ftByClass = {fighter: "FS:F", paladin: "FS:P", ranger: "FS:R"};
+		const featureTypes = ftByClass[currentClass] ? [ftByClass[currentClass]] : ["FS:F", "FS:P", "FS:R"];
+		const preferred = currentClass === "ranger"
+			? ["Archery", "Defense", "Dueling"]
+			: ["Defense", "Dueling", "Great Weapon Fighting", "Archery"];
+		await this.showClassOptionPickerModal(feature, {
+			title: "Fighting Style",
+			prefix: "Fighting Style",
+			featureTypes,
+			count: 1,
+			preferred,
 		});
 	}
 
@@ -13468,9 +13037,139 @@ class CharacterEditorPage {
 	// Spell availability and selection logic is now handled by CharacterSpellManager UI
 
 	showManeuverChoiceModal (feature, featureData) {
-		// This would show Battle Master maneuver choices
-		// For now, just show a generic choice modal
-		this.showGenericFeatureChoiceModal(feature, featureData);
+		const character = this.levelUpState.characterData;
+		const LU = globalThis.CharacterBuilderLevelUp;
+		const targetTotal = LU?.getClassOptionCounts ? LU.getClassOptionCounts(character).maneuvers : (featureData?.count || 3);
+		return this.showClassOptionPickerModal(feature, {
+			title: "Battle Master Maneuvers",
+			prefix: "Maneuver",
+			featureTypes: ["MV:B", "MV"],
+			targetTotal,
+			preferred: ["Trip Attack", "Riposte", "Precision Attack", "Menacing Attack", "Disarming Attack", "Parry"],
+		});
+	}
+
+	// Eldritch Invocations (Warlock) — data-driven picker.
+	showEldritchInvocationChoiceModal (feature, featureData) {
+		const character = this.levelUpState.characterData;
+		const LU = globalThis.CharacterBuilderLevelUp;
+		const targetTotal = LU?.getClassOptionCounts ? LU.getClassOptionCounts(character).invocations : (featureData?.count || 2);
+		return this.showClassOptionPickerModal(feature, {
+			title: "Eldritch Invocations",
+			prefix: "Eldritch Invocation",
+			featureTypes: ["EI"],
+			targetTotal,
+			preferred: ["Agonizing Blast", "Devil's Sight", "Repelling Blast", "Eldritch Spear", "Book of Ancient Secrets", "Mask of Many Faces"],
+		});
+	}
+
+	// Pact Boon (Warlock, level 3) — data-driven picker (choose exactly one).
+	showPactBoonChoiceModal (feature, featureData) {
+		return this.showClassOptionPickerModal(feature, {
+			title: "Pact Boon",
+			prefix: "Pact Boon",
+			featureTypes: ["PB"],
+			count: 1,
+			preferred: ["Pact of the Tome", "Pact of the Blade", "Pact of the Chain"],
+		});
+	}
+
+	// Generic, data-driven picker for choosable class options (invocations, maneuvers, pact boon,
+	// fighting style, ...). Loads the real 5etools optional-feature data, filters by prerequisite
+	// and already-recorded picks, then records selections as "<prefix>: <name>" Features & Traits
+	// entries — matching the shape used by the random creator's applyAutoClassOptions.
+	async showClassOptionPickerModal (feature, {title, prefix, featureTypes, count = null, targetTotal = null, preferred = []} = {}) {
+		const character = this.levelUpState.characterData;
+
+		// Names already recorded for this option type (delta counts + de-duping).
+		const recorded = new Set();
+		(character.entries || []).forEach(sec => {
+			if (sec && Array.isArray(sec.entries)) {
+				sec.entries.forEach(ent => {
+					const nm = String(ent?.name || "");
+					if (nm.startsWith(`${prefix}: `)) recorded.add(nm.slice(prefix.length + 2).toLowerCase());
+				});
+			}
+		});
+
+		const effectiveCount = count != null ? count : Math.max(0, (targetTotal || 0) - recorded.size);
+
+		let pool = [];
+		try {
+			pool = (await this.loadOptionalFeatures(featureTypes)).filter(o => this.optionalFeatureMeetsPrereq(o, character));
+		} catch (e) {
+			console.warn("Failed to load options for", prefix, e);
+		}
+		pool = pool.filter(o => !recorded.has(o.name.toLowerCase()));
+
+		// Nothing left to choose — skip this feature cleanly.
+		if (effectiveCount <= 0 || !pool.length) {
+			this.levelUpState.currentFeatureIndex++;
+			await this.showNextFeatureChoice();
+			return;
+		}
+
+		const ordered = [
+			...preferred.map(pn => pool.find(o => o.name.toLowerCase() === pn.toLowerCase())).filter(Boolean),
+			...pool.filter(o => !preferred.some(pn => pn.toLowerCase() === o.name.toLowerCase())),
+		];
+
+		const modalContent = `
+			<p class="mb-3"><strong>Level:</strong> ${this.levelUpState.currentLevel} &rarr; ${this.levelUpState.newLevel}</p>
+			<h6>${title}</h6>
+			<p class="text-muted mb-3">Select ${effectiveCount} option${effectiveCount > 1 ? "s" : ""}.</p>
+			<div class="row">
+				${ordered.map((opt, i) => `
+					<div class="col-md-6 mb-3">
+						<div class="card">
+							<div class="card-body">
+								<div class="form-check">
+									<input class="form-check-input opt-pick-checkbox" type="checkbox" value="${i}" id="opt-pick-${i}" data-max-choices="${effectiveCount}">
+									<label class="form-check-label" for="opt-pick-${i}">
+										<strong>${opt.name}</strong>
+										<br><span class="text-secondary">${(opt.entries || []).filter(e => typeof e === "string").slice(0, 1).join(" ")}</span>
+									</label>
+								</div>
+							</div>
+						</div>
+					</div>
+				`).join("")}
+			</div>
+			<div class="mt-2"><strong>Selected: <span class="opt-pick-count">0</span>/${effectiveCount}</strong></div>
+		`;
+
+		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+			title,
+			hasFooter: true,
+			isWidth100: true,
+			isPermanent: true,
+		});
+		this.levelUpModalClose = doClose;
+		$modalInner.html(modalContent);
+
+		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`).click(() => doClose(false));
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary" disabled>Confirm</button>`).click(() => {
+			const selections = [];
+			$modalInner.find(".opt-pick-checkbox:checked").each(function () {
+				const opt = ordered[parseInt($(this).val())];
+				if (opt) selections.push({name: opt.name, entries: opt.entries, source: opt.source});
+			});
+
+			this.levelUpState.choices.push({type: "optionalPicks", prefix, selections});
+
+			this.levelUpState.currentFeatureIndex++;
+			doClose(true);
+			this.showNextFeatureChoice();
+		});
+		$modalFooter.append($btnCancel, $btnConfirm);
+
+		$modalInner.find(".opt-pick-checkbox").change(function () {
+			const checked = $modalInner.find(".opt-pick-checkbox:checked").length;
+			$modalInner.find(".opt-pick-count").text(checked);
+			if (checked >= effectiveCount) $modalInner.find(".opt-pick-checkbox:not(:checked)").prop("disabled", true);
+			else $modalInner.find(".opt-pick-checkbox").prop("disabled", false);
+			$btnConfirm.prop("disabled", checked !== effectiveCount);
+		});
 	}
 
 	showGenericFeatureChoiceModal (feature, featureData = null) {
@@ -13813,29 +13512,213 @@ class CharacterEditorPage {
 	}
 
 	async loadOptionalFeatures (featureTypes) {
-		// This would load from 5etools optional feature data
-		// For now, return some basic Fighting Style examples
-		if (featureTypes && featureTypes.includes("FS:F")) {
-			return [
-				{
-					name: "Archery",
-					entries: ["You gain a +2 bonus to attack rolls you make with ranged weapons."],
-				},
-				{
-					name: "Defense",
-					entries: ["While you are wearing armor, you gain a +1 bonus to AC."],
-				},
-				{
-					name: "Dueling",
-					entries: ["When you are wielding a melee weapon in one hand and no other weapons, you gain a +2 bonus to damage rolls with that weapon."],
-				},
-				{
-					name: "Great Weapon Fighting",
-					entries: ["When you roll a 1 or 2 on a damage die for an attack you make with a melee weapon that you are wielding with two hands, you can reroll the die and must use the new roll."],
-				},
-			];
+		const all = await this._pGetOptionalFeatures();
+		if (!featureTypes) return all;
+		const wanted = Array.isArray(featureTypes) ? featureTypes : [featureTypes];
+		return all.filter(o => Array.isArray(o.featureType) && o.featureType.some(t => wanted.includes(t)));
+	}
+
+	// Load + cache the real 5etools optional-feature list (invocations, metamagic, maneuvers,
+	// fighting styles, pact boons, etc.). Single fetch shared by the creator and the leveler.
+	async _pGetOptionalFeatures () {
+		if (this._optionalFeaturesCache) return this._optionalFeaturesCache;
+		try {
+			const resp = await fetch(`data/optionalfeatures.json`);
+			const data = await resp.json();
+			this._optionalFeaturesCache = Array.isArray(data?.optionalfeature) ? data.optionalfeature : [];
+		} catch (e) {
+			console.warn("Could not load optionalfeatures.json:", e);
+			this._optionalFeaturesCache = [];
 		}
-		return [];
+		return this._optionalFeaturesCache;
+	}
+
+	/* ------------------------------------------------------------------ */
+	/* Optional-feature prerequisite checking (level / pact / spell / ability) */
+	/* ------------------------------------------------------------------ */
+
+	_getClassLevelByName (character, className) {
+		const c = (character.class || []).find(x => String(x.name).toLowerCase() === String(className).toLowerCase());
+		return c ? (c.level || 0) : 0;
+	}
+
+	// Detect a recorded Pact Boon from the Features & Traits entries (e.g. "Pact Boon: Pact of the Tome").
+	_getChosenPactBoon (character) {
+		const sections = (character.entries || []).filter(e => e && Array.isArray(e.entries));
+		for (const sec of sections) {
+			for (const ent of sec.entries) {
+				const m = String(ent?.name || "").match(/Pact of the (\w+)/i);
+				if (m) return m[1].toLowerCase();
+			}
+		}
+		return null;
+	}
+
+	_characterKnowsSpell (character, spellName) {
+		const target = String(spellName).split("#")[0].split("|")[0].trim().toLowerCase();
+		if (!target) return false;
+		const levels = character?.spells?.levels || {};
+		for (const lv of Object.values(levels)) {
+			for (const s of (lv?.spells || [])) {
+				const nm = (typeof s === "string" ? s : (s?.name || "")).split("|")[0].trim().toLowerCase();
+				if (nm === target) return true;
+			}
+		}
+		return false;
+	}
+
+	// A 5etools `prerequisite` is an array of alternatives (OR); within one alternative all keys
+	// must be satisfied (AND). Unhandled keys are treated as satisfiable so we never over-filter.
+	optionalFeatureMeetsPrereq (feat, character) {
+		const prereq = feat?.prerequisite;
+		if (!Array.isArray(prereq) || !prereq.length) return true;
+		return prereq.some(entry => this._prereqEntryMet(entry, character));
+	}
+
+	_prereqEntryMet (entry, character) {
+		if (!entry || typeof entry !== "object") return true;
+
+		if (entry.level) {
+			const req = entry.level;
+			const reqLvl = typeof req === "number" ? req : (req.level || 0);
+			const reqClass = (typeof req === "object" && req.class && req.class.name) ? req.class.name : null;
+			const have = reqClass ? this._getClassLevelByName(character, reqClass) : CharacterEditorPage.getCharacterLevel(character);
+			if (have < reqLvl) return false;
+		}
+
+		if (entry.pact) {
+			const chosen = this._getChosenPactBoon(character);
+			if (!chosen || chosen !== String(entry.pact).toLowerCase()) return false;
+		}
+
+		if (entry.spell) {
+			const spells = Array.isArray(entry.spell) ? entry.spell : [entry.spell];
+			const ok = spells.some(s => this._characterKnowsSpell(character, typeof s === "string" ? s : (s?.name || "")));
+			if (!ok) return false;
+		}
+
+		if (entry.ability) {
+			const abils = Array.isArray(entry.ability) ? entry.ability : [entry.ability];
+			const ok = abils.some(a => Object.entries(a).every(([ab, val]) => (character[ab] || 10) >= val));
+			if (!ok) return false;
+		}
+
+		return true;
+	}
+
+	/* ------------------------------------------------------------------ */
+	/* Creator auto-selection of choosable class options                  */
+	/* ------------------------------------------------------------------ */
+
+	// Auto-pick the choosable class options a character is entitled to (Eldritch Invocations,
+	// Metamagic, Battle Master Maneuvers, Pact Boon, Fighting Style) up to their RAW "known" counts
+	// and record them in Features & Traits. Used by the random creator so generated sheets are
+	// complete without hand-editing. Idempotent: re-running never duplicates or exceeds counts.
+	async applyAutoClassOptions (character) {
+		const LU = globalThis.CharacterBuilderLevelUp;
+		if (!LU || typeof LU.getClassOptionCounts !== "function") return;
+		if (!character || !Array.isArray(character.class)) return;
+
+		const counts = LU.getClassOptionCounts(character);
+		if (!counts.invocations && !counts.metamagic && !counts.maneuvers && !counts.fightingStyles) return;
+
+		const featuresSection = this.ensureSingleFeaturesSection(character);
+		if (!Array.isArray(featuresSection.entries)) featuresSection.entries = [];
+
+		// Append up to `count` picks under a "<prefix>: <name>" naming scheme, honoring a preferred
+		// order first and skipping anything already recorded. Returns the newly-added options.
+		const addPicks = (prefix, count, pool, preferred) => {
+			if (count <= 0 || !pool.length) return [];
+			const chosen = new Set(
+				featuresSection.entries
+					.map(e => String(e?.name || ""))
+					.filter(nm => nm.startsWith(`${prefix}: `))
+					.map(nm => nm.slice(prefix.length + 2).toLowerCase()),
+			);
+			const need = count - chosen.size;
+			if (need <= 0) return [];
+
+			const ordered = [
+				...(preferred || []).map(pn => pool.find(o => o.name.toLowerCase() === pn.toLowerCase())).filter(Boolean),
+				...pool,
+			];
+			const picks = [];
+			for (const o of ordered) {
+				if (picks.length >= need) break;
+				const lc = o.name.toLowerCase();
+				if (chosen.has(lc)) continue;
+				chosen.add(lc);
+				picks.push(o);
+				featuresSection.entries.push({
+					type: "entries",
+					name: `${prefix}: ${o.name}`,
+					entries: (Array.isArray(o.entries) && o.entries.length) ? o.entries : [`${o.name} selected.`],
+				});
+			}
+			return picks;
+		};
+
+		// 1) Pact Boon FIRST — several invocations are gated behind a specific pact.
+		for (const cls of character.class) {
+			if (String(cls.name).toLowerCase() === "warlock" && (cls.level || 0) >= 3) {
+				const pool = (await this.loadOptionalFeatures(["PB"])).filter(o => this.optionalFeatureMeetsPrereq(o, character));
+				addPicks("Pact Boon", 1, pool, ["Pact of the Tome", "Pact of the Blade", "Pact of the Chain"]);
+			}
+		}
+
+		// 2) Eldritch Invocations (now that a pact is recorded, pact-gated options can qualify).
+		if (counts.invocations > 0) {
+			const pool = (await this.loadOptionalFeatures(["EI"])).filter(o => this.optionalFeatureMeetsPrereq(o, character));
+			addPicks("Eldritch Invocation", counts.invocations, pool,
+				["Agonizing Blast", "Devil's Sight", "Repelling Blast", "Eldritch Spear", "Book of Ancient Secrets", "Mask of Many Faces"]);
+		}
+
+		// 3) Metamagic (Sorcerer).
+		if (counts.metamagic > 0) {
+			const pool = (await this.loadOptionalFeatures(["MM"])).filter(o => this.optionalFeatureMeetsPrereq(o, character));
+			addPicks("Metamagic", counts.metamagic, pool,
+				["Quickened Spell", "Subtle Spell", "Twinned Spell", "Careful Spell", "Empowered Spell"]);
+		}
+
+		// 4) Maneuvers (Battle Master).
+		if (counts.maneuvers > 0) {
+			const pool = (await this.loadOptionalFeatures(["MV:B", "MV"])).filter(o => this.optionalFeatureMeetsPrereq(o, character));
+			addPicks("Maneuver", counts.maneuvers, pool,
+				["Trip Attack", "Riposte", "Precision Attack", "Menacing Attack", "Disarming Attack", "Parry"]);
+		}
+
+		// 5) Fighting Style(s) — per class, since the feature-type code differs by class. Track a
+		// cumulative target so multiclass combos (e.g. Fighter 1 / Ranger 2) get both styles.
+		const fsByClass = {fighter: "FS:F", paladin: "FS:P", ranger: "FS:R"};
+		let fsTarget = 0;
+		for (const cls of character.class) {
+			const nm = String(cls.name).toLowerCase();
+			const ft = fsByClass[nm];
+			if (!ft) continue;
+			const lvl = cls.level || 0;
+			const sub = String(cls.subclass?.shortName || cls.subclass?.name || "");
+			let want = 0;
+			if (nm === "fighter") {
+				if (lvl >= 1) want = 1;
+				if (lvl >= 10 && /champion/i.test(sub)) want += 1;
+			} else if (lvl >= 2) {
+				want = 1;
+			}
+			if (want <= 0) continue;
+			fsTarget += want;
+			const pool = (await this.loadOptionalFeatures([ft])).filter(o => this.optionalFeatureMeetsPrereq(o, character));
+			const preferred = nm === "ranger"
+				? ["Archery", "Defense", "Dueling"]
+				: ["Defense", "Dueling", "Great Weapon Fighting", "Archery"];
+			const picks = addPicks("Fighting Style", fsTarget, pool, preferred);
+			for (const p of picks) {
+				try {
+					this.applyFightingStyleToCharacter(character, p.name, {source: p.source});
+				} catch (fsErr) {
+					console.warn("Auto fighting-style apply failed:", fsErr);
+				}
+			}
+		}
 	}
 
 	selectOptionalFeatureInModal (feature, $buttonElement, $modalInner, $btnConfirm) {
@@ -14532,6 +14415,15 @@ class CharacterEditorPage {
 
 		// Final consolidation to ensure no duplicate Features & Traits sections
 		this.ensureSingleFeaturesSection(updatedCharacter);
+
+		// Safety net: top up any choosable class options the user did not pick interactively
+		// (invocations / metamagic / maneuvers / pact boon / fighting style). Idempotent and
+		// respects existing picks, so it only fills genuine gaps.
+		try {
+			await this.applyAutoClassOptions(updatedCharacter);
+		} catch (autoOptErr) {
+			console.warn("Level-up auto class-option top-up failed:", autoOptErr);
+		}
 
 		// Ensure computed level field is up to date for list/summaries
 		try {
@@ -16749,21 +16641,16 @@ class CharacterEditorPage {
 	async validateSpellSlots (character, spellcastingClasses, results) {
 		if (!character.spells.levels) return;
 
-		// Calculate expected spell slots based on class levels
+		// Expected spell slots from the canonical source of truth (multiclass-aware,
+		// Warlock pact merged for display parity with the sheet).
 		const expectedSlots = {};
-		for (const classEntry of spellcastingClasses) {
-			// Skip non-spellcasting Fighter/Rogue (third-caster only with subclass)
-			if ((classEntry.name === "Fighter" || classEntry.name === "Rogue") && !this.isThirdCasterClass(classEntry)) {
-				continue;
-			}
-
-			const progression = this.getSpellcastingProgression(classEntry.name);
-			const slots = this.calculateSpellSlots(classEntry.level, progression);
-
-			for (const [level, count] of Object.entries(slots)) {
-				const levelKey = String(level).replace(/^level/i, "");
-				expectedSlots[levelKey] = (expectedSlots[levelKey] || 0) + count;
-			}
+		const info = globalThis.CharacterBuilderLevelUp?.computeSpellSlots?.(character) || {slots: {}};
+		for (const [level, count] of Object.entries(info.slots || {})) {
+			expectedSlots[level] = (expectedSlots[level] || 0) + count;
+		}
+		if (info.pactMagic && info.pactMagic.slotLevel >= 1 && info.pactMagic.slotLevel <= 9) {
+			const k = String(info.pactMagic.slotLevel);
+			expectedSlots[k] = (expectedSlots[k] || 0) + info.pactMagic.slots;
 		}
 
 		// Check actual vs expected for levels present on the character
@@ -18853,6 +18740,33 @@ async applyLevelUpFeaturesToCharacter (character) {
 						}
 					}
 					console.log(`Applied ${choice.selections.length} metamagic options at level ${this.levelUpState.newLevel}`);
+				} else if (choice.type === "optionalPicks" && Array.isArray(choice.selections)) {
+					// Apply generic class-option picks (invocations / maneuvers / pact boon / fighting
+					// style) recorded by showClassOptionPickerModal, using the shared "<prefix>: <name>"
+					// naming scheme so they round-trip with the creator's auto-selection.
+					const prefix = choice.prefix || "Feature";
+					for (const sel of choice.selections) {
+						const featureName = `${prefix}: ${sel.name}`;
+						const existingFeature = featuresSection.entries.find(entry => entry.name === featureName);
+						if (!existingFeature) {
+							featuresSection.entries.push({
+								type: "entries",
+								name: featureName,
+								entries: (Array.isArray(sel.entries) && sel.entries.length) ? sel.entries : [`${sel.name} selected.`],
+							});
+						} else {
+							console.log(`Skipped duplicate ${prefix}: ${sel.name}`);
+						}
+						// Fighting styles carry mechanical effects (e.g. Defense +1 AC); apply idempotently.
+						if (prefix === "Fighting Style") {
+							try {
+								this.applyFightingStyleToCharacter(character, sel.name, {source: sel.source});
+							} catch (fsErr) {
+								console.error("Error applying fighting style effects:", fsErr);
+							}
+						}
+					}
+					console.log(`Applied ${choice.selections.length} ${prefix} pick(s) at level ${this.levelUpState.newLevel}`);
 				} else if (choice.type === "dragonbornAncestry" && choice.ancestry) {
 					// Apply dragonborn ancestry choice
 					const ancestry = choice.ancestry;
@@ -19157,164 +19071,11 @@ async applyLevelUpFeaturesToCharacter (character) {
 	}
 
 	updateSpellSlotsForLevelUp (character) {
-		const classes = character.class || [];
-		if (!Array.isArray(classes)) {
+		if (!Array.isArray(character.class || [])) {
 			console.warn("character.class is not an array, skipping spell slot updates");
 			return;
 		}
-
-		const LevelUp = globalThis.CharacterBuilderLevelUp;
-		if (LevelUp?.computeSpellSlots) {
-			const info = LevelUp.computeSpellSlots(character);
-			character.spells = character.spells || {levels: {}};
-			character.spells.levels = character.spells.levels || {};
-			Object.entries(info.slots || {}).forEach(([lvl, n]) => {
-				character.spells.levels[lvl] = character.spells.levels[lvl] || {spells: [], maxSlots: n};
-				character.spells.levels[lvl].maxSlots = n;
-			});
-			if (info.pactMagic) character.spells.pactMagic = info.pactMagic;
-			else delete character.spells.pactMagic;
-			console.log("Updated spell slots via CharacterBuilderLevelUp.computeSpellSlots", info);
-			return;
-		}
-
-		console.log("Updating spell slots for classes:", classes.map(c => `${c.name} ${c.level}`));
-
-		// Calculate total caster level for multiclass spellcasters
-		let totalCasterLevel = 0;
-		let hasSpellcasters = false;
-
-		classes.forEach(cls => {
-			if (!cls || !cls.name || !cls.level) return;
-
-			const className = cls.name;
-			const classLevel = cls.level;
-
-			// Full casters: add full level
-			const fullCasters = ["Artificer", "Bard", "Cleric", "Druid", "Sorcerer", "Wizard"];
-			// Half casters: add half level (rounded down)
-			const halfCasters = ["Paladin", "Ranger"];
-
-			if (className === "Warlock") {
-				hasSpellcasters = true;
-				// Pact magic handled separately below
-			} else if (fullCasters.includes(className)) {
-				totalCasterLevel += className === "Artificer" ? Math.ceil(classLevel / 2) : classLevel;
-				hasSpellcasters = true;
-			} else if (halfCasters.includes(className)) {
-				const halfLevels = Math.floor(classLevel / 2);
-				totalCasterLevel += halfLevels;
-				hasSpellcasters = true;
-			}
-
-			// Special case for third casters (Eldritch Knight, Arcane Trickster)
-			if (className === "Fighter" && cls.subclass && cls.subclass.name === "Eldritch Knight" && classLevel >= 3) {
-				const thirdLevels = Math.floor(classLevel / 3);
-				totalCasterLevel += thirdLevels;
-				hasSpellcasters = true;
-				console.log(`${className} ${classLevel} (Eldritch Knight): +${thirdLevels} caster levels`);
-			} else if (className === "Rogue" && cls.subclass && cls.subclass.name === "Arcane Trickster" && classLevel >= 3) {
-				const thirdLevels = Math.floor(classLevel / 3);
-				totalCasterLevel += thirdLevels;
-				hasSpellcasters = true;
-				console.log(`${className} ${classLevel} (Arcane Trickster): +${thirdLevels} caster levels`);
-			}
-		});
-
-		if (hasSpellcasters && totalCasterLevel > 0) {
-			console.log(`Total multiclass caster level: ${totalCasterLevel}`);
-
-			// Calculate spell slots based on total caster level using standard progression
-			const spellSlots = this.calculateSpellSlotsByLevel(totalCasterLevel);
-
-			if (spellSlots && Object.keys(spellSlots).length > 0) {
-				// Ensure character.spells.levels exists
-				if (!character.spells) character.spells = {};
-				if (!character.spells.levels) character.spells.levels = {};
-
-				// Update spell levels with proper maxSlots/slotsRemaining structure
-				Object.entries(spellSlots).forEach(([spellLevel, maxSlots]) => {
-					const currentLevel = character.spells.levels[spellLevel];
-					if (!currentLevel) {
-						// Create new spell level with maxSlots = slotsRemaining (all slots available)
-						character.spells.levels[spellLevel] = {
-							spells: [],
-							maxSlots: maxSlots,
-							slotsRemaining: maxSlots, // All slots start as "used" (available)
-						};
-						console.log(`🆕 Created spell level ${spellLevel}: maxSlots=${maxSlots}, slotsRemaining=${maxSlots}`);
-					} else {
-						// Update existing level, preserving spells and increasing slots proportionally
-						const oldMaxSlots = currentLevel.maxSlots || 0;
-						const oldslotsRemaining = currentLevel.slotsRemaining || 0;
-
-						currentLevel.maxSlots = maxSlots;
-
-						if (oldMaxSlots === 0) {
-							// First time getting slots for this level
-							currentLevel.slotsRemaining = maxSlots;
-							console.log(`✨ First-time slots for level ${spellLevel}: maxSlots=${maxSlots}, slotsRemaining=${maxSlots}`);
-						} else {
-							// Proportional increase: add the same number of slots to both max and used
-							const increase = maxSlots - oldMaxSlots;
-							currentLevel.slotsRemaining = Math.min(maxSlots, oldslotsRemaining + increase);
-							console.log(`📊 Level up! Spell level ${spellLevel}: ${oldMaxSlots}→${maxSlots} max, ${oldslotsRemaining}→${currentLevel.slotsRemaining} used (+${increase} to both)`);
-						}
-					}
-				});
-
-				console.log("Updated spell slots:", spellSlots);
-			}
-		} else {
-			console.log("No spellcasting classes found or total caster level is 0");
-		}
-	}
-
-	calculateSpellSlotsByLevel (casterLevel) {
-		// Standard D&D 5e spell slot progression table
-		const spellSlotTable = {
-			1: { 1: 2 },
-			2: { 1: 3 },
-			3: { 1: 4, 2: 2 },
-			4: { 1: 4, 2: 3 },
-			5: { 1: 4, 2: 3, 3: 2 },
-			6: { 1: 4, 2: 3, 3: 3 },
-			7: { 1: 4, 2: 3, 3: 3, 4: 1 },
-			8: { 1: 4, 2: 3, 3: 3, 4: 2 },
-			9: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 1 },
-			10: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2 },
-			11: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1 },
-			12: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1 },
-			13: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1 },
-			14: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1 },
-			15: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1, 8: 1 },
-			16: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1, 8: 1 },
-			17: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 2, 6: 1, 7: 1, 8: 1, 9: 1 },
-			18: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 3, 6: 1, 7: 1, 8: 1, 9: 1 },
-			19: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 3, 6: 2, 7: 1, 8: 1, 9: 1 },
-			20: { 1: 4, 2: 3, 3: 3, 4: 3, 5: 3, 6: 2, 7: 2, 8: 1, 9: 1 },
-		};
-
-		return spellSlotTable[Math.min(casterLevel, 20)] || {};
-	}
-
-	calculateEldritchKnightSpellSlots (fighterLevel) {
-		// Eldritch Knight spell slot progression (1/3 caster)
-		const spellSlotsByLevel = {
-			3: { 1: 2 },
-			4: { 1: 3 },
-			7: { 1: 4, 2: 2 },
-			8: { 1: 4, 2: 3 },
-			10: { 1: 4, 2: 3, 3: 2 },
-			11: { 1: 4, 2: 3, 3: 3 },
-			13: { 1: 4, 2: 3, 3: 3, 4: 1 },
-			14: { 1: 4, 2: 3, 3: 3, 4: 1 },
-			16: { 1: 4, 2: 3, 3: 3, 4: 2 },
-			19: { 1: 4, 2: 3, 3: 3, 4: 3 },
-			20: { 1: 4, 2: 3, 3: 3, 4: 3 },
-		};
-
-		return spellSlotsByLevel[fighterLevel] || null;
+		this.applyComputedSpellSlots(character);
 	}
 
 	// Method to apply missing racial features to existing characters
