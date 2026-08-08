@@ -41,7 +41,10 @@ const fetchError = {
 
 const wb = new Workbox("sw.js");
 
-wb.addEventListener("controlling", () => {
+wb.addEventListener("controlling", (event) => {
+	// Only notify on updates — first-time claim (clientsClaim) is expected and
+	// should not prompt the user to reload.
+	if (!event.isUpdate) return;
 	if (!VetoolsConfig.get("ui", "isNotifyUpdates")) return;
 
 	const lnk = ee`<a href="${Renderer.get().baseUrl}changelog.html" class="alert-link">changelog</a>`

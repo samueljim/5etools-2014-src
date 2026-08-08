@@ -1,11 +1,16 @@
 /* eslint-disable no-console */
 
+import { clientsClaim } from "workbox-core";
 import { precacheAndRoute } from "workbox-precaching";
 import { registerRoute } from "workbox-routing";
 import { CacheFirst, NetworkFirst, Strategy, StrategyHandler } from "workbox-strategies";
 import { ExpirationPlugin, CacheExpiration } from "workbox-expiration";
 
 import { createCacheKey } from "workbox-precaching/utils/createCacheKey";
+
+// Take control of open pages as soon as this SW activates, so offline works
+// without requiring a manual reload after the first visit.
+clientsClaim();
 
 /*
 this comment will attempt to explain the caching strategy employed by this service worker
@@ -322,6 +327,11 @@ class RevisionCacheFirst extends Strategy {
 					}
 
 					const response = await fetch(fetchUrl, fetchOptions);
+					// Avoid caching hard failures for same-origin responses (opaque
+					// cross-origin responses always have status 0 and cannot be checked).
+					if (response.type !== "opaque" && !response.ok) {
+						throw new Error(`HTTP ${response.status} for ${fetchUrl}`);
+					}
 					// this await could be omitted to further speed up fetching at risk of failure during error
 					await cache.put(cacheKey, response);
 					console.log(`Cached: ${fetchUrl}`);

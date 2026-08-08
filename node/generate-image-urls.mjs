@@ -26,33 +26,48 @@ const imageUrls = new Set();
  */
 function extractImageUrls (obj, path = "") {
 	if (typeof obj === "string") {
-		// Look for strings that look like image extensions
 		const imageExtensions = [".webp", ".png", ".jpg", ".jpeg", ".svg", ".gif"];
-		const hasImageExtension = imageExtensions.some(ext => obj.includes(ext));
+		const lower = obj.toLowerCase();
+		const hasImageExtension = imageExtensions.some(ext => lower.includes(ext));
 
-		if (hasImageExtension) {
-			// Clean up the path and add to our set
-			let imagePath = obj;
+		if (!hasImageExtension) return;
 
-			// Remove any leading slashes
-			imagePath = imagePath.replace(/^\/+/, "");
-
-			// Handle different formats:
-			if (imagePath.startsWith("img/")) {
-				// Full path like "img/bestiary/tokens/MM/Aboleth.webp"
-				const fullUrl = EXTERNAL_IMG_BASE + imagePath.replace(/^img\//, "");
-				imageUrls.add(fullUrl);
-			} else if (imagePath.includes("/") && !imagePath.startsWith("http")) {
-				// Relative path like "adventure/BGDIA/001-ud5xx-00-01.webp"
-				// These should be treated as img/ prefixed paths
-				const fullUrl = EXTERNAL_IMG_BASE + imagePath;
-				imageUrls.add(fullUrl);
-			} else {
-				// Might be a filename only or other format
-				// For now, let's see what we get
-				console.log(`  Skipping non-path image reference: "${imagePath}" in ${path}`);
-			}
+		// Reject changelog / prose strings that merely mention image extensions
+		if (
+			obj.includes("\n")
+			|| obj.includes("{@")
+			|| obj.includes("`")
+			|| obj.length > 260
+			|| /\s-\s/.test(obj)
+		) {
+			return;
 		}
+
+		let imagePath = obj.replace(/^\/+/, "");
+
+		// Drop query/hash fragments if present
+		imagePath = imagePath.split(/[?#]/)[0];
+
+		// Must look like a relative media path ending in an image extension
+		const looksLikePath = /^(?:img\/)?[\w./()\- %[\]']+\.(?:webp|png|jpe?g|svg|gif)$/i.test(imagePath);
+		if (!looksLikePath) return;
+
+		if (imagePath.startsWith("img/")) {
+			imagePath = imagePath.replace(/^img\//, "");
+		} else if (imagePath.startsWith("http")) {
+			return;
+		} else if (!imagePath.includes("/")) {
+			console.log(`  Skipping non-path image reference: "${imagePath}" in ${path}`);
+			return;
+		}
+
+		// Encode path segments so spaces/special chars match browser request URLs
+		const encodedPath = imagePath
+			.split("/")
+			.map(seg => encodeURIComponent(decodeURIComponent(seg)))
+			.join("/");
+
+		imageUrls.add(EXTERNAL_IMG_BASE + encodedPath);
 	} else if (Array.isArray(obj)) {
 		obj.forEach((item, index) => extractImageUrls(item, `${path}[${index}]`));
 	} else if (obj && typeof obj === "object") {

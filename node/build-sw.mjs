@@ -1,9 +1,18 @@
 import {injectManifest} from "workbox-build";
 import esbuild from "esbuild";
 import fs from "fs";
+import {spawnSync} from "child_process";
 
 const args = process.argv.slice(2);
 const prod = args[0] === "prod";
+
+// Refresh external image URL list used by the runtime manifest
+const imageUrlGen = spawnSync(process.execPath, ["node/generate-image-urls.mjs"], {
+	stdio: "inherit",
+});
+if (imageUrlGen.status !== 0) {
+	console.warn("⚠️  Failed to regenerate image-urls.json; continuing with existing file if present.");
+}
 
 /**
  * convert from bytes to mb and label the units
@@ -116,12 +125,26 @@ const workboxRuntimeBuildResult = await injectManifest({
 
 			// Add external image URLs to the manifest
 			// These get a simple revision hash based on the URL
-			const externalImageEntries = externalImageUrls.map(url => [
-				url,
-				// Use a simple hash of the URL as revision for external images
-				// This ensures they get cached but can be updated if needed
-				encodeURIComponent(url).slice(-8), // Use last 8 chars of encoded URL as revision
-			]);
+			const externalImageEntries = externalImageUrls.map(url => {
+				// Normalize spaces / unsafe chars so keys match browser request URLs
+				let normalized = url;
+				try {
+					const parsed = new URL(url);
+					parsed.pathname = parsed.pathname
+						.split("/")
+						.map(seg => encodeURIComponent(decodeURIComponent(seg)))
+						.join("/");
+					normalized = parsed.href;
+				} catch {
+					normalized = url.replaceAll(" ", "%20");
+				}
+				return [
+					normalized,
+					// Use a simple hash of the URL as revision for external images
+					// This ensures they get cached but can be updated if needed
+					encodeURIComponent(normalized).slice(-8), // Use last 8 chars of encoded URL as revision
+				];
+			});
 
 			return {
 				manifest: [...processedManifest, ...externalImageEntries],
