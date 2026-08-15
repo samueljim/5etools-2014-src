@@ -10061,6 +10061,8 @@ Renderer.character = class {
 		const ed = (path, value, opts) => Renderer.character._editableStatHtml(canEdit, characterId, path, value, opts);
 		const edPlay = ed;
 
+		// Sheet-level rename is handled by double-clicking the character name (see _bindCharacterSheetListeners)
+
 		// Combat Stats - hero (HP/AC) + primary + secondary chip rows
 		const combatChipsHero = [];
 		const combatChipsPrimary = [];
@@ -10249,25 +10251,6 @@ Renderer.character = class {
 					emphasis: true,
 					text: true,
 				});
-		}
-
-		if (character.bonusProficiencies?.length) {
-			const profLabels = character.bonusProficiencies
-				.map(p => (typeof p === "string" ? p : (p?.name || String(p))))
-				.filter(Boolean)
-				.map(p => p.replace(/\b\w/g, c => c.toUpperCase()));
-			if (profLabels.length) {
-				const tagsHtml = profLabels
-					.map(label => `<span class="character-combat__tag">${label}</span>`)
-					.join("");
-				combatChipsHero.push({
-					label: "Other Proficiencies",
-					value: tagsHtml,
-					title: profLabels.join(", "),
-					emphasis: true,
-					text: true,
-				});
-			}
 		}
 
 		if (character.size) {
@@ -10711,6 +10694,21 @@ Renderer.character = class {
 			}
 		}
 
+		// Other Proficiencies — rendered as a lower section rather than a header chip
+		if (character.bonusProficiencies?.length) {
+			const profLabels = character.bonusProficiencies
+				.map(p => (typeof p === "string" ? p : (p?.name || String(p))))
+				.filter(Boolean)
+				.map(p => p.replace(/\b\w/g, c => c.toUpperCase()));
+			if (profLabels.length) {
+				renderer.recursiveRender({
+					type: "entries",
+					name: "Other Proficiencies",
+					entries: [profLabels.map(l => `<span class="character-combat__tag">${l}</span>`).join("")],
+				}, renderStack, {depth: 1});
+			}
+		}
+
 		// Player notes (customText) — supports renderer tags
 		if (character.customText || canEdit) {
 			const rawNotes = character.customText || "";
@@ -10974,6 +10972,216 @@ Renderer.character = class {
 	}
 
 	/**
+	 * Single-form modal for adding a custom tracker (counter or condition) to a
+	 * character sheet. Collects every field at once rather than chaining prompts.
+	 */
+	static async _pOpenAddTrackerModal (character, managerId) {
+		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+			title: "Add Tracker",
+			hasFooter: true,
+		});
+
+		$modalInner.html(`
+			<div class="form-group">
+				<label><strong>Type</strong></label>
+				<div class="ve-flex ve-mt-1">
+					<label class="ve-flex-v-center ve-mb-0 ve-mr-3"><input type="radio" name="tracker-type" value="counter" class="ve-mr-1" checked> Counter</label>
+					<label class="ve-flex-v-center ve-mb-0"><input type="radio" name="tracker-type" value="condition" class="ve-mr-1"> Condition</label>
+				</div>
+			</div>
+			<div class="form-group">
+				<label for="tracker-name"><strong>Name</strong></label>
+				<input id="tracker-name" class="form-control" placeholder="e.g. Rage Uses">
+			</div>
+			<div id="tracker-counter-fields" class="ve-flex">
+				<div class="form-group ve-flex-1 ve-mr-2">
+					<label for="tracker-max"><strong>Max</strong></label>
+					<input id="tracker-max" class="form-control" type="number" min="0" value="1">
+				</div>
+				<div class="form-group ve-flex-1">
+					<label for="tracker-current"><strong>Current</strong></label>
+					<input id="tracker-current" class="form-control" type="number" min="0" placeholder="Max">
+				</div>
+			</div>
+			<div class="form-group">
+				<label for="tracker-desc"><strong>Notes</strong> <span class="ve-muted">(optional)</span></label>
+				<input id="tracker-desc" class="form-control" placeholder="Description or duration">
+			</div>
+		`);
+
+		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`).click(() => doClose(false));
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary">Add Tracker</button>`);
+		$modalFooter.append($btnCancel, $btnConfirm);
+
+		const $counterFields = $modalInner.find("#tracker-counter-fields");
+		const hkType = () => {
+			const type = $modalInner.find(`input[name="tracker-type"]:checked`).val();
+			if (type === "counter") $counterFields.show();
+			else $counterFields.hide();
+		};
+		$modalInner.find(`input[name="tracker-type"]`).on("change", hkType);
+		hkType();
+
+		$modalInner.find("#tracker-name").focus();
+
+		$btnConfirm.click(async () => {
+			const type = $modalInner.find(`input[name="tracker-type"]:checked`).val();
+			const name = ($modalInner.find("#tracker-name").val() || "").trim();
+			if (!name) {
+				globalThis.JqueryUtil?.doToast?.({type: "warning", content: "Please enter a tracker name."});
+				return;
+			}
+			const description = ($modalInner.find("#tracker-desc").val() || "").trim();
+
+			let payload;
+			if (type === "condition") {
+				payload = {type: "condition", name, active: false, description};
+			} else {
+				const max = Math.max(1, Math.floor(Number($modalInner.find("#tracker-max").val()) || 1));
+				const currentRaw = $modalInner.find("#tracker-current").val();
+				const current = currentRaw === "" || currentRaw == null
+					? max
+					: Math.max(0, Math.floor(Number(currentRaw) || 0));
+				payload = {type: "counter", name, current, max, description};
+			}
+
+			doClose(true);
+			if (!Array.isArray(character.customTrackers)) character.customTrackers = [];
+			await CharacterManager.updateCharacterArray(managerId, "customTrackers", "push", payload);
+		});
+	}
+
+	/**
+	 * Single-form modal for adding an equipment item to a character sheet. Collects
+	 * name, quantity, and notes at once, with an optional compendium search that
+	 * pre-fills the name field with a renderer tag.
+	 */
+	static async _pOpenAddItemModal (character, managerId) {
+		Renderer.character._ensureStructuredEquipment(character);
+
+		const {$modalInner, $modalFooter, doClose} = UiUtil.getShowModal({
+			title: "Add Item",
+			hasFooter: true,
+		});
+
+		$modalInner.html(`
+			<div class="form-group">
+				<label for="item-name"><strong>Name</strong></label>
+				<div class="ve-flex">
+					<input id="item-name" class="form-control ve-mr-2" placeholder="e.g. Longsword">
+					<button type="button" id="item-search" class="ve-btn ve-btn-default ve-no-shrink" title="Search the compendium">Search…</button>
+				</div>
+				<small class="ve-muted">Renderer tags supported, e.g. {@item Longsword|phb}.</small>
+			</div>
+			<div class="form-group">
+				<label for="item-qty"><strong>Quantity</strong></label>
+				<input id="item-qty" class="form-control" type="number" min="0" value="1">
+			</div>
+			<div class="form-group">
+				<label for="item-desc"><strong>Notes</strong> <span class="ve-muted">(optional)</span></label>
+				<input id="item-desc" class="form-control" placeholder="Description">
+			</div>
+		`);
+
+		const $btnCancel = $(`<button class="ve-btn ve-btn-default mr-2">Cancel</button>`).click(() => doClose(false));
+		const $btnConfirm = $(`<button class="ve-btn ve-btn-primary">Add Item</button>`);
+		$modalFooter.append($btnCancel, $btnConfirm);
+
+		$modalInner.find("#item-search").click(async () => {
+			if (typeof SearchWidget?.pGetUserItemSearch !== "function") return;
+			await SearchWidget.pDoGlobalInit?.();
+			const picked = await SearchWidget.pGetUserItemSearch();
+			if (picked?.tag) $modalInner.find("#item-name").val(picked.tag);
+		});
+
+		$modalInner.find("#item-name").focus();
+
+		$btnConfirm.click(async () => {
+			const name = ($modalInner.find("#item-name").val() || "").trim();
+			if (!name) {
+				globalThis.JqueryUtil?.doToast?.({type: "warning", content: "Please enter an item name."});
+				return;
+			}
+			const qtyRaw = $modalInner.find("#item-qty").val();
+			const quantity = qtyRaw === "" || qtyRaw == null ? 1 : Math.max(0, Math.floor(Number(qtyRaw) || 0));
+			const description = ($modalInner.find("#item-desc").val() || "").trim();
+
+			doClose(true);
+			await CharacterManager.updateCharacterArray(managerId, "equipment", "push", {name, quantity, description});
+		});
+	}
+
+	/**
+	 * Inline-rename a character by turning the name heading into an editable input.
+	 * Persists the new name and keeps the condition localStorage key (keyed on the name
+	 * slug) in sync. Replaces the previous rename modal.
+	 */
+	static _pInlineRenameName (h1El, character, managerId) {
+		if (!h1El || h1El.__isRenaming) return;
+		h1El.__isRenaming = true;
+
+		const prevName = character.name || "";
+		const originalHtml = h1El.innerHTML;
+
+		const input = document.createElement("input");
+		input.type = "text";
+		input.className = "form-control character-sheet__rename-input";
+		input.value = prevName;
+		input.setAttribute("aria-label", "Character name");
+
+		h1El.innerHTML = "";
+		h1El.appendChild(input);
+		input.focus();
+		input.select();
+
+		let isDone = false;
+		const restore = () => { h1El.innerHTML = originalHtml; h1El.__isRenaming = false; };
+
+		const commit = async () => {
+			if (isDone) return;
+			isDone = true;
+			const name = (input.value || "").trim();
+			if (!name || name === prevName) { restore(); return; }
+			h1El.__isRenaming = false;
+			Renderer.character._migrateConditionStorageKey(prevName, name);
+			try {
+				await CharacterManager.updateCharacterStat(managerId, "name", name, {forceType: "string"});
+			} catch (err) {
+				console.error("Character rename failed:", err);
+				restore();
+			}
+			// On success the manager re-renders the sheet with the new name.
+		};
+		const cancel = () => { if (isDone) return; isDone = true; restore(); };
+
+		input.addEventListener("keydown", (e) => {
+			e.stopPropagation();
+			if (e.key === "Enter") { e.preventDefault(); commit(); }
+			else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+		});
+		input.addEventListener("blur", () => commit());
+		// Keep clicks inside the input from triggering the heading's copy-on-click / preventDefault handlers
+		["click", "dblclick", "mousedown"].forEach(evt => input.addEventListener(evt, (e) => e.stopPropagation()));
+	}
+
+	/**
+	 * When a character is renamed, migrate any conditions saved in localStorage from
+	 * the old name-slug key to the new one so active conditions aren't orphaned.
+	 */
+	static _migrateConditionStorageKey (prevName, nextName) {
+		try {
+			const slug = (n) => `character-${(n || "Unknown").replace(/[^a-zA-Z0-9]/g, "-")}-conditions`;
+			const prevKey = slug(prevName);
+			const nextKey = slug(nextName);
+			if (prevKey === nextKey) return;
+			const stored = localStorage.getItem(prevKey);
+			if (stored == null) return;
+			localStorage.setItem(nextKey, stored);
+			localStorage.removeItem(prevKey);
+		} catch (ignored) { /* localStorage unavailable */ }
+	}
+
+	/**
 	 * Open the shared spell selection UI for an editable character, persisting the
 	 * chosen spells back onto the character on completion. Requires
 	 * `character-spell-manager.js` to be loaded on the host page (e.g. characters.html).
@@ -11081,37 +11289,14 @@ Renderer.character = class {
 
 				try {
 					if (action === "add-item") {
-						Renderer.character._ensureStructuredEquipment(character);
-						let itemPayload = {name: "New Item", quantity: 1, description: ""};
-						if (typeof SearchWidget?.pGetUserItemSearch === "function") {
-							await SearchWidget.pDoGlobalInit?.();
-							const picked = await SearchWidget.pGetUserItemSearch();
-							if (picked?.tag) {
-								itemPayload = {name: picked.tag, quantity: 1, description: ""};
-							} else if (picked == null) {
-								return;
-							}
-						}
-						await CharacterManager.updateCharacterArray(managerId, "equipment", "push", itemPayload);
+						await Renderer.character._pOpenAddItemModal(character, managerId);
 					} else if (action === "remove-item") {
 						Renderer.character._ensureStructuredEquipment(character);
 						const index = Number(btn.getAttribute("data-index"));
 						if (!await Renderer.character._pConfirmStructuralRemove(character.equipment?.[index]?.name, "item")) return;
 						await CharacterManager.updateCharacterArray(managerId, "equipment", "splice", {index, deleteCount: 1});
 					} else if (action === "add-tracker") {
-						const typeChoice = await InputUiUtil.pGetUserEnum({
-							title: "Tracker Type",
-							values: ["Counter", "Condition"],
-							isResolveItem: true,
-						});
-						if (typeChoice == null) return;
-						const name = await InputUiUtil.pGetUserString({title: "Tracker Name", default: typeChoice === "Condition" ? "Condition" : "Tracker"});
-						if (name == null || name === "") return;
-						const payload = typeChoice === "Condition"
-							? {type: "condition", name, active: false, description: ""}
-							: {type: "counter", name, current: 0, max: 1, description: ""};
-						if (!Array.isArray(character.customTrackers)) character.customTrackers = [];
-						await CharacterManager.updateCharacterArray(managerId, "customTrackers", "push", payload);
+						await Renderer.character._pOpenAddTrackerModal(character, managerId);
 					} else if (action === "remove-tracker") {
 						const index = Number(btn.getAttribute("data-index"));
 						if (!await Renderer.character._pConfirmStructuralRemove(character.customTrackers?.[index]?.name, "tracker")) return;
@@ -11122,6 +11307,26 @@ Renderer.character = class {
 				} catch (err) {
 					console.error("Character sheet structural edit failed:", err);
 				}
+			});
+
+			// Inline rename: double-click the character name heading (replaces the rename modal)
+			root.onn("dblclick", (e) => {
+				const h1 = e.target.closest?.(".ve-stats__h-name");
+				if (!h1 || !rootEle.contains(h1)) return;
+				// Skip name headings of embedded statblocks (those live inside the .character-sheet cell)
+				if (h1.closest(".character-sheet")) return;
+
+				const idEle = rootEle.querySelector("[data-character-id]");
+				const characterId = idEle?.getAttribute("data-character-id");
+				if (!characterId) return;
+				const character = Renderer.character._resolveEditableCharacter(characterId);
+				if (!character || !Renderer.character._hasSourceAccess(character.source)) return;
+				if (!globalThis.CharacterManager) return;
+
+				e.preventDefault();
+				e.stopPropagation();
+				const managerId = Renderer.character._getManagerId(character);
+				Renderer.character._pInlineRenameName(h1, character, managerId);
 			});
 		}
 

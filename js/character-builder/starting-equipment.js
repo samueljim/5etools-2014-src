@@ -249,6 +249,59 @@
 		return {equipment, currency, meta};
 	}
 
+	const COIN_KEYS_HIGH_TO_LOW = ["pp", "gp", "ep", "sp", "cp"];
+
+	function formatCurrency (currency) {
+		if (!currency || typeof currency !== "object") return null;
+		const parts = COIN_KEYS_HIGH_TO_LOW
+			.filter(k => Number(currency[k]) > 0)
+			.map(k => `${Number(currency[k])} ${k}`);
+		return parts.length ? parts.join(", ") : null;
+	}
+
+	function parseCoinString (str) {
+		const coins = {pp: 0, gp: 0, ep: 0, sp: 0, cp: 0};
+		if (typeof str !== "string") return coins;
+		str.replace(/(\d+)\s*(pp|gp|ep|sp|cp)/gi, (m, n, unit) => {
+			coins[unit.toLowerCase()] += Number(n) || 0;
+			return m;
+		});
+		return coins;
+	}
+
+	/**
+	 * Store currency as an Equipment/Items row rather than a structured `character.currency` field.
+	 * Additive: repeated calls merge into a single currency row.
+	 */
+	function addCurrencyToCharacter (character, currency) {
+		if (!character) return character;
+		// Currency is represented as Equipment/Items, never a top-level field
+		if (character.currency) delete character.currency;
+		if (!currency || typeof currency !== "object") return character;
+		if (!COIN_KEYS_HIGH_TO_LOW.some(k => Number(currency[k]) > 0)) return character;
+
+		character.equipment = character.equipment || [];
+		const existing = character.equipment.find(r => r && r.isCurrency);
+		const totals = existing ? parseCoinString(existing.name) : {pp: 0, gp: 0, ep: 0, sp: 0, cp: 0};
+		COIN_KEYS_HIGH_TO_LOW.forEach(k => { totals[k] += Number(currency[k]) || 0; });
+		const coinStr = formatCurrency(totals);
+		if (!coinStr) return character;
+
+		if (existing) existing.name = coinStr;
+		else character.equipment.push({name: coinStr, quantity: 1, isCurrency: true});
+
+		// Mirror into entries Items section for compatibility
+		if (!character.entries) character.entries = [];
+		let itemsSection = character.entries.find(e => e.type === "section" && e.name === "Items");
+		if (!itemsSection) {
+			itemsSection = {type: "section", name: "Items", entries: []};
+			character.entries.push(itemsSection);
+		}
+		itemsSection.entries = itemsSection.entries.filter(e => !(typeof e === "string" && /^Currency:\s/.test(e)));
+		itemsSection.entries.push(`Currency: ${coinStr}`);
+		return character;
+	}
+
 	function applyEquipmentToCharacter (character, resolved) {
 		if (!character || !resolved) return character;
 		character.equipment = (character.equipment || []).concat(resolved.equipment || []);
@@ -267,12 +320,7 @@
 			}
 		});
 
-		if (resolved.currency) {
-			character.currency = character.currency || {cp: 0, sp: 0, ep: 0, gp: 0, pp: 0};
-			Object.keys(resolved.currency).forEach(k => {
-				character.currency[k] = (character.currency[k] || 0) + (resolved.currency[k] || 0);
-			});
-		}
+		addCurrencyToCharacter(character, resolved.currency);
 		return character;
 	}
 
@@ -295,6 +343,8 @@
 	global.CharacterBuilderStartingEquipment = {
 		resolveStartingEquipment,
 		applyEquipmentToCharacter,
+		addCurrencyToCharacter,
+		formatCurrency,
 		describeChoiceGroups,
 		CHOICE_KEYS,
 		parseItemUid,

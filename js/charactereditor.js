@@ -3859,6 +3859,58 @@ class CharacterEditorPage {
 		return proficientSkills;
 	}
 
+	/**
+	 * Number of skill Expertise picks a class grants by a given level (base PHB progression).
+	 * Rogue: 2 at L1, +2 at L6. Bard: 2 at L3, +2 at L10.
+	 */
+	getClassExpertiseCount (className, level) {
+		const name = String(className || "").toLowerCase();
+		let count = 0;
+		if (name === "rogue") {
+			if (level >= 1) count += 2;
+			if (level >= 6) count += 2;
+		} else if (name === "bard") {
+			if (level >= 3) count += 2;
+			if (level >= 10) count += 2;
+		}
+		return count;
+	}
+
+	/**
+	 * Pick Expertise skills for classes that grant it, drawn from the character's existing
+	 * skill proficiencies (expertise requires proficiency first). Class-typical skills are
+	 * preferred, falling back to any proficient skill. Returns entries in the same format as
+	 * `skillProficiencies` so the sheet renderer matches them.
+	 */
+	generateRandomExpertise (classes, skillProficiencies) {
+		const expertise = [];
+		if (!Array.isArray(classes) || !Array.isArray(skillProficiencies) || !skillProficiencies.length) return expertise;
+
+		const norm = s => String(s).toLowerCase().replace(/[\s_]+/g, "");
+		const preferredByClass = {
+			rogue: ["stealth", "sleightofhand", "investigation", "perception", "deception", "insight", "acrobatics", "persuasion", "athletics"],
+			bard: ["persuasion", "deception", "performance", "insight", "history", "intimidation", "acrobatics"],
+		};
+
+		classes.forEach(cls => {
+			const count = this.getClassExpertiseCount(cls.name, cls.level || 1);
+			if (!count) return;
+
+			const preferredKeys = new Set((preferredByClass[String(cls.name || "").toLowerCase()] || []).map(norm));
+
+			// Candidate proficiencies not already chosen for expertise, preferring class-typical skills
+			const remaining = skillProficiencies
+				.filter(sp => !expertise.some(e => norm(e) === norm(sp)))
+				.sort((a, b) => (preferredKeys.has(norm(b)) ? 1 : 0) - (preferredKeys.has(norm(a)) ? 1 : 0));
+
+			remaining.slice(0, count).forEach(sp => {
+				if (!expertise.some(e => norm(e) === norm(sp))) expertise.push(sp);
+			});
+		});
+
+		return expertise;
+	}
+
 	async getClassSkillProficiencies (className) {
 		try {
 			const classData = await this.loadClassData(className);
@@ -7701,6 +7753,9 @@ class CharacterEditorPage {
 			// Create character template
 			const characterDepth = await this.generateCharacterDepth(randomBackground, randomRace, randomClasses, randomAlignment);
 
+			const randomSkillProficiencies = await this.generateRandomSkills(randomAbilityScores, randomClasses, profBonus, randomRace, randomBackground);
+			const randomExpertise = this.generateRandomExpertise(randomClasses, randomSkillProficiencies);
+
 			let template = {
 				name: finalName,
 				source: finalSource,
@@ -7726,7 +7781,8 @@ class CharacterEditorPage {
 				cha: randomAbilityScores.cha,
 				passive: 10 + Math.floor((randomAbilityScores.wis - 10) / 2) + (this.hasSkillProficiency("perception", randomClasses) ? profBonus : 0),
 				saveProficiencies: await this.generateRandomSaves(randomAbilityScores, randomClasses, profBonus),
-				skillProficiencies: await this.generateRandomSkills(randomAbilityScores, randomClasses, profBonus, randomRace, randomBackground),
+				skillProficiencies: randomSkillProficiencies,
+				...(randomExpertise.length && { expertise: randomExpertise }),
 				proficiencyBonus: `+${profBonus}`,
 				deathSaves: {
 					successes: 0,
@@ -7735,7 +7791,6 @@ class CharacterEditorPage {
 				customTrackers: this.generateRandomTrackers(randomClasses),
 				action: randomActions,
 				...(randomSpells && { spells: randomSpells }),
-				currency: this.generateRandomCurrency(totalLevel),
 				entries: [...await this.generateRandomEntries(randomRace, randomClasses, randomEquipment, randomAbilityScores, finalName, randomBackground, randomAlignment)],
 				// characterDepth intentionally not stored as a top-level field; include depth info in fluff
 				fluff: {
@@ -7760,6 +7815,9 @@ class CharacterEditorPage {
 			} catch (e) {
 				console.warn("Random character equipment resolver failed:", e);
 			}
+
+			// Starting coin is stored as an Equipment/Items entry, not a structured field
+			globalThis.CharacterBuilderStartingEquipment?.addCurrencyToCharacter(template, this.generateRandomCurrency(totalLevel));
 
 			// Ensure source is set to the detected/selected source (avoid keeping placeholder values)
 			if (!template.source || template.source === "RANDOM_GENERATED" || template.source === "MyCharacters" || template.source === "ADD_YOUR_NAME_HERE") {
@@ -14324,6 +14382,10 @@ class CharacterEditorPage {
 					}
 				});
 				completeCharacter.skillProficiencies = [...new Set(allSkills)]; // Remove duplicates
+
+				// Add Expertise for classes that grant it (e.g. Rogue at 1st level)
+				const expertise = this.generateRandomExpertise(completeCharacter.class, completeCharacter.skillProficiencies);
+				if (expertise.length) completeCharacter.expertise = expertise;
 			}
 
 			// Add starting equipment (data-driven from class + background JSON)
@@ -14367,8 +14429,8 @@ class CharacterEditorPage {
 				}
 			}
 
-			// Add starting currency
-			completeCharacter.currency = this.generateRandomCurrency(1);
+			// Add starting coin as an Equipment/Items entry (not a structured field)
+			globalThis.CharacterBuilderStartingEquipment?.addCurrencyToCharacter(completeCharacter, this.generateRandomCurrency(1));
 
 			// Add language proficiencies
 			const languages = await this.generateLanguageProficiencies(completeCharacter.class, completeCharacter.race, completeCharacter.background);
