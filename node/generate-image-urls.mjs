@@ -77,6 +77,56 @@ function extractImageUrls (obj, path = "") {
 	}
 }
 
+// Entity props which have tokens, mapped to the media directory those tokens live in.
+// See `Renderer.generic.getTokenUrl`.
+const TOKEN_PROP_TO_MEDIA_DIR = {
+	"monster": "bestiary/tokens",
+	"object": "objects/tokens",
+	"vehicle": "vehicles/tokens",
+};
+
+// See `String.prototype.toAscii` and `Parser.nameToTokenName`
+const nameToTokenName = (name) => name
+	.normalize("NFD")
+	.replace(/[\u0300-\u036f]/g, "")
+	.replace(/Æ/g, "AE").replace(/æ/g, "ae")
+	.replace(/"/g, "");
+
+const addTokenUrl = ({mediaDir, source, name}) => {
+	if (!source || !name) return;
+	imageUrls.add(`${EXTERNAL_IMG_BASE}${mediaDir}/${encodeURIComponent(source)}/${encodeURIComponent(nameToTokenName(name))}.webp`);
+};
+
+/**
+ * Tokens are usually implicit—derived from the entity's name and source at render time, rather than stored as a
+ * path in the data—so they are invisible to the generic string scan above.
+ */
+function extractTokenUrls (data) {
+	for (const [prop, mediaDir] of Object.entries(TOKEN_PROP_TO_MEDIA_DIR)) {
+		const ents = data[prop];
+		if (!Array.isArray(ents)) continue;
+
+		for (const ent of ents) {
+			if (ent.tokenUrl || ent.tokenHref) continue; // explicit URLs are already handled by the string scan
+
+			if (ent.token) addTokenUrl({mediaDir, source: ent.token.source, name: ent.token.name});
+			else if (ent.hasToken) addTokenUrl({mediaDir, source: ent.source, name: ent.name});
+
+			(ent.variant || [])
+				.filter(it => it.token)
+				.forEach(it => addTokenUrl({mediaDir, source: it.token.source, name: it.token.name}));
+
+			(ent.altArt || [])
+				.forEach(alt => addTokenUrl({mediaDir, source: alt.source, name: alt.name}));
+
+			Object.values(ent._versions || {})
+				.flat()
+				.filter(ver => ver && ver.name)
+				.forEach(ver => addTokenUrl({mediaDir, source: ver.source || ent.source, name: ver.name}));
+		}
+	}
+}
+
 /**
  * Process a single JSON file
  */
@@ -85,6 +135,7 @@ function processJsonFile (filePath) {
 		const content = fs.readFileSync(filePath, "utf8");
 		const data = JSON.parse(content);
 		extractImageUrls(data);
+		extractTokenUrls(data);
 	} catch (error) {
 		console.warn(`Warning: Could not process ${filePath}:`, error.message);
 	}
