@@ -210,6 +210,7 @@ class NavBar {
 		);
 		this._addElement_dropdown({keyPath: [NavBar._CAT_SETTINGS], category: NavBar._CAT_CACHE, isSide: true});
 		this._addElement_label({keyPath: [NavBar._CAT_SETTINGS, NavBar._CAT_CACHE], html: `<p>Preload data for offline use.</p><p>Note that visiting a page will automatically preload data for that page.</p><p>Note that data which is already preloaded will not be overwritten, unless it is out of date.</p>`});
+		this._addElement_labelStorage({keyPath: [NavBar._CAT_SETTINGS, NavBar._CAT_CACHE]});
 		this._addElement_button(
 			{
 				keyPath: [NavBar._CAT_SETTINGS, NavBar._CAT_CACHE],
@@ -545,6 +546,38 @@ class NavBar {
 		li.innerHTML = `${this._addElement_getDatePrefix({date, isAddDateSpacer})}${html}`;
 
 		parentNode.getBodyElement().appendChild(li);
+	}
+
+	/**
+	 * Adds a self-refreshing label reporting how much offline data is stored, and whether the browser considers it
+	 * evictable.
+	 */
+	static _addElement_labelStorage ({keyPath} = {}) {
+		if (!navigator.storage?.estimate) return;
+
+		const parentNode = this._tree.getNode({keyPath});
+		const body = parentNode.getBodyElement();
+
+		const li = document.createElement("li");
+		li.setAttribute("role", "presentation");
+		li.className = "ve-italic ve-muted ve-small nav2-list__label";
+		body.appendChild(li);
+
+		const pUpdate = async () => {
+			const {usage, quota} = await navigator.storage.estimate();
+			const isPersisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+
+			const msgPersisted = isPersisted
+				? `Storage is persistent\u2014the browser will not evict your preloaded data.`
+				: `Storage is not persistent\u2014the browser may evict your preloaded data. Using "Add as App" makes this much less likely.`;
+
+			li.innerHTML = `<p>Stored offline: ${Parser.bytesToHumanReadable(usage)} of ${Parser.bytesToHumanReadable(quota)} available.</p><p>${msgPersisted}</p>`;
+		};
+
+		const pUpdateSafe = () => pUpdate().catch(() => li.remove());
+
+		pUpdateSafe();
+		body.addEventListener("mouseenter", () => pUpdateSafe());
 	}
 
 	/**

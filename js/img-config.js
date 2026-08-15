@@ -8,8 +8,10 @@
 
 	// Configuration for image hosting
 	const IMAGE_CONFIG = {
-		// Base URL for images hosted on 5e.tools
-		EXTERNAL_IMG_BASE: "https://5e.tools/",
+		// Images are proxied through this origin (see the `/img/` rewrite in `vercel.json`) rather than hotlinked
+		// from 5e.tools directly, so that responses are same-origin: real status codes, and no opaque-response
+		// padding against the storage quota when caching for offline use.
+		EXTERNAL_IMG_BASE: "/",
 
 		// Enable external image loading
 		USE_EXTERNAL_IMAGES: true,

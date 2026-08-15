@@ -1,6 +1,5 @@
 {
-	"manifest_version": 2,
-	"default_locale": "en",
+	"id": "/",
 	"name": "5etools",
 	"short_name": "5etools",
 	"description": "A suite of browser-based tools for 5th Edition  Dungeons & Dragons players and Dungeon Masters.",
@@ -59,10 +58,14 @@
 		}
 	],
 	"start_url": "index.html",
+	"scope": "/",
+	"lang": "en",
 	"background_color": "#006bc4",
 	"display": "standalone",
-	"theme_color": "#006bc4",
-	"permissions": [
-		"clipboardWrite"
-	]
+	"display_override": [
+		"standalone",
+		"minimal-ui",
+		"browser"
+	],
+	"theme_color": "#006bc4"
 }

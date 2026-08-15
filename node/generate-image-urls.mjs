@@ -15,8 +15,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 
-// Base URL for external images
-const EXTERNAL_IMG_BASE = "https://5e.tools/img/";
+// Base URL for images. Relative, because images are proxied through our own origin (see the `/img/` rewrite in
+// `vercel.json`); the service worker resolves these against its own origin when building the runtime manifest.
+const EXTERNAL_IMG_BASE = "img/";
 
 // Set to store unique image URLs
 const imageUrls = new Set();
@@ -209,6 +210,12 @@ function main () {
 
 	// Scan all JSON files in the data directory
 	scanDirectory(dataDir);
+
+	// Homebrew/prerelease content is precached as JSON, so its images should be preloadable too
+	for (const dirName of ["homebrew", "prerelease"]) {
+		const dirPath = path.join(projectRoot, dirName);
+		if (fs.existsSync(dirPath)) scanDirectory(dirPath);
+	}
 
 	// Convert Set to sorted array
 	const sortedUrls = Array.from(imageUrls).sort();

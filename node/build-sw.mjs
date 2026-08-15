@@ -74,6 +74,12 @@ const workboxPrecacheBuildResult = await injectManifest({
 		// we need to cache the sw-injector or we won't be injected
 		"sw-injector.js",
 	],
+	globIgnores: [
+		"**/node_modules/**/*",
+		// dev-only harnesses; no reason to ship them to users' offline caches
+		"test-*.html",
+		"test_*.html",
+	],
 });
 
 buildResultLog(

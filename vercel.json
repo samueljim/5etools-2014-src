@@ -4,6 +4,12 @@
       "maxDuration": 30
     }
   },
+  "rewrites": [
+    {
+      "source": "/img/:path*",
+      "destination": "https://5e.tools/img/:path*"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -11,6 +17,15 @@
         {
           "key": "Cache-Control",
           "value": "public, max-age=3600, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/img/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
         }
       ]
     },

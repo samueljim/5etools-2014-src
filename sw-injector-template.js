@@ -41,18 +41,32 @@ const fetchError = {
 
 const wb = new Workbox("sw.js");
 
-wb.addEventListener("controlling", (event) => {
-	// Only notify on updates — first-time claim (clientsClaim) is expected and
-	// should not prompt the user to reload.
-	if (!event.isUpdate) return;
+let isReloadingForUpdate = false;
+
+wb.addEventListener("controlling", () => {
+	if (!isReloadingForUpdate) return;
+	window.location.reload();
+});
+
+// An updated worker sits waiting rather than taking over, so the running page keeps the JS/data pairing it started with
+wb.addEventListener("waiting", () => {
 	if (!VetoolsConfig.get("ui", "isNotifyUpdates")) return;
 
-	const lnk = ee`<a href="${Renderer.get().baseUrl}changelog.html" class="alert-link">changelog</a>`
+	const lnkChangelog = ee`<a href="${Renderer.get().baseUrl}changelog.html" class="alert-link">changelog</a>`
 		.onn("click", evt => {
 			evt.stopPropagation();
 		});
+
+	const btnReload = ee`<a href="#" class="alert-link">Reload</a>`
+		.onn("click", evt => {
+			evt.preventDefault();
+			evt.stopPropagation();
+			isReloadingForUpdate = true;
+			wb.messageSkipWaiting();
+		});
+
 	JqueryUtil.doToast({
-		content: ee`<div>${window.location.hostname} has been updated\u2014reload to see new content, and ensure the page is displayed correctly. See the ${lnk} for more info!</div>`,
+		content: ee`<div>${window.location.hostname} has been updated\u2014${btnReload} to see new content, and ensure the page is displayed correctly. See the ${lnkChangelog} for more info!</div>`,
 		type: "success",
 		isAutoHide: false, // never auto hide - this warning is important
 	});

@@ -107,6 +107,12 @@ addEventListener("message", (event) => {
 			event.waitUntil(resetAll());
 			break;
 		}
+
+		// Sent by the page when the user accepts an update; see `sw-injector-template.js`
+		case "SKIP_WAITING": {
+			self.skipWaiting();
+			break;
+		}
 	}
 });
 
@@ -178,17 +184,7 @@ class RevisionCacheFirst extends Strategy {
 		// we need to fetch the request from the network and store it with revision for next time
 		console.log(`Fetching URL "${url}" over the network for RevisionFirstCache`);
 		try {
-		// Use appropriate fetch options based on URL origin
-			let fetchOptions;
-			if (url.startsWith("https://5e.tools") || url.startsWith("http://5e.tools")) {
-			// External URL - use no-cors mode to bypass CORS restrictions
-				fetchOptions = {mode: "no-cors", credentials: "omit"};
-			} else {
-			// Same-origin URL - use normal fetch options
-				fetchOptions = this.constructor._FETCH_OPTIONS_VET;
-			}
-
-			const fetchResponse = await handler.fetch(request, fetchOptions);
+			const fetchResponse = await handler.fetch(request, this.constructor._FETCH_OPTIONS_VET);
 			// no await because it can happen later
 			handler.cachePut(cacheKey, fetchResponse.clone());
 			return fetchResponse;
@@ -322,22 +318,8 @@ class RevisionCacheFirst extends Strategy {
 				}
 
 				try {
-					// Use appropriate fetch options based on URL origin
-					let fetchOptions;
-					if (fetchUrl.startsWith("https://5e.tools") || fetchUrl.startsWith("http://5e.tools")) {
-						// External URL - use no-cors mode to bypass CORS restrictions
-						fetchOptions = {mode: "no-cors", credentials: "omit"};
-					} else {
-						// Same-origin URL - use normal fetch options
-						fetchOptions = this.constructor._FETCH_OPTIONS_VET;
-					}
-
-					const response = await fetch(fetchUrl, fetchOptions);
-					// Avoid caching hard failures for same-origin responses (opaque
-					// cross-origin responses always have status 0 and cannot be checked).
-					if (response.type !== "opaque" && !response.ok) {
-						throw new Error(`HTTP ${response.status} for ${fetchUrl}`);
-					}
+					const response = await fetch(fetchUrl, this.constructor._FETCH_OPTIONS_VET);
+					if (!response.ok) throw new Error(`HTTP ${response.status} for ${fetchUrl}`);
 					// this await could be omitted to further speed up fetching at risk of failure during error
 					await cache.put(cacheKey, response);
 					console.log(`Cached: ${fetchUrl}`);
@@ -409,38 +391,6 @@ registerRoute(({request}) => request.destination === "font", new CacheFirst({
 }));
 
 /*
-Enhanced route for external 5e.tools images specifically
-This gives priority to images from the external 5e.tools domain and handles CORS
-*/
-registerRoute(
-	({request}) => request.url.includes("5e.tools") && request.destination === "image",
-	new CacheFirst({
-		cacheName: "5etools-external-images",
-		plugins: [
-			// Keep 5e.tools images longer since they're more stable
-			new ExpirationPlugin({
-				maxAgeSeconds: 30 /* days */ * 24 * 60 * 60,
-				maxEntries: 1000,
-				purgeOnQuotaError: true,
-			}),
-			// Custom plugin to handle CORS for external images
-			{
-				requestWillFetch: async ({request}) => {
-					// For 5e.tools images, use no-cors mode
-					if (request.url.includes("5e.tools")) {
-						return new Request(request.url, {
-							mode: "no-cors",
-							credentials: "omit",
-						});
-					}
-					return request;
-				},
-			},
-		],
-	}),
-);
-
-/*
 the base case route - for images that have fallen through every other route
 this includes both homebrew images and other external images
 */
@@ -494,9 +444,9 @@ registerRoute(
 	),
 );
 
-addEventListener("install", () => {
-	self.skipWaiting();
-});
+// Note: deliberately no `skipWaiting()` on install. Activating a new worker under a running page would start
+// serving it freshly-precached data against its old JS, which are version-coupled. The page prompts to reload
+// instead, and sends `SKIP_WAITING` when the user accepts.
 
 // this only serves to delete cache from old versions of page - pre sw rework
 addEventListener("activate", event => {
