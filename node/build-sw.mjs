@@ -65,6 +65,12 @@ const workboxPrecacheBuildResult = await injectManifest({
 		"lib/dice-box-assets/**/*.json", // dice-box theme configurations
 		"lib/dice-box-assets/**/*.wasm", // WebAssembly physics engine
 		"lib/dice-box-assets/**/*.css", // dice-box styles
+		// dice-box textures and models; ~5mb total, and the dice fail to render without them
+		"lib/dice-box-assets/**/*.jpg",
+		"lib/dice-box-assets/**/*.png",
+		"lib/dice-box-assets/**/*.webp",
+		"lib/dice-box-assets/**/*.gltf",
+		"lib/dice-box-assets/**/*.glb",
 		// we need to cache the sw-injector or we won't be injected
 		"sw-injector.js",
 	],
@@ -91,12 +97,6 @@ const workboxRuntimeBuildResult = await injectManifest({
 		"icon/*.png", // all icons
 		"*.png", // root images
 		"*.svg", // root svg
-		// dice-box texture and model assets
-		"lib/dice-box-assets/**/*.jpg", // dice-box textures
-		"lib/dice-box-assets/**/*.png", // dice-box textures
-		"lib/dice-box-assets/**/*.webp", // dice-box textures
-		"lib/dice-box-assets/**/*.gltf", // dice-box 3D models
-		"lib/dice-box-assets/**/*.glb", // dice-box 3D models
 	],
 	manifestTransforms: [
 		(manifest) => {

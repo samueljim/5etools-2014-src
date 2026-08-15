@@ -1,8 +1,8 @@
 /* eslint-disable no-console */
 
 import { clientsClaim } from "workbox-core";
-import { precacheAndRoute } from "workbox-precaching";
-import { registerRoute } from "workbox-routing";
+import { createHandlerBoundToURL, precacheAndRoute } from "workbox-precaching";
+import { NavigationRoute, registerRoute } from "workbox-routing";
 import { CacheFirst, NetworkFirst, Strategy, StrategyHandler } from "workbox-strategies";
 import { ExpirationPlugin, CacheExpiration } from "workbox-expiration";
 
@@ -116,7 +116,13 @@ https://stackoverflow.com/questions/52423473
 */
 
 // the self value is replaced with key:value pair of file:hash, to allow workbox to carry files over between caches if they match
-precacheAndRoute(self.__WB_PRECACHE_MANIFEST);
+precacheAndRoute(
+	self.__WB_PRECACHE_MANIFEST,
+	{
+		// Ignore every query parameter when matching, so e.g. "spells.html?foo=bar" resolves to the precached "spells.html"
+		ignoreURLParametersMatching: [/./],
+	},
+);
 
 class RevisionCacheFirst extends Strategy {
 	// explicitly set `credentials` option as a workaround to enable basic auth in third-party installs
@@ -465,6 +471,27 @@ registerRoute(
 			},
 		],
 	}),
+);
+
+/*
+Final fallback for page navigations which no other route matched (e.g. SEO sub-directory URLs, or pages added
+since this service worker was built). Prefer the network, but serve the precached homepage when offline, so the
+browser never shows its "you are offline" error page.
+*/
+const handleNavigationFallback = createHandlerBoundToURL("index.html");
+registerRoute(
+	new NavigationRoute(
+		async (params) => {
+			try {
+				const response = await fetch(params.request);
+				if (response) return response;
+			} catch (e) {
+				// fall through to the cached homepage
+			}
+			return handleNavigationFallback(params);
+		},
+		{denylist: [/^\/api\//]},
+	),
 );
 
 addEventListener("install", () => {

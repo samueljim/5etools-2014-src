@@ -62,6 +62,13 @@ wb.addEventListener("controlling", (event) => {
 // event listeners need to be added first
 wb.register();
 
+// Without this, the browser is free to evict the offline caches under storage pressure (or, on iOS, after a week of disuse)
+if (navigator.storage?.persist) {
+	navigator.storage.persisted()
+		.then(isPersisted => (isPersisted ? null : navigator.storage.persist()))
+		.catch(() => { /* not supported/permitted; offline still works, it is just evictable */ });
+}
+
 // below here is dragons, display ui for caching state
 
 /**
