@@ -44,5 +44,7 @@
 @use "includes/ui-night";
 @use "includes/ui-oled";
 @use "includes/util-print";
+// Global, not page-scoped: character sheets also render in hover/popout windows and DM Screen panels
+@use "includes/character-sheet";
 
 @layer vetools;
