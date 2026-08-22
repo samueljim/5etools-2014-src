@@ -10,6 +10,8 @@
 			background-color: rgb(0 107 196);
 			min-height: 0;
 			flex-shrink: 0;
+			// hide the header as i know what i'm doing and i want to see the page content without the header
+			display: none;
 		}
 
 		&title {
